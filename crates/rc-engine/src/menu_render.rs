@@ -561,7 +561,8 @@ impl PortSettings<'_, '_> {
     fn rows_in(&self, menu: &mut PageMenu) -> crate::graphics::GraphicsSettings {
         if let Some(s) = self.shadows.as_deref() { menu.set_port_value(Setting::Shadows, !s.enabled as u8); }
         menu.set_port_value(Setting::Resolution, self.display.resolution.index());
-        menu.set_port_value(Setting::Aspect, self.display.aspect.index());
+        menu.set_port_value(Setting::Aspect, self.display.gameplay.index());
+        menu.set_port_value(Setting::CutsceneAspect, self.display.cutscenes.index());
         menu.set_port_value(Setting::Fullscreen, self.display.fullscreen as u8);
         let before = **self.gfx;
         sync_graphics_rows(menu, &before, &self.supported);
@@ -581,14 +582,16 @@ impl PortSettings<'_, '_> {
         // The display (crate::display): the game frame's resolution and the window mode.
         let want = (
             menu.port_value(Setting::Aspect).map(crate::display::Aspect::from_index),
+            menu.port_value(Setting::CutsceneAspect).map(crate::display::Aspect::from_index),
             menu.port_value(Setting::Resolution).map(crate::display::Resolution::from_index),
             menu.port_value(Setting::Fullscreen).map(|v| v == 1),
         );
-        if let (Some(aspect), Some(res), Some(full)) = want {
+        if let (Some(gameplay), Some(cutscenes), Some(res), Some(full)) = want {
             let d = &mut *self.display;
-            if d.aspect != aspect || d.resolution != res || d.fullscreen != full {
-                (d.aspect, d.resolution, d.fullscreen) = (aspect, res, full);
-                println!("menus: frame {frame}: Port Options: aspect {aspect:?}, resolution {res:?}, fullscreen {full}");
+            let new = crate::display::DisplaySettings { gameplay, cutscenes, resolution: res, fullscreen: full };
+            if **d != new {
+                **d = new;
+                println!("menus: frame {frame}: Port Options: gameplay aspect {gameplay:?}, cutscene aspect {cutscenes:?}, resolution {res:?}, fullscreen {full}");
                 d.save();
             }
         }
@@ -631,7 +634,7 @@ fn menu_frame(
         ResMut<crate::graphics::GraphicsSettings>,
     ),
     mut widgets3d: ResMut<crate::menu_models::GadgetsPreview>,
-    (mut fer, movies): (ResMut<crate::saves::FrontEndRt>, Option<Res<crate::movie_render::MovieState>>),
+    (mut fer, movies, mut app_exit): (ResMut<crate::saves::FrontEndRt>, Option<Res<crate::movie_render::MovieState>>, MessageWriter<AppExit>),
 ) {
     let (Some(mut rt), Some(mut play), Some(mut gs), Some(mut sess)) = (rt, play, gs, sess) else { return };
     let rt = &mut *rt;
@@ -797,9 +800,13 @@ fn menu_frame(
                 rt.voice_vag = voice_vag;
                 if let Some((a, b)) = out.transition { println!("menus: frame {frame}: transition {a:#x} → {b:#x} (kind 1, 12 ticks)"); }
                 if let Some(p) = out.entered { println!("menus: frame {frame}: page {p:#x} entered (kind {:#x})", menu.kind); }
-                if out.quit { println!("menus: frame {frame}: Quit Game ○ (0x13d384 = 0, 0x15f5c0 = −1, 0x15f570 = 1)"); }
+                // Port-only: Quit Game closes the app (the game goes back to the boot's logos and title);
+                // `RC_QUIT_TO_TITLE=1` keeps the game's.
+                let quit_app = out.quit && std::env::var("RC_QUIT_TO_TITLE").map_or(true, |v| v.trim() != "1");
+                if out.quit { println!("menus: frame {frame}: Quit Game ○ (0x13d384 = 0, 0x15f5c0 = −1, 0x15f570 = 1){}", if quit_app { ": the app closes" } else { "" }); }
+                if quit_app { app_exit.write(AppExit::Success); }
                 // 0x15f5c0 = dest, 0x15f570 = 1: the level loop ends (crate::media_render, the travel lane's level change).
-                if let Some(d) = out.level_exit { crate::media_render::request_level_exit(&mut play, d); }
+                if let Some(d) = out.level_exit.filter(|_| !quit_app) { crate::media_render::request_level_exit(&mut play, d); }
                 if let Some(c) = out.end_choice { crate::media_render::request_end_choice(c); }
                 // MenuInput 0x298f80: a recognised code (the game state already written): the banner and the jingle.
                 if let Some((e, o)) = out.code {
@@ -1603,7 +1610,7 @@ fn menu_layer(
                 commands
                     .spawn((
                         Camera3d::default(),
-                        Camera { order: -2, clear_color: ClearColorConfig::None, ..default() },
+                        Camera { order: -2, clear_color: ClearColorConfig::None, viewport: crate::display::box_viewport(frame.size), ..default() },
                         RenderTarget::Image(layer.image.clone().into()),
                         crate::game_camera::game_projection(),
                         Msaa::Off,
@@ -1652,7 +1659,13 @@ fn menu_layer(
         let pal = palette.get_or_insert_with(|| buffers.get(&fr.extra.palette).and_then(|b| b.data.clone()).unwrap_or_default());
         let rec = records.get_or_insert_with(|| buffers.get(&fr.extra.instances).and_then(|b| b.data.clone()).unwrap_or_default());
         // MobyAnimEval of the slot's state (the frame mobys have no pose layers and no blends).
-        let m = rc_formats::moby_anim::evaluate_with_snapshot(&f.class.anim, &slots[i].state, None);
+        let mut m = rc_formats::moby_anim::evaluate_with_snapshot(&f.class.anim, &slots[i].state, None);
+        // Port-only: the corners the menu moved (`frame::FrameMoby::lift`, world z) move their joints with them
+        // (packed model units: world × 1024 / class scale).
+        for (chain, &lift) in f.class.chains.iter().zip(&slots[i].lift) {
+            if lift == 0.0 { continue; }
+            if let Some(r) = chain.last().and_then(|&j| m.get_mut(j as usize)) { r[3][2] += lift * 1024.0 / f.class.scale; }
+        }
         let base = i * fr.slots as usize;
         let bytes: Vec<u8> = m.iter().take(fr.slots as usize).flat_map(|r| r.iter().flatten().flat_map(|v| v.to_le_bytes())).collect();
         if let Some(dst) = pal.get_mut(base * 64..base * 64 + bytes.len()) { dst.copy_from_slice(&bytes); }
