@@ -240,9 +240,12 @@ fn size_window_at_start(
 }
 
 /// The frame's centred 4:3 box (origin and size, frame pixels): where the game's 512×416 screen lands.
-pub fn ui_box(frame: UVec2) -> (Vec2, Vec2) {
+pub fn ui_box(frame: UVec2) -> (Vec2, Vec2) { aspect_box(frame, Aspect::Original) }
+
+/// The frame's centred box of `aspect` (origin and size, frame pixels; the whole frame when it is not narrower).
+pub fn aspect_box(frame: UVec2, aspect: Aspect) -> (Vec2, Vec2) {
     let h = frame.y as f32;
-    let w = (h * 4.0 / 3.0).round().min(frame.x as f32);
+    let w = (h * aspect.ratio()).round().min(frame.x as f32);
     (Vec2::new(((frame.x as f32 - w) * 0.5).round(), 0.0), Vec2::new(w, h))
 }
 
@@ -259,9 +262,14 @@ pub fn fit(frame: UVec2, window: Vec2) -> Vec2 {
 pub struct CutsceneView(pub bool);
 
 /// A UI node kept on the frame's 4:3 box ([`ui_box`]; percent of its parent, which must span the frame): the HUD
-/// composite (and the canvases composed with it, its children), the movie picture.
+/// composite (and the canvases composed with it, its children).
 #[derive(Component)]
 pub struct UiBoxed;
+
+/// A UI node kept on the frame's box of the cutscenes' aspect ([`aspect_box`] of [`DisplaySettings::cutscenes`]): the
+/// movie picture, stretched from the disc's 4:3 to a wide cutscene aspect.
+#[derive(Component)]
+pub struct CutsceneBoxed;
 
 /// A 3D camera that draws the game's 512×416 screen (the menu's frame mobys): its viewport is the frame's 4:3 box.
 #[derive(Component)]
@@ -388,17 +396,25 @@ fn apply_mode(settings: Res<DisplaySettings>, mut window: Option<Single<&mut Win
     if w.mode != want { w.mode = want; }
 }
 
-/// The [`UiBoxed`] nodes on the 4:3 box.
-fn place_boxed(frame: Res<GameFrame>, mut nodes: Query<&mut Node, With<UiBoxed>>) {
-    let (o, s) = ui_box(frame.size);
+/// The [`UiBoxed`] nodes on the 4:3 box, the [`CutsceneBoxed`] ones on the cutscenes' box.
+fn place_boxed(
+    frame: Res<GameFrame>,
+    settings: Res<DisplaySettings>,
+    mut boxed: Query<&mut Node, (With<UiBoxed>, Without<CutsceneBoxed>)>,
+    mut cutscene: Query<&mut Node, (With<CutsceneBoxed>, Without<UiBoxed>)>,
+) {
     let fw = frame.size.x.max(1) as f32;
-    let want = (Val::Percent(o.x * 100.0 / fw), Val::Percent(s.x * 100.0 / fw));
-    for mut n in &mut nodes {
+    let span = |(o, s): (Vec2, Vec2)| (Val::Percent(o.x * 100.0 / fw), Val::Percent(s.x * 100.0 / fw));
+    let place = |n: &mut Node, want: (Val, Val)| {
         if (n.left, n.width) != want {
             (n.left, n.width) = want;
             (n.top, n.height) = (Val::Px(0.0), Val::Percent(100.0));
         }
-    }
+    };
+    let want = span(ui_box(frame.size));
+    for mut n in &mut boxed { place(&mut n, want); }
+    let want = span(aspect_box(frame.size, settings.cutscenes));
+    for mut n in &mut cutscene { place(&mut n, want); }
 }
 
 /// The viewport of the frame's 4:3 box (none when it is the whole frame).
@@ -470,6 +486,8 @@ mod tests {
         assert_eq!(Resolution::parse("720"), Some(Resolution::Height(720)));
         assert_eq!(ui_box(UVec2::new(2560, 1440)), (Vec2::new(320.0, 0.0), Vec2::new(1920.0, 1440.0)));
         assert_eq!(ui_box(UVec2::new(1024, 768)), (Vec2::ZERO, Vec2::new(1024.0, 768.0)));
+        assert_eq!(aspect_box(UVec2::new(2560, 1440), w), (Vec2::ZERO, Vec2::new(2560.0, 1440.0)));
+        assert_eq!(aspect_box(UVec2::new(2560, 1440), Aspect::Wide16x10), (Vec2::new(128.0, 0.0), Vec2::new(2304.0, 1440.0)));
         assert_eq!(hor_scale(o), 1.0);
         assert!((hor_scale(w) - 4.0 / 3.0).abs() < 1e-6);
         assert_eq!(fit(UVec2::new(1024, 832), Vec2::new(1600.0, 832.0)), Vec2::new(1024.0, 832.0));
