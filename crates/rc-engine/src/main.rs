@@ -36,6 +36,7 @@ mod audio_out;
 mod determinism;
 mod display;
 mod display_blend;
+mod dialog;
 mod disc_source;
 mod first_run;
 mod fly_cam;
@@ -83,6 +84,7 @@ mod scene_render;
 mod sea_render;
 mod screen_canvas;
 mod shadow_render;
+mod standalone;
 mod pre_shadow;
 mod frame_log;
 mod shrub_billboard;
@@ -140,7 +142,10 @@ fn main() -> anyhow::Result<()> {
     // The boot's game state first: the level's spawn test reads its save bits (crate::gameplay::level_spawn_save).
     let boot = gameplay::boot_state(&root, index);
     let save = gameplay::level_spawn_save(boot.as_ref().map(|(gs, _)| gs), index);
-    let level_switch::LevelBundle { mut level, spawn, fog: fog_state, .. } = level_switch::load_bundle(&root, index, &save)?;
+    let level_switch::LevelBundle { mut level, spawn, fog: fog_state, .. } = match level_switch::load_bundle(&root, index, &save) {
+        Ok(b) => b,
+        Err(e) => { standalone::fatal(&format!("cannot load level {index:02}: {e:#}")); std::process::exit(1) }
+    };
     let t = &level.timings;
     let bg = level.background;
     println!(
@@ -258,6 +263,7 @@ fn main() -> anyhow::Result<()> {
         app.insert_resource(ScreenshotRequest { path: path.into(), delay: Duration::from_secs_f32(secs), min_frames: 30 })
             .add_systems(Update, take_screenshot);
     }
+    standalone::hide_console();
     app.run();
     Ok(())
 }

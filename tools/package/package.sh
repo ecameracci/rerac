@@ -89,7 +89,8 @@ By hand:
 
 Files: rerac (the game), rerac-extract (the extractor), assets/ (shaders, must stay next
 to rerac), rerac-manifest.json (the launcher's version manifest), data/ (your game data,
-made on the first start).
+made on the first start), logs/ (one log per session, the 10 newest; attach the
+latest to a bug report).
 Exit codes of rerac: 2 bad arguments, 3 data folder missing or incomplete, 4 data made for
 another version (re-extract).
 EOF

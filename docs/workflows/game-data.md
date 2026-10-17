@@ -67,7 +67,10 @@ The folder must exist and hold `toc.bin`, and for 1 to 3 also the extractor's `e
 `data_format` (the development tree may lack it: one warning). When the portable folder fails that check (the first
 start, an interrupted extraction, another data format), the engine asks for the disc image in the system's file
 dialog (`RC_ISO=<image>` skips the prompt and the dialog) and extracts it there in-process before opening the window
-(`crates/rc-engine/src/first_run.rs`); cancelling exits with code 3. Otherwise the engine prints one `error:` line saying
+(`crates/rc-engine/src/first_run.rs`); cancelling exits with code 3. Started that way but not from a terminal
+(a double-click), the session's output goes to `logs/rerac-<unix time>.log` next to the executable (the 10 newest
+are kept), fatal errors and panics are also shown in a dialog, and on Windows the console window shows only the first
+start's progress and closes when the game window opens (`crates/rc-engine/src/standalone.rs`). Otherwise the engine prints one `error:` line saying
 what to do (re-extract via the launcher) and exits before opening a window: code 3 (folder missing, not a data folder,
 or extraction incomplete), code 4 (data format mismatch or unreadable `extract-info.json`), code 2 (`--data-dir`
 without a value). `--version-json` prints the contract line and exits without touching any data.

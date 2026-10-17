@@ -16,7 +16,8 @@
 //! present for 1 to 3, and its `data_format` must equal [`DATA_FORMAT`]; the development tree may lack it (one
 //! warning). When the portable folder fails the check, the player picks their disc image and it is extracted there
 //! (crate::first_run). Any other failure, or a cancelled first start, prints one `error:` line naming the folder and
-//! the fix and exits with [`EXIT_NO_DATA`] or [`EXIT_DATA_FORMAT`], before any window opens.
+//! the fix and exits with [`EXIT_NO_DATA`] or [`EXIT_DATA_FORMAT`], before any window opens. With the portable folder
+//! the session log and the error dialog start here (crate::standalone).
 //!
 //! `--version-json` prints [`version_json`] and exits before anything else (no window, no data access).
 
@@ -178,6 +179,7 @@ pub fn startup() -> PathBuf {
     };
     if !ignored.is_empty() { eprintln!("warning: ignoring unknown arguments {ignored:?}"); }
     let (root, origin) = resolve(arg, std::env::var_os("RC_DATA_DIR"), portable_data_dir(), std::env::var_os("RC_EXTRACTED"));
+    if let (Origin::Portable, Some(dir)) = (origin, root.parent()) { crate::standalone::start(dir); }
     // RC_ISO feeds the portable first start (crate::first_run).
     for var in ["RC_ISO", "RC_SOURCE"].into_iter().filter(|v| origin != Origin::Portable || *v != "RC_ISO") {
         if std::env::var_os(var).is_some_and(|v| !v.is_empty()) {
@@ -194,7 +196,7 @@ pub fn startup() -> PathBuf {
     }
     match checked {
         Ok(line) => println!("{line}"),
-        Err(e) => { eprintln!("error: {}", e.message); std::process::exit(e.code) }
+        Err(e) => { crate::standalone::fatal(&e.message); std::process::exit(e.code) }
     }
     ROOT.get_or_init(|| root).clone()
 }
