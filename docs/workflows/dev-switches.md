@@ -31,7 +31,8 @@ module that reads it: `grep -rn '"RC_' crates/` lists them all.
 | Variable | Effect |
 |---|---|
 | `RC_DATA_DIR` | Game data folder when `--data-dir` is not given (see "Command line") |
-| `RC_EXTRACTED` | Development data tree (default `<repo>/extracted`); the engine's fallback when neither `--data-dir` nor `RC_DATA_DIR` is set, and the tests' root |
+| `RC_EXTRACTED` | Development data tree (default `<repo>/extracted`); the engine's fallback when neither `--data-dir` nor `RC_DATA_DIR` is set and it is not a packaged build, and the tests' root |
+| `RC_ISO` | Packaged build's first start: the disc image to extract into `data/` next to the executable, instead of asking (`docs/workflows/game-data.md`) |
 | `RC_CACHE` | `0`: do not use or write the engine cache `<data>/cache/v1` (decompress in memory, once per process) |
 | `RC_PERF_LOG` | `1`: print one line per game-data lump request (engine cache, memory or decompressed; MiB, ms) |
 | `RC_AUDIO` | `0`: no audio (the level's sound bank and music are not loaded); the `cargo xtask test-*` commands set it |

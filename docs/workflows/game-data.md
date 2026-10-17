@@ -59,10 +59,15 @@ The data folder is chosen in this order:
 
 1. `--data-dir <folder>` (also `--data-dir=<folder>`), how the launcher starts the game;
 2. `RC_DATA_DIR`;
-3. the development default: `RC_EXTRACTED`, else `<repo>/extracted` (a `rerac-extract` data folder, same layout).
+3. a packaged build (`tools/package`: `assets/shaders` next to the executable): `data/` next to the executable, the
+   portable data folder;
+4. the development default: `RC_EXTRACTED`, else `<repo>/extracted` (a `rerac-extract` data folder, same layout).
 
-The folder must exist and hold `toc.bin`, and for 1 and 2 also the extractor's `extract-info.json` with a matching
-`data_format` (the development tree may lack it: one warning). Otherwise the engine prints one `error:` line saying
+The folder must exist and hold `toc.bin`, and for 1 to 3 also the extractor's `extract-info.json` with a matching
+`data_format` (the development tree may lack it: one warning). When the portable folder fails that check (the first
+start, an interrupted extraction, another data format), the engine asks for the disc image in the system's file
+dialog (`RC_ISO=<image>` skips the prompt and the dialog) and extracts it there in-process before opening the window
+(`crates/rc-engine/src/first_run.rs`); cancelling exits with code 3. Otherwise the engine prints one `error:` line saying
 what to do (re-extract via the launcher) and exits before opening a window: code 3 (folder missing, not a data folder,
 or extraction incomplete), code 4 (data format mismatch or unreadable `extract-info.json`), code 2 (`--data-dir`
 without a value). `--version-json` prints the contract line and exits without touching any data.

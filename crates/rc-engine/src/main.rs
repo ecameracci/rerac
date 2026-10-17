@@ -4,7 +4,9 @@
 //! - `--data-dir <dir>` the game data folder (`rerac-extract` output); `--version-json` print the version and exit
 //!
 //! Environment:
-//! - `RC_DATA_DIR`   the game data folder when `--data-dir` is absent; else `RC_EXTRACTED`, else `<workspace>/extracted`
+//! - `RC_DATA_DIR`   the game data folder when `--data-dir` is absent; else, in a packaged build, `data/` next to the
+//!   executable (extracted on the first start from an `.iso` the player picks, or `RC_ISO`; crate::first_run); else
+//!   `RC_EXTRACTED`, else `<workspace>/extracted`
 //! - `RC_LEVEL`      start straight in this level (skips the front end unless `RC_FRONTEND=1`; without it the front
 //!   end's New Game / Load decides)
 //! - `RC_SCREENSHOT` if set, save a PNG of the window there after the scene has rendered, then exit
@@ -35,6 +37,7 @@ mod determinism;
 mod display;
 mod display_blend;
 mod disc_source;
+mod first_run;
 mod fly_cam;
 mod fx_draw;
 mod fog_state;

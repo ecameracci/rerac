@@ -8,12 +8,15 @@
 //! **Data root** ([`startup`], once per process; launcher contract `docs/plan/launcher_contract.md`):
 //! 1. `--data-dir <dir>` (or `--data-dir=<dir>`), how the launcher starts the game;
 //! 2. `RC_DATA_DIR`, equivalent;
-//! 3. the development default: `RC_EXTRACTED`, else `<workspace>/extracted`.
+//! 3. a packaged build (`assets/shaders` next to the executable, `tools/package`): `data/` next to the executable,
+//!    the portable data folder;
+//! 4. the development default: `RC_EXTRACTED`, else `<workspace>/extracted`.
 //!
 //! The folder must exist and hold `toc.bin`. `<data>/extract-info.json` (written last by the extractor) must be
-//! present for 1 and 2, and its `data_format` must equal [`DATA_FORMAT`]; the development tree may lack it (one
-//! warning). A failure prints one `error:` line naming the folder and the fix (re-extract via the launcher) and
-//! exits with [`EXIT_NO_DATA`] or [`EXIT_DATA_FORMAT`], before any window opens.
+//! present for 1 to 3, and its `data_format` must equal [`DATA_FORMAT`]; the development tree may lack it (one
+//! warning). When the portable folder fails the check, the player picks their disc image and it is extracted there
+//! (crate::first_run). Any other failure, or a cancelled first start, prints one `error:` line naming the folder and
+//! the fix and exits with [`EXIT_NO_DATA`] or [`EXIT_DATA_FORMAT`], before any window opens.
 //!
 //! `--version-json` prints [`version_json`] and exits before anything else (no window, no data access).
 
@@ -38,11 +41,16 @@ pub fn version_json() -> String {
 
 /// Which rule chose the data root.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Origin { Arg, Env, Dev }
+pub enum Origin { Arg, Env, Portable, Dev }
 
 impl Origin {
     fn describe(self) -> &'static str {
-        match self { Origin::Arg => "--data-dir", Origin::Env => "RC_DATA_DIR", Origin::Dev => "development default" }
+        match self {
+            Origin::Arg => "--data-dir",
+            Origin::Env => "RC_DATA_DIR",
+            Origin::Portable => "the data folder next to rerac",
+            Origin::Dev => "development default",
+        }
     }
 }
 
@@ -72,11 +80,23 @@ fn parse_args(args: impl IntoIterator<Item = OsString>) -> std::result::Result<A
 
 fn nonempty(v: Option<OsString>) -> Option<PathBuf> { v.filter(|v| !v.is_empty()).map(PathBuf::from) }
 
-/// The resolution order (module docs), with the environment passed in.
-fn resolve(arg: Option<PathBuf>, env_data_dir: Option<OsString>, env_extracted: Option<OsString>) -> (PathBuf, Origin) {
+/// The resolution order (module docs), with the environment and [`portable_data_dir`] passed in.
+fn resolve(
+    arg: Option<PathBuf>, env_data_dir: Option<OsString>, portable: Option<PathBuf>, env_extracted: Option<OsString>,
+) -> (PathBuf, Origin) {
     if let Some(p) = arg { return (p, Origin::Arg); }
     if let Some(p) = nonempty(env_data_dir) { return (p, Origin::Env); }
+    if let Some(p) = portable { return (p, Origin::Portable); }
     (nonempty(env_extracted).unwrap_or_else(dev_extracted), Origin::Dev)
+}
+
+/// `data/` next to the executable when it is a packaged build (its `assets/shaders` beside it, as main.rs
+/// `asset_dir` finds them). Unix resolves symlinks first; Windows keeps the plain path for the dialogs.
+fn portable_data_dir() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let exe = if cfg!(windows) { exe } else { std::fs::canonicalize(exe).ok()? };
+    let dir = exe.parent()?;
+    dir.join("assets/shaders").is_dir().then(|| dir.join("data"))
 }
 
 /// `<workspace>/extracted` (resolved from this crate's manifest dir at compile time, so `cargo dev` works from any
@@ -157,13 +177,22 @@ pub fn startup() -> PathBuf {
         Args::Run { data_dir, ignored } => (data_dir, ignored),
     };
     if !ignored.is_empty() { eprintln!("warning: ignoring unknown arguments {ignored:?}"); }
-    for var in ["RC_ISO", "RC_SOURCE"] {
+    let (root, origin) = resolve(arg, std::env::var_os("RC_DATA_DIR"), portable_data_dir(), std::env::var_os("RC_EXTRACTED"));
+    // RC_ISO feeds the portable first start (crate::first_run).
+    for var in ["RC_ISO", "RC_SOURCE"].into_iter().filter(|v| origin != Origin::Portable || *v != "RC_ISO") {
         if std::env::var_os(var).is_some_and(|v| !v.is_empty()) {
             println!("note: {var} is ignored; the engine reads only the game data folder (disc images: rerac-extract)");
         }
     }
-    let (root, origin) = resolve(arg, std::env::var_os("RC_DATA_DIR"), std::env::var_os("RC_EXTRACTED"));
-    match check(&root, origin) {
+    let mut checked = check(&root, origin);
+    if let (Err(e), Origin::Portable) = (&checked, origin) {
+        if !crate::first_run::setup(&root, root.exists().then_some(e.message.as_str())) {
+            eprintln!("error: {}", e.message);
+            std::process::exit(e.code)
+        }
+        checked = check(&root, origin);
+    }
+    match checked {
         Ok(line) => println!("{line}"),
         Err(e) => { eprintln!("error: {}", e.message); std::process::exit(e.code) }
     }
@@ -174,7 +203,7 @@ pub fn startup() -> PathBuf {
 pub fn data_root() -> PathBuf {
     ROOT.get().cloned().unwrap_or_else(|| {
         // Unit tests only (the game sets ROOT at startup).
-        resolve(None, std::env::var_os("RC_DATA_DIR"), std::env::var_os("RC_EXTRACTED")).0
+        resolve(None, std::env::var_os("RC_DATA_DIR"), None, std::env::var_os("RC_EXTRACTED")).0
     })
 }
 
@@ -223,10 +252,12 @@ mod tests {
     #[test]
     fn resolution_order() {
         let e = |s: &str| Some(OsString::from(s));
-        assert_eq!(resolve(Some("/arg".into()), e("/env"), e("/ex")), ("/arg".into(), Origin::Arg));
-        assert_eq!(resolve(None, e("/env"), e("/ex")), ("/env".into(), Origin::Env));
-        assert_eq!(resolve(None, e(""), e("/ex")), ("/ex".into(), Origin::Dev));
-        assert_eq!(resolve(None, None, None), (dev_extracted(), Origin::Dev));
+        let p = || Some(PathBuf::from("/exe/data"));
+        assert_eq!(resolve(Some("/arg".into()), e("/env"), p(), e("/ex")), ("/arg".into(), Origin::Arg));
+        assert_eq!(resolve(None, e("/env"), p(), e("/ex")), ("/env".into(), Origin::Env));
+        assert_eq!(resolve(None, e(""), p(), e("/ex")), ("/exe/data".into(), Origin::Portable));
+        assert_eq!(resolve(None, e(""), None, e("/ex")), ("/ex".into(), Origin::Dev));
+        assert_eq!(resolve(None, None, None, None), (dev_extracted(), Origin::Dev));
     }
 
     /// A fresh empty folder under the system temp dir.

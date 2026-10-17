@@ -4389,6 +4389,7 @@ dependencies = [
  "bevy",
  "libc",
  "rc-data",
+ "rc-extract",
  "rc-formats",
  "rc-game",
  "rc-video",
