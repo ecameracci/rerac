@@ -1,0 +1,29 @@
+# Mirror: keeps this fork's main identical to re-rac/rerac's main (force push). Work lands on dev; main only follows upstream.
+# Runs hourly from the default branch (dev) and on demand. A push that changes .github/workflows needs a token with the
+# `workflow` scope: set the repository secret MIRROR_TOKEN (a PAT with repo + workflow), else the job's token is used.
+name: Mirror upstream main
+
+on:
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: mirror-upstream-main
+  cancel-in-progress: false
+
+jobs:
+  mirror:
+    if: github.repository == 'ecameracci/rerac'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Force main to upstream's main
+        env:
+          TOKEN: ${{ secrets.MIRROR_TOKEN || github.token }}
+        run: |
+          git init -q mirror && cd mirror
+          git fetch --no-tags https://github.com/re-rac/rerac.git main
+          git push --force "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git" FETCH_HEAD:refs/heads/main

@@ -40,7 +40,7 @@ module that reads it: `grep -rn '"RC_' crates/` lists them all.
 | `RC_FRONTEND` | The front end (the card check, the logos, the title world, PRESS START, the main menu) is the default start. `0`: skip it and start in the level; `1`: keep it even with `RC_LEVEL` |
 | `RC_UNPORTED` | `1`: every 600 ticks, print the calls the moby loop met without a port so far (`Services::unported`, by name and count) |
 | `RC_SKIP_LOGOS` | `1`: in the front end, skip the publisher logos movie and go straight to the title |
-| `RC_SAVE_DIR` | the memory-card folder (`0` or empty: no card); default `<config>/rerac/memcard`. `RC_SAVE_TRACE=1` logs every card state change |
+| `RC_SAVE_DIR` | the memory-card folder (`0` or empty: no card); without it, the `memcard_dir = <path>` key of the port settings file (relative: from the settings file's folder), else a `memcard/` folder beside the executable if it exists, else `<config>/rerac/memcard` (deterministic runs: no card). `RC_SAVE_TRACE=1` logs every card state change |
 | `RC_CAM` | Starting camera `ex,ey,ez,tx,ty,tz` (eye and target, game units) |
 | `RC_SCREENSHOT` | Save a screenshot to this path, then exit |
 | `RC_SCREENSHOT_DELAY` | Seconds before the screenshot (default 3) |
@@ -49,7 +49,7 @@ module that reads it: `grep -rn '"RC_' crates/` lists them all.
 | `RC_DUMP_REALTIME` | `1`: `RC_DUMP_FRAMES` in real-time mode (wall-clock ticks as in play, not frame-exact; dev only) |
 | `RC_DUMP_TICKS` | `n,m,…`: in frame-exact mode, update k runs the k-th entry's game ticks, cycled (`1,0` = a 120 Hz display, `2` = 30 Hz; dev only, for real-time pacing repros) |
 | `RC_NOVSYNC` | `1`: present without vsync, so `fps:` measures headroom |
-| `RC_FRAME_CAP` | `0`: no 60 fps limiter (`crate::frame_pace`; also off with `RC_NOVSYNC=1`); ticks then follow the wall clock. `1`: the limiter in frame-exact runs too (`RC_DUMP_FRAMES` / `RC_SCREENSHOT_FRAME` otherwise render as fast as they can) |
+| `RC_FRAME_CAP` | `0`: no frame limiter, whatever the Port Options' FPS limit (`crate::frame_pace`; also off with `RC_NOVSYNC=1`); ticks then follow the wall clock. `1`: the limiter in frame-exact runs too (`RC_DUMP_FRAMES` / `RC_SCREENSHOT_FRAME` otherwise render as fast as they can) |
 | `RC_THREADS` | `n`: Bevy's task pools share n threads (fewer idle workers waking: ~25% less CPU at 3 on a Mac); default and `0`: Bevy's default by core count (3 was the default in v0.3.1 and showed a black window on a Windows PC on Vulkan) |
 | `RC_RENDER_DIAG` | `1`: Bevy's per-pass render timings (CPU only on Metal) every 5 s, and the number of views rendered |
 | `RC_DRAW_STATS` | `1`: every 300 frames, per material type the mesh entities, the visible ones and their distinct materials / meshes, and the active cameras (`crate::draw_stats`) |
@@ -57,7 +57,9 @@ module that reads it: `grep -rn '"RC_' crates/` lists them all.
 | `RC_RESPAWN_PROBE_AT` | `<tick>`: print the respawn state once at that gameplay tick, as **F10** does in dev builds (the format of `work/scratch/respawn_probe.py`, which reads the same tables from a running PCSX2 over PINE: compare the two line by line) |
 | `RC_TRACE_RESPAWN` | `1`: at every death reload, the spawn test's verdict for each Kerwan trooper (574) with the bits that decided it, and a line whenever a trooper blows up or is deleted (`respawn trace:`) |
 | `RC_TRACE_BOTS` | `1`: Clank's gadgetbots and their pads (class 857 / 1302) on stderr: each bot merged into a pad with the count left, each knock-back home, each pad trigger with its count, mission and the class and state of each linked door (a door opens only from state 2) |
-| `RC_ASPECT` | `4:3` (default: the original TV picture), `16:10`, `16:9` or `fill` (the window's own shape, never narrower than 4:3: the frame is the window's, so an ultrawide monitor has no black pillars, while a narrower window is letterboxed) (Hor+: the view widens, the HUD's side elements move to the frame's edges, the menus stay in the centred 4:3 box); overrides the Port Options value at start (crate::display) |
+| `RC_ASPECT` | `4:3` (default: the original TV picture), `16:10`, `16:9` or `fill` (the window's own shape, never narrower than 4:3: the frame is the window's, so an ultrawide monitor has no black pillars, while a narrower window is letterboxed) (Hor+: the view widens, the HUD's side elements move to the frame's edges, the menus stay in the centred 4:3 box); sets both the gameplay and the cutscene aspect, overriding the Port Options values at start (crate::display) |
+| `RC_QUIT_TO_TITLE` | `1`: Quit Game goes back to the boot's logos and title, as the game does; by default it closes the app (crate::menu_render) |
+| `RC_CUTSCENE_ASPECT` | `4:3`, `16:10`, `16:9` or `fill`: the cutscenes' aspect only (over `RC_ASPECT`); the frame takes the wider of the two and the narrower view is pillarboxed (crate::display) |
 | `RC_RESOLUTION` | `window` (default: the largest frame of the Aspect ratio that fits the window) or `416`, `720`, `1080`, `1440`, `2160` (a frame that many lines high at the Aspect ratio, scaled to the window); overrides the Port Options value at start (crate::display) |
 | `RC_FULLSCREEN` | `1`: borderless fullscreen on the current monitor; `0`: windowed; overrides the Port Options value at start (F11 toggles in game) |
 | `RC_FOG` | `0`: disable fog |
