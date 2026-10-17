@@ -339,12 +339,12 @@ pub fn spawn_tfrags_on(
         RenderAssetUsages::RENDER_WORLD,
     ));
     // Image, texel alpha range (all levels) and MXL per (texture, sampler state).
-    let mut image_cache: HashMap<(i32, SamplerKey), (Handle<Image>, AlphaRange, u32)> = HashMap::new();
+    let mut image_cache: HashMap<(i32, SamplerKey), crate::mod_textures::WorldImage> = HashMap::new();
     let mut n_blend = 0usize;
     let mut n_vertices = 0;
     let n_meshes = batches.len();
     for (bi, ((tex_index, skey), b)) in batches.into_iter().enumerate() {
-        let (image, texel_alpha, mxl) = image_cache
+        let (image, texel_alpha, mxl, lod_scale) = image_cache
             .entry((tex_index, skey))
             .or_insert_with(|| match usize::try_from(tex_index).ok().and_then(|i| level.tfrag_lod.mips.get(i)).and_then(|m| m.as_ref()) {
                 Some(levels) => {
@@ -361,6 +361,11 @@ pub fn spawn_tfrags_on(
                         *a = if *a == 0xff { 0x80 } else { *a / 2 };
                     }
                     let range = AlphaRange::of(rgba.iter().skip(3).step_by(4).copied());
+                    let mxl = levels.len() as u32 - 1;
+                    if let Some(hd) = crate::mod_textures::find(&levels[0], skey.descriptor()) {
+                        let (img, mxl, lod_scale) = hd.into_parts(mxl);
+                        return (images.add(img), range, mxl, lod_scale);
+                    }
                     let mut img = Image::new_uninit(
                         Extent3d { width: levels[0].width, height: levels[0].height, depth_or_array_layers: 1 },
                         TextureDimension::D2,
@@ -370,11 +375,11 @@ pub fn spawn_tfrags_on(
                     img.texture_descriptor.mip_level_count = levels.len() as u32;
                     img.data = Some(rgba);
                     img.sampler = ImageSampler::Descriptor(skey.descriptor());
-                    (images.add(img), range, levels.len() as u32 - 1)
+                    (images.add(img), range, mxl, 1.0)
                 }
                 None => {
                     warn!("tfrag texture index {tex_index} has no decoded texture; drawing magenta");
-                    (fallback.clone(), AlphaRange::OPAQUE, 0)
+                    (fallback.clone(), AlphaRange::OPAQUE, 0, 1.0)
                 }
             })
             .clone();
@@ -388,6 +393,7 @@ pub fn spawn_tfrags_on(
         let mut lod = lod_base;
         // MXL = ty - 1: GS LOD = log2(1/Q) + K, level = nearest, clamped to 0..MXL (K comes per vertex).
         lod.tex = Vec4::new(0.0, mxl as f32, 0.0, 0.0);
+        lod.misc.z /= lod_scale;
         let mesh = meshes.add(
             Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD)
                 .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, b.positions)

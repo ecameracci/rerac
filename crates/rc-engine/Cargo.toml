@@ -26,6 +26,8 @@ rc-extract = { path = "../rc-extract" }
 # The movies (FMV): MPEG-2 video decoder and PSS player core, ours (docs/formats/pss.md).
 rc-video = { path = "../rc-video" }
 anyhow.workspace = true
+# The mods' texture override keys (crate::mod_textures): XXH3-64, the hash PCSX2 texture packs use too.
+twox-hash = { version = "2.1", default-features = false, features = ["xxhash3_64", "std"] }
 
 # The save clock in the host's local time (crate::saves::clock_now: `localtime_r`; Windows calls kernel32 directly).
 [target.'cfg(unix)'.dependencies]

@@ -593,18 +593,22 @@ fn spawn_shrubs_on(
         TextureFormat::Rgba8Unorm,
         RenderAssetUsages::RENDER_WORLD,
     ));
-    let mut image_cache: HashMap<(usize, SamplerKey), (Handle<Image>, AlphaRange, u32)> = HashMap::new();
+    let mut image_cache: HashMap<(usize, SamplerKey), crate::mod_textures::WorldImage> = HashMap::new();
     let mut image_for = |tex: usize, skey: SamplerKey, images: &mut Assets<Image>| {
         image_cache
             .entry((tex, skey))
             .or_insert_with(|| match shrubs.mips.get(&tex) {
                 Some(levels) => {
                     let (img, range) = mip_image(levels, skey.descriptor());
-                    (images.add(img), range, levels.len() as u32 - 1)
+                    let mxl = levels.len() as u32 - 1;
+                    match crate::mod_textures::find(&levels[0], skey.descriptor()) {
+                        Some(hd) => { let (img, mxl, lod_scale) = hd.into_parts(mxl); (images.add(img), range, mxl, lod_scale) }
+                        None => (images.add(img), range, mxl, 1.0),
+                    }
                 }
                 None => {
                     warn!("shrub texture {tex} has no decoded texture; drawing magenta");
-                    (fallback.clone(), AlphaRange::OPAQUE, 0)
+                    (fallback.clone(), AlphaRange::OPAQUE, 0, 1.0)
                 }
             })
             .clone()
@@ -640,7 +644,7 @@ fn spawn_shrubs_on(
         if swayed && exact { st.sway_sheared += 1; }
         for (pi, part) in parts[&ci].iter().enumerate() {
             st.triangles += part.triangles;
-            let (image, texel_alpha, mxl) = image_for(part.texture, part.skey, images);
+            let (image, texel_alpha, mxl, lod_scale) = image_for(part.texture, part.skey, images);
             let lists = [
                 (1u8, gs_state::draws(gs_state::AREF_SHRUB_OPAQUE, texel_alpha, AlphaRange::OPAQUE)),
                 (2u8, gs_state::draws(gs_state::AREF_SHRUB_FADING, texel_alpha, fading)),
@@ -653,7 +657,7 @@ fn spawn_shrubs_on(
                             materials.add(ShrubMaterial {
                                 texture: image.clone(),
                                 fog: crate::game_camera::fog_buffer(),
-                                params: ShrubParams { misc: Vec4::new(list as f32, mxl as f32, crate::game_camera::NEAR, 0.0) },
+                                params: ShrubParams { misc: Vec4::new(list as f32, mxl as f32, crate::game_camera::NEAR / lod_scale, 0.0) },
                                 instances: inst_buffer.clone(),
                                 sway: sway_buffer.clone(),
                                 pass,
