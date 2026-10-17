@@ -941,7 +941,13 @@ fn moby_image(level: &LoadedLevel, tex: usize, images: &mut Assets<Image>) -> (H
         (1, 1, vec![0x80, 0x80, 0x80, 0xff], ImageAddressMode::ClampToEdge)
     } else {
         match level.textures.iter().find(|t| t.table == TextureTable::Moby && t.index == tex).map(|t| &t.texture) {
-            Some(t) => (t.width, t.height, t.rgba.clone(), ImageAddressMode::Repeat),
+            Some(t) => {
+                if let Some(hd) = crate::mod_textures::find(t, hd_sampler(ImageAddressMode::Repeat)) {
+                    let range = AlphaRange::of(t.rgba.iter().skip(3).step_by(4).map(|&a| if a == 0xff { 0x80 } else { a / 2 }));
+                    return (images.add(hd.image), range);
+                }
+                (t.width, t.height, t.rgba.clone(), ImageAddressMode::Repeat)
+            }
             None => {
                 warn!("moby texture {tex} has no decoded texture; drawing magenta");
                 (1, 1, vec![255, 0, 255, 0xff], ImageAddressMode::Repeat)
@@ -949,6 +955,18 @@ fn moby_image(level: &LoadedLevel, tex: usize, images: &mut Assets<Image>) -> (H
         }
     };
     (images.add(gs_image(w, h, &mut rgba, mode)), AlphaRange::of(rgba.iter().skip(3).step_by(4).copied()))
+}
+
+/// A mod override's sampler (crate::mod_textures): bilinear like the game's, trilinear over the override's mip levels.
+pub(crate) fn hd_sampler(mode: ImageAddressMode) -> ImageSamplerDescriptor {
+    ImageSamplerDescriptor {
+        address_mode_u: mode,
+        address_mode_v: mode,
+        mag_filter: ImageFilterMode::Linear,
+        min_filter: ImageFilterMode::Linear,
+        mipmap_filter: ImageFilterMode::Linear,
+        ..default()
+    }
 }
 
 /// `texture::scale_alpha` maps a < 0x80 to 2a and a >= 0x80 to 0xff; undo it (exact for a <= 0x80) and make

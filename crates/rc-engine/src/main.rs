@@ -61,6 +61,8 @@ mod moby_light;
 mod moby_lod;
 mod moby_render;
 mod moby_spawn;
+mod mod_textures;
+mod mods;
 mod movie_render;
 mod no_clusters;
 mod occlusion;
@@ -179,6 +181,8 @@ fn main() -> anyhow::Result<()> {
     .add_plugins(draw_stats::DrawStatsPlugin)
     // MSAA of the world cameras (default off; `RenderSettings` can change it at run time).
     .add_plugins(render_settings::RenderSettingsPlugin)
+    // The mods folder beside the executable and the enabled set (crate::mods; the HUD reads the replacements).
+    .add_plugins(mods::ModsPlugin)
     .add_plugins((MaterialPlugin::<TfragMaterial>::default(), FlyCamPlugin, game_camera::GameCameraPlugin { fog: level.fog }))
     .add_plugins(occlusion::OcclusionPlugin)
     .add_plugins(tfrag_lod::TfragLodPlugin)

@@ -21,7 +21,8 @@ struct HudVertex {
     @location(0) position: vec3<f32>,
     @location(1) uv: vec2<f32>,
     @location(2) rgba: u32,
-    // atlas x | y << 16, texture w | h << 16, flags (1 = textured, 2 = REPEAT, 4 = NEAREST, 8 = ALPHA_1 0x48), 0
+    // atlas x | y << 16, texture w | h << 16, flags (1 = textured, 2 = REPEAT, 4 = NEAREST, 8 = ALPHA_1 0x48),
+    // atlas texels per game texel (1; a mod's replacement: its factor, hud_render::AtlasLayout)
     @location(3) tex: vec4<u32>,
     // x0, x1, y0, y1 (inclusive pixels)
     @location(4) scissor: vec4<u32>,
@@ -69,19 +70,37 @@ fn fragment(in: HudVarying) -> @location(0) vec4<f32> {
     var cs: vec3<f32>;
     var a: f32;
     if (in.tex.z & 1u) != 0u {
-        // Bilinear (TEX1 0x261 inherited from the AA blit): texel centres at +0.5, sample position in 1/16
-        // texel (12.4 UV), weights k/16, truncated.
-        let s = vec2<i32>(round((in.uv - vec2<f32>(0.5)) * 16.0));
-        let i0 = vec2<i32>(s.x >> 4u, s.y >> 4u);
-        let f = vec2<f32>(vec2<i32>(s.x & 15, s.y & 15)) / 16.0;
-        let t00 = texel(in.tex, i0);
-        let t10 = texel(in.tex, i0 + vec2<i32>(1, 0));
-        let t01 = texel(in.tex, i0 + vec2<i32>(0, 1));
-        let t11 = texel(in.tex, i0 + vec2<i32>(1, 1));
-        var ct = floor(mix(mix(t00, t10, f.x), mix(t01, t11, f.x), f.y));
-        if (in.tex.z & 4u) != 0u {
-            // TEX1 MMAG / MMIN NEAREST: the texel under the sample point.
-            ct = texel(in.tex, vec2<i32>(floor(in.uv)));
+        let k = max(in.tex.w, 1u);
+        var ct: vec4<f32>;
+        if k == 1u {
+            // Bilinear (TEX1 0x261 inherited from the AA blit): texel centres at +0.5, sample position in 1/16
+            // texel (12.4 UV), weights k/16, truncated.
+            let s = vec2<i32>(round((in.uv - vec2<f32>(0.5)) * 16.0));
+            let i0 = vec2<i32>(s.x >> 4u, s.y >> 4u);
+            let f = vec2<f32>(vec2<i32>(s.x & 15, s.y & 15)) / 16.0;
+            let t00 = texel(in.tex, i0);
+            let t10 = texel(in.tex, i0 + vec2<i32>(1, 0));
+            let t01 = texel(in.tex, i0 + vec2<i32>(0, 1));
+            let t11 = texel(in.tex, i0 + vec2<i32>(1, 1));
+            ct = floor(mix(mix(t00, t10, f.x), mix(t01, t11, f.x), f.y));
+            if (in.tex.z & 4u) != 0u {
+                // TEX1 MMAG / MMIN NEAREST: the texel under the sample point.
+                ct = texel(in.tex, vec2<i32>(floor(in.uv)));
+            }
+        } else {
+            // Port-only: a mod's replacement, k atlas texels per game texel; plain bilinear on its own texels.
+            let uv = in.uv * f32(k);
+            let q = uv - vec2<f32>(0.5);
+            let i0 = vec2<i32>(floor(q));
+            let f = q - floor(q);
+            let t00 = texel(in.tex, i0);
+            let t10 = texel(in.tex, i0 + vec2<i32>(1, 0));
+            let t01 = texel(in.tex, i0 + vec2<i32>(0, 1));
+            let t11 = texel(in.tex, i0 + vec2<i32>(1, 1));
+            ct = round(mix(mix(t00, t10, f.x), mix(t01, t11, f.x), f.y));
+            if (in.tex.z & 4u) != 0u {
+                ct = texel(in.tex, vec2<i32>(floor(uv)));
+            }
         }
         // MODULATE: C = Ct·Cf >> 7, A = At·Af >> 7, clamped to 0xff.
         cs = min(floor(ct.rgb * cf.rgb / 128.0), vec3<f32>(255.0));
@@ -103,7 +122,8 @@ fn fragment(in: HudVarying) -> @location(0) vec4<f32> {
 
 #ifdef HUD_COMPOSITE
 @group(1) @binding(0) var hud_image: texture_2d<f32>;
-// x: 1 bilinear (the HUD option's Original: the TV showed the picture smoothed), 0 nearest (Sharp pixels).
+// x: 1 bilinear (the HUD option's Original: the TV showed the picture smoothed), 0 nearest (Sharp pixels);
+// y: the layer's pixels per game pixel (1; a mod's replacements: up to 4, sampled plain bilinear).
 @group(1) @binding(1) var<uniform> scaling: vec4<f32>;
 
 // The image at `uv`: the pixel under it (nearest), or the four around it weighted (bilinear, edges clamped). Both on
@@ -113,11 +133,12 @@ fn fragment(in: HudVarying) -> @location(0) vec4<f32> {
 // resolution that is the bilinear sample half a pixel left. Down, the copy's stretch is centred (the plain sample).
 fn sample_layer(uv: vec2<f32>) -> vec4<f32> {
     let size = vec2<i32>(textureDimensions(hud_image));
-    if scaling.x < 0.5 {
+    let hd = scaling.y > 1.5;
+    if scaling.x < 0.5 && !hd {
         let p = clamp(vec2<i32>(floor(uv * vec2<f32>(size))), vec2<i32>(0), size - vec2<i32>(1));
         return textureLoad(hud_image, p, 0);
     }
-    let q = uv * vec2<f32>(size) - vec2<f32>(1.0, 0.5);
+    let q = uv * vec2<f32>(size) - select(vec2<f32>(1.0, 0.5), vec2<f32>(0.5), hd);
     let p0 = vec2<i32>(floor(q));
     let f = q - floor(q);
     let hi = size - vec2<i32>(1);

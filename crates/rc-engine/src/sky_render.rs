@@ -406,6 +406,7 @@ pub(crate) fn shell_transform(euler: [f32; 3], scale: f32, t: [f32; 3]) -> Trans
 
 /// Decoded sky texture as the GS sees it: display-encoded RGB, raw texel alpha 0..0x80.
 pub(crate) fn sky_image(t: &SkyTexture) -> Image {
+    if let Some(hd) = crate::mod_textures::find(&t.texture, crate::moby_render::hd_sampler(ImageAddressMode::ClampToEdge)) { return hd.image; }
     let mut rgba = t.texture.rgba.clone();
     // Undo `texture::scale_alpha` (a < 0x80 → 2a, a ≥ 0x80 → 0xff): exact for a ≤ 0x80, which holds for
     // every texel the Novalis sky uses.
