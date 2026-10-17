@@ -553,6 +553,7 @@ struct PortSettings<'a, 'w> {
     shadows: Option<&'a mut ResMut<'w, crate::shadow_render::ShadowSettings>>,
     display: &'a mut ResMut<'w, crate::display::DisplaySettings>,
     gfx: &'a mut ResMut<'w, crate::graphics::GraphicsSettings>,
+    fps: Option<&'a mut ResMut<'w, crate::frame_pace::FrameLimit>>,
     supported: SupportedMsaa,
 }
 
@@ -564,6 +565,7 @@ impl PortSettings<'_, '_> {
         menu.set_port_value(Setting::Aspect, self.display.gameplay.index());
         menu.set_port_value(Setting::CutsceneAspect, self.display.cutscenes.index());
         menu.set_port_value(Setting::Fullscreen, self.display.fullscreen as u8);
+        if let Some(f) = self.fps.as_deref() { menu.set_port_value(Setting::FrameLimit, f.index()); }
         let before = **self.gfx;
         sync_graphics_rows(menu, &before, &self.supported);
         before
@@ -576,6 +578,14 @@ impl PortSettings<'_, '_> {
                 s.enabled = v == 0;
                 println!("menus: frame {frame}: Port Options: shadows {}", if s.enabled { "on" } else { "off" });
                 s.save();
+            }
+        }
+        if let (Some(v), Some(f)) = (menu.port_value(Setting::FrameLimit), self.fps.as_mut()) {
+            let want = crate::frame_pace::FrameLimit::from_index(v);
+            if ***f != want {
+                ***f = want;
+                println!("menus: frame {frame}: Port Options: FPS limit {want:?}");
+                want.save();
             }
         }
         read_graphics_rows(menu, self.gfx, gfx_before, frame);
@@ -617,6 +627,14 @@ type InteractParams<'w> = (
     Option<ResMut<'w, crate::audio_out::AudioOut>>,
 );
 
+/// The Port Options rows' resources ([`PortSettings`]).
+type PortParams<'w> = (
+    Option<ResMut<'w, crate::shadow_render::ShadowSettings>>,
+    ResMut<'w, crate::display::DisplaySettings>,
+    ResMut<'w, crate::graphics::GraphicsSettings>,
+    Option<ResMut<'w, crate::frame_pace::FrameLimit>>,
+);
+
 #[allow(clippy::too_many_arguments)]
 fn menu_frame(
     rt: Option<ResMut<MenuRt>>,
@@ -628,11 +646,7 @@ fn menu_frame(
     source: Res<crate::game_camera::CameraSource>,
     supported: Option<Res<SupportedMsaa>>,
     (mut vr, mut feed, mut view, mut audio): InteractParams,
-    (mut shadows, mut display, mut gfx): (
-        Option<ResMut<crate::shadow_render::ShadowSettings>>,
-        ResMut<crate::display::DisplaySettings>,
-        ResMut<crate::graphics::GraphicsSettings>,
-    ),
+    (mut shadows, mut display, mut gfx, mut fps): PortParams,
     mut widgets3d: ResMut<crate::menu_models::GadgetsPreview>,
     (mut fer, movies, mut app_exit): (ResMut<crate::saves::FrontEndRt>, Option<Res<crate::movie_render::MovieState>>, MessageWriter<AppExit>),
 ) {
@@ -643,7 +657,7 @@ fn menu_frame(
     if fer.fe.is_some() {
         let busy = movies.as_deref().is_some_and(|m| m.busy());
         let fer = &mut *fer;
-        let mut port = PortSettings { shadows: shadows.as_mut(), display: &mut display, gfx: &mut gfx, supported: supported.as_deref().cloned().unwrap_or_default() };
+        let mut port = PortSettings { shadows: shadows.as_mut(), display: &mut display, gfx: &mut gfx, fps: fps.as_mut(), supported: supported.as_deref().cloned().unwrap_or_default() };
         front_end_frame(rt, &mut mm, &mut play, gs, fer, &pad, &source, busy, audio.as_deref_mut(), &mut port);
         mm.state.end_frame();
         mm.loop_frame += 1;
@@ -774,7 +788,7 @@ fn menu_frame(
                 // The close's post-action 3 / 4 / 5 / 6 / 7: `FadeToBlack(ticks(16))` over the menu image, then the action.
                 post_fade_step(rt, &mut mm, &mut play, gs, sess.hp, audio.as_deref_mut(), frame, true);
             } else if let Some(menu) = rt.menu.as_mut() {
-                let mut port = PortSettings { shadows: shadows.as_mut(), display: &mut display, gfx: &mut gfx, supported: supported.as_deref().cloned().unwrap_or_default() };
+                let mut port = PortSettings { shadows: shadows.as_mut(), display: &mut display, gfx: &mut gfx, fps: fps.as_mut(), supported: supported.as_deref().cloned().unwrap_or_default() };
                 let gfx_before = port.rows_in(menu);
                 // The card and the save inputs moved into the menu for its tick (crate::saves).
                 saves_in(menu, &play);

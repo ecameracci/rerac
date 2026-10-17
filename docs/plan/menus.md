@@ -548,6 +548,8 @@ sub-pages (`crates/rc-game/src/menus/pause/port.rs`, `PageMenu::install_port_pag
   file; a file without `cutscene_aspect` gives the cutscenes the gameplay aspect). The frame takes the wider aspect; while
   the view shown is narrower (a cutscene — a scene, the letterbox 0x15f404 set, mode 6's take-off / landing / fly-away —
   or gameplay), black bars cover the margin it does not show (`display::pillar_bars`, drawn last in the HUD layer).
+  FPS limit: 30 / 60 (default) / 120 / 144 / Unlimited → `frame_pace::FrameLimit` (key `fps_limit`; the game still
+  ticks at 60 Hz, so above 60 the frames between two ticks repeat the picture; Unlimited also presents without vsync).
   The movies (crate::movie_render, 4:3 on the disc) are stretched to the cutscene aspect's box (`display::CutsceneBoxed`).
   The HUD's side slots follow the gameplay aspect. 16:10 / 16:9 are Hor+: the
   world projection's x tangent is the game's × 6/5 / × 4/3 and culling reads the live projection; the 512×416 screen maps to
