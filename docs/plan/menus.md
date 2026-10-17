@@ -542,18 +542,20 @@ sub-pages (`crates/rc-game/src/menus/pause/port.rs`, `PageMenu::install_port_pag
 * **Rows** (`port::ENTRIES`, one entry per option): the graphics rows (Preset, Anti-aliasing: Original / off / 2x / 4x / 8x,
   Detail distance, Texture filtering, HUD; docs/plan/graphics_options.md) → `graphics::GraphicsSettings` (engine
   `menu_render.rs` syncs the rows with the resource around each menu tick; a change is saved; the anti-aliasing samples
-  reach the cameras through `render_settings::RenderSettings::msaa`). Shadows: on / off. Gameplay aspect and Cutscene aspect: 4:3 / 16:10 / 16:9 each, Resolution: Window / 416p / 720p /
+  reach the cameras through `render_settings::RenderSettings::msaa`). Shadows: on / off. Gameplay aspect and Cutscene aspect: 4:3 / 16:10 / 16:9 / Fill each, Resolution: Window / 416p / 720p /
   1080p / 1440p / 2160p and Fullscreen: off / on → `display::DisplaySettings` (the game frame every camera renders into, presented
   on black at the window's size; keys `aspect` (gameplay) / `cutscene_aspect` / `resolution` / `fullscreen` in the settings
-  file; a file without `cutscene_aspect` gives the cutscenes the gameplay aspect). The frame takes the wider aspect; while
+  file; a file without `cutscene_aspect` gives the cutscenes the gameplay aspect). Fill is the window's own
+  shape, so an ultrawide monitor (3440×1440, 43:18 — not the 21:9 its label suggests) fills with no black pillars, but never
+  narrower than 4:3: a window narrower than the TV's is letterboxed (top / bottom bars), so the UI is never squashed. The frame takes the wider aspect; while
   the view shown is narrower (a cutscene — a scene, the letterbox 0x15f404 set, mode 6's take-off / landing / fly-away —
   or gameplay), black bars cover the margin it does not show (`display::pillar_bars`, drawn last in the HUD layer).
   FPS limit: 30 / 60 (default) / 120 / 144 / Unlimited → `frame_pace::FrameLimit` (key `fps_limit`; the game still
   ticks at 60 Hz, so above 60 the frames between two ticks repeat the picture; Unlimited also presents without vsync).
   The movies (crate::movie_render, 4:3 on the disc) are stretched to the cutscene aspect's box (`display::CutsceneBoxed`).
-  The HUD's side slots follow the gameplay aspect. 16:10 / 16:9 are Hor+: the
-  world projection's x tangent is the game's × 6/5 / × 4/3 and culling reads the live projection; the 512×416 screen maps to
-  the frame's centred 4:3 box, the HUD layer is 51 / 85 game px wider on each side (its left/right-anchored slots move out,
+  The HUD's side slots follow the gameplay aspect. 16:10 / 16:9 / Fill are Hor+: the
+  world projection's x tangent is the game's × 6/5 / × 4/3 / the frame's ratio ÷ 4:3 and culling reads the live projection; the 512×416 screen maps to
+  the frame's centred 4:3 box, the HUD layer is 51 / 85 game px wider on each side at 16:10 / 16:9 (the frame's own margin at Fill; its left/right-anchored slots move out,
   primitives spanning the screen stretch) and the menu pages stay clipped to the box (`Prim::boxed`). The world is not re-rendered under the menu (the snapshot is shown), so the new
   setting is visible from the first gameplay frame after the close.
 * **Device support**: the row offers only the sample counts the GPU can use for every multisampled world attachment

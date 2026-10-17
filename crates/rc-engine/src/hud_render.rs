@@ -807,15 +807,15 @@ fn tick_and_build(
     mut feed: ResMut<HudFeed>,
     (mut play, mut audio): (Option<ResMut<crate::gameplay::Play>>, Option<ResMut<crate::audio_out::AudioOut>>),
     dyn_images: Option<Res<crate::hud_images::HudImages>>,
-    (display, cutscene, mut images): (Option<Res<crate::display::DisplaySettings>>, Option<Res<crate::display::CutsceneView>>, ResMut<Assets<Image>>),
+    (frame, display, cutscene, mut images): (Res<crate::display::GameFrame>, Option<Res<crate::display::DisplaySettings>>, Option<Res<crate::display::CutsceneView>>, ResMut<Assets<Image>>),
     (mut composites, mut static_composites, mut targets): (ResMut<Assets<HudComposite>>, ResMut<Assets<HudStaticComposite>>, Query<&mut RenderTarget>),
 ) {
     let Some(mut rt) = rt else { return };
     let rt = &mut *rt;
     // The side margin of the frame's aspect (crate::display) sizes the layer's targets; the gameplay aspect's moves the
     // HUD's left / right slots.
-    let extra = display.as_ref().map_or(0, |d| crate::display::side_extra(d.frame_aspect()));
-    rt.state.side_extra = display.as_ref().map_or(0, |d| crate::display::side_extra(d.gameplay));
+    let extra = crate::display::side_extra(frame.ratio());
+    rt.state.side_extra = display.as_ref().map_or(extra, |d| crate::display::side_extra(d.shown_ratio(false, &frame)));
     if extra != rt.extra {
         rt.extra = extra;
         // Fresh targets of the new width (crate::display::fresh_target); the two cameras and composites move to them.
@@ -935,8 +935,8 @@ fn tick_and_build(
     rt.hud2d.prims.extend(scene.prims.iter().copied());
     // The view shown now narrower than the frame (crate::display): black over the margin it does not show.
     if let Some(d) = display.as_deref() {
-        let shown = d.shown(cutscene.is_some_and(|c| c.0));
-        for [l, r] in crate::display::pillar_bars(d.frame_aspect(), shown).into_iter().flatten() {
+        let shown = d.shown_ratio(cutscene.is_some_and(|c| c.0), &frame);
+        for [l, r] in crate::display::pillar_bars(frame.ratio(), shown).into_iter().flatten() {
             let pos = [[l, 0], [r, 0], [l, H], [r, H]];
             rt.hud2d.prims.push(Prim { tex: Tex::None, pos, uv: [[0, 0]; 4], rgba: 0x8000_0000, scissor: FULL_SCISSOR, repeat: false, nearest: false, boxed: false, uv16: false });
         }
