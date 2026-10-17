@@ -7,6 +7,10 @@
 <p align="center">An unofficial native PC port of Ratchet & Clank (2002).</p>
 
 <p align="center">
+  <a href="https://github.com/re-rac/rerac/releases/latest"><img src="https://img.shields.io/github/v/release/re-rac/rerac?include_prereleases&label=version" alt="Version"></a>
+</p>
+
+<p align="center">
   <a href="https://discord.gg/v2Ek44kdyu">Discord</a> ·
   <a href="https://re-rac.github.io">Website</a> ·
   <a href="https://github.com/re-rac/rerac-launcher">Launcher</a>
