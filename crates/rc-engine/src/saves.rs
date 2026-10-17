@@ -3,7 +3,8 @@
 //!
 //! * **The card** ([`with_card`]): one `MemCard` for the process (a static, as the game's 0x13d290 block), on the native
 //!   card folder `rc_game::memcard::save_root`: `RC_SAVE_DIR=<path>` (`0` or empty: no card), else the
-//!   `memcard_dir` key of the port settings file, else a `memcard/` folder beside the executable if it exists, else
+//!   `memcard_dir` key of the port settings file, else a `memcard/` folder beside the executable if it exists (or
+//!   always, in a packaged build on its portable data folder: [`configured_root`]), else
 //!   `<config base>/rerac/memcard/` (macOS `~/Library/Application Support/rerac/memcard`, beside the port settings);
 //!   deterministic runs have no card unless `RC_SAVE_DIR` is set. The directory name comes from the disc's SYSTEM.CNF
 //!   (`/BASCUS-97199RATCHET`), the icon files and the blank save from the `save_game` lump.
@@ -118,8 +119,10 @@ fn config_base() -> Option<std::path::PathBuf> {
 }
 
 /// The card folder set outside the environment, with where it came from: the `memcard_dir` key of the port settings
-/// file (a relative path is taken from the settings file's folder), else a `memcard/` folder beside the executable
-/// when it exists (a build copied to another machine with its saves). Deterministic runs use neither.
+/// file (a relative path is taken from the settings file's folder), else, in a packaged build on its portable data
+/// folder (crate::disc_source::portable_dir), the `memcard/` folder beside it (created on first use; [`adopt_saves`]
+/// copies the default card in once), else a `memcard/` folder beside the executable when it exists (a build copied
+/// to another machine with its saves). Deterministic runs use none.
 fn configured_root() -> Option<(std::path::PathBuf, &'static str)> {
     use std::path::PathBuf;
     if crate::determinism::deterministic() { return None; }
@@ -128,9 +131,38 @@ fn configured_root() -> Option<(std::path::PathBuf, &'static str)> {
         let dir = crate::render_settings::settings_path().and_then(|s| s.parent().map(PathBuf::from));
         return Some((if p.is_relative() { dir.map_or(p.clone(), |d| d.join(&p)) } else { p }, "memcard_dir in the settings file"));
     }
+    if let Some(dir) = crate::disc_source::portable_dir() {
+        let beside = dir.join("memcard");
+        adopt_saves(&beside);
+        return Some((beside, "the portable build's memcard folder"));
+    }
     let exe = std::env::current_exe().and_then(std::fs::canonicalize).ok()?;
     let beside = exe.parent()?.join("memcard");
     beside.is_dir().then_some((beside, "the memcard folder beside the executable"))
+}
+
+/// A portable build's first card: a copy of the default card folder (`<config base>/rerac/memcard`, where earlier
+/// builds saved) when it has one; the default folder is left as it is. Into `<card>.partial` first, renamed when
+/// complete, so an interrupted copy is redone.
+fn adopt_saves(card: &std::path::Path) {
+    if card.exists() || std::env::var_os("RC_SAVE_DIR").is_some() { return; }
+    let Some(old) = config_base().map(|b| b.join("rerac").join("memcard")).filter(|p| p.is_dir()) else { return };
+    let partial = card.with_extension("partial");
+    let _ = std::fs::remove_dir_all(&partial);
+    match copy_dir(&old, &partial).and_then(|()| std::fs::rename(&partial, card)) {
+        Ok(()) => println!("saves: copied the memory card {} to {} (the old folder is kept)", old.display(), card.display()),
+        Err(e) => eprintln!("saves: could not copy the memory card {} to {}: {e}", old.display(), card.display()),
+    }
+}
+
+fn copy_dir(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(to)?;
+    for e in std::fs::read_dir(from)? {
+        let e = e?;
+        let dest = to.join(e.file_name());
+        if e.file_type()?.is_dir() { copy_dir(&e.path(), &dest)?; } else { std::fs::copy(e.path(), dest)?; }
+    }
+    Ok(())
 }
 
 /// `memcard_Init` + `memcard_GetName` (`InitOnce`): the card on the save root, its directory from SYSTEM.CNF, the lump.

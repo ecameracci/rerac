@@ -11,9 +11,11 @@
 #   rerac-manifest.json      the version manifest, version taken from [workspace.package] in Cargo.toml
 #   README.txt
 # Nothing from the disc is ever packaged: the folder is checked against that exact file list.
-# The folder itself is a valid launcher version (the launcher's Development source can point at it).
+# The folder is portable: started without --data-dir, rerac keeps its game data in data/ beside itself and asks for
+# the .iso on the first start (crates/rc-engine/src/first_run.rs). It is also a valid launcher version (the
+# launcher's Development source can point at it).
 #
-# macOS and Windows (Git Bash): tested. Linux: written, UNTESTED.
+# macOS, Windows (Git Bash) and Linux: tested. The portable first start inside the package: macOS UNTESTED.
 set -euo pipefail
 
 build=1
@@ -35,7 +37,7 @@ version="$(awk '/^\[/ { in_pkg = ($0 == "[workspace.package]") } in_pkg && /^ver
 exe=""
 case "$(uname -s)" in
   Darwin) os=macos ;;
-  Linux) os=linux ;;                                  # UNTESTED
+  Linux) os=linux ;;
   MINGW*|MSYS*|CYGWIN*) os=windows; exe=".exe" ;;
   *) echo "unsupported OS: $(uname -s)" >&2; exit 1 ;;
 esac
@@ -75,8 +77,10 @@ ReRAC $version ($os-$arch)
 A reimplementation of Ratchet & Clank (PS2). It contains no game data: it runs from data
 extracted once from your own disc image (NTSC-U SCUS_971.99, .iso).
 
-Normal use: add this folder as a version in the ReRAC launcher. The launcher runs the
-extractor and starts the game.
+Normal use: start ./rerac. On the first start it asks for your disc image (.iso) and
+extracts the game data into data/ in this folder (a few minutes, once); after that the
+.iso is no longer needed. Keep this folder somewhere you can write to. A ReRAC launcher
+can also use this folder as a version (it passes its own data folder).
 
 By hand:
   ./rerac-extract identify --iso <your disc>.iso
@@ -84,7 +88,10 @@ By hand:
   ./rerac --data-dir <data folder>
 
 Files: rerac (the game), rerac-extract (the extractor), assets/ (shaders, must stay next
-to rerac), rerac-manifest.json (the launcher's version manifest).
+to rerac), rerac-manifest.json (the launcher's version manifest), data/ (your game data,
+made on the first start), memcard/ (your saves; on its first start a copy of the
+saves earlier builds kept in your user folder), logs/ (one log per session, the 10 newest; attach the
+latest to a bug report).
 Exit codes of rerac: 2 bad arguments, 3 data folder missing or incomplete, 4 data made for
 another version (re-extract).
 EOF
@@ -111,7 +118,7 @@ case "$os" in
   macos) (cd "$dist" && ditto -c -k --keepParent "$name" "$name.zip") ;;
   # Windows' own bsdtar writes a standard zip ('/' separators); PowerShell 5.1's Compress-Archive writes '\'.
   windows) (cd "$dist" && "$(cygpath "$SYSTEMROOT")/System32/tar.exe" -a -c -f "$name.zip" "$name") ;;
-  linux) (cd "$dist" && zip -qry "$name.zip" "$name") ;;  # UNTESTED; needs `zip`
+  linux) (cd "$dist" && zip -qry "$name.zip" "$name") ;;  # needs `zip`
 esac
 
 size=$(wc -c < "$dist/$name.zip" | tr -d ' ')

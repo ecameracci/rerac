@@ -1,7 +1,8 @@
 //! The crash log: a panic anywhere in the engine appends its message, place and backtrace to `crash.log` in the
 //! settings folder (`render_settings::settings_path`'s folder; none when the settings file is disabled), then the
 //! default hook prints it as before. A panic inside the window's event loop is followed by winit's "no handler was
-//! set" line, which alone says nothing; the log keeps the real cause.
+//! set" line, which alone says nothing; the log keeps the real cause. A game started on its own also shows the panic in
+//! a dialog (crate::standalone::crashed).
 
 use std::io::Write;
 
@@ -23,5 +24,6 @@ pub fn install() {
             }
         }
         default(info);
+        crate::standalone::crashed(&info.to_string(), path().as_deref());
     }));
 }

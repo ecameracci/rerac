@@ -4,7 +4,9 @@
 //! - `--data-dir <dir>` the game data folder (`rerac-extract` output); `--version-json` print the version and exit
 //!
 //! Environment:
-//! - `RC_DATA_DIR`   the game data folder when `--data-dir` is absent; else `RC_EXTRACTED`, else `<workspace>/extracted`
+//! - `RC_DATA_DIR`   the game data folder when `--data-dir` is absent; else, in a packaged build, `data/` next to the
+//!   executable (extracted on the first start from an `.iso` the player picks, or `RC_ISO`; crate::first_run); else
+//!   `RC_EXTRACTED`, else `<workspace>/extracted`
 //! - `RC_LEVEL`      start straight in this level (skips the front end unless `RC_FRONTEND=1`; without it the front
 //!   end's New Game / Load decides)
 //! - `RC_SCREENSHOT` if set, save a PNG of the window there after the scene has rendered, then exit
@@ -34,7 +36,9 @@ mod audio_out;
 mod determinism;
 mod display;
 mod display_blend;
+mod dialog;
 mod disc_source;
+mod first_run;
 mod fly_cam;
 mod fx_draw;
 mod fog_state;
@@ -71,6 +75,7 @@ mod reticle_render;
 mod marker_render;
 mod tesla_render;
 mod walloper_render;
+mod window_icon;
 mod visibomb_view;
 mod gs_post;
 mod reactive_render;
@@ -79,6 +84,7 @@ mod scene_render;
 mod sea_render;
 mod screen_canvas;
 mod shadow_render;
+mod standalone;
 mod pre_shadow;
 mod frame_log;
 mod shrub_billboard;
@@ -136,7 +142,10 @@ fn main() -> anyhow::Result<()> {
     // The boot's game state first: the level's spawn test reads its save bits (crate::gameplay::level_spawn_save).
     let boot = gameplay::boot_state(&root, index);
     let save = gameplay::level_spawn_save(boot.as_ref().map(|(gs, _)| gs), index);
-    let level_switch::LevelBundle { mut level, spawn, fog: fog_state, .. } = level_switch::load_bundle(&root, index, &save)?;
+    let level_switch::LevelBundle { mut level, spawn, fog: fog_state, .. } = match level_switch::load_bundle(&root, index, &save) {
+        Ok(b) => b,
+        Err(e) => { standalone::fatal(&format!("cannot load level {index:02}: {e:#}")); std::process::exit(1) }
+    };
     let t = &level.timings;
     let bg = level.background;
     println!(
@@ -170,6 +179,7 @@ fn main() -> anyhow::Result<()> {
     // The game frame every camera renders into and its presentation in the window (before anything spawns a camera,
     // and before the capture, which captures the frame).
     .add_plugins(display::DisplayPlugin)
+    .add_plugins(window_icon::WindowIconPlugin)
     // Frame-exact ticks / capture and the deterministic phase order, before anything spawns a camera.
     .add_plugins(determinism::DeterminismPlugin)
     // One game tick per drawn frame, at most 60 frames a second (crate::frame_pace).
@@ -253,6 +263,7 @@ fn main() -> anyhow::Result<()> {
         app.insert_resource(ScreenshotRequest { path: path.into(), delay: Duration::from_secs_f32(secs), min_frames: 30 })
             .add_systems(Update, take_screenshot);
     }
+    standalone::hide_console();
     app.run();
     Ok(())
 }
