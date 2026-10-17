@@ -1,6 +1,6 @@
 //! **Port-only** (not in the game): the "Port Options" page, for settings the PS2 never had (the graphics options and
 //! their preset, anti-aliasing, switching the moby shadows off, the gameplay and cutscene aspects, the render
-//! resolution and fullscreen).
+//! resolution, fullscreen and the FPS limit).
 //! Spec: docs/plan/menus.md "Port-only settings"; the graphics rows: docs/plan/graphics_options.md (every row's first
 //! value is the game's own look).
 //!
@@ -117,6 +117,12 @@ pub mod text {
     pub const FAR: i32 = -0x191;
     pub const FARTHER: i32 = -0x192;
     pub const MAXIMUM: i32 = -0x193;
+    pub const FPS_LIMIT: i32 = -0x1a0;
+    pub const FPS_30: i32 = -0x1a1;
+    pub const FPS_60: i32 = -0x1a2;
+    pub const FPS_120: i32 = -0x1a3;
+    pub const FPS_144: i32 = -0x1a4;
+    pub const UNLIMITED: i32 = -0x1a5;
     /// The game's own "on" / "off" (20314 / 20315, the Subtitles / HelpDesk toggle values).
     pub const ON: i32 = 20314;
     pub const OFF: i32 = 20315;
@@ -156,6 +162,12 @@ pub mod text {
             FAR => b"Far",
             FARTHER => b"Farther",
             MAXIMUM => b"Maximum",
+            FPS_LIMIT => b"FPS limit",
+            FPS_30 => b"30",
+            FPS_60 => b"60",
+            FPS_120 => b"120",
+            FPS_144 => b"144",
+            UNLIMITED => b"Unlimited",
             _ => return None,
         })
     }
@@ -189,6 +201,9 @@ pub enum Setting {
     /// How far away models keep their full detail: value 0 Original (the game's distances), 1 Far (×2), 2 Farther (×4),
     /// 3 Maximum (always).
     Detail,
+    /// The most frames drawn a second: value 0 30, 1 60 (the default, the game's tick rate), 2 120, 3 144, 4 unlimited
+    /// (no vsync). The game still ticks at 60 Hz.
+    FrameLimit,
 }
 
 /// One row: the setting, its label and the ids of its values (✕ cycles through them).
@@ -211,6 +226,7 @@ pub const ENTRIES: &[Entry] = &[
     Entry { setting: Setting::CutsceneAspect, label: text::CUTSCENE_ASPECT, values: &[text::ASPECT_4_3, text::ASPECT_16_10, text::ASPECT_16_9] },
     Entry { setting: Setting::Resolution, label: text::RESOLUTION, values: &[text::RES_WINDOW, text::RES_416, text::RES_720, text::RES_1080, text::RES_1440, text::RES_2160] },
     Entry { setting: Setting::Fullscreen, label: text::FULLSCREEN, values: &[text::OFF, text::ON] },
+    Entry { setting: Setting::FrameLimit, label: text::FPS_LIMIT, values: &[text::FPS_30, text::FPS_60, text::FPS_120, text::FPS_144, text::UNLIMITED] },
 ];
 
 /// The list's run-time state: cursor, each row's value index and each row's selectable values (bit k = value k;

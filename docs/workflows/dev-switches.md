@@ -49,7 +49,7 @@ module that reads it: `grep -rn '"RC_' crates/` lists them all.
 | `RC_DUMP_REALTIME` | `1`: `RC_DUMP_FRAMES` in real-time mode (wall-clock ticks as in play, not frame-exact; dev only) |
 | `RC_DUMP_TICKS` | `n,m,…`: in frame-exact mode, update k runs the k-th entry's game ticks, cycled (`1,0` = a 120 Hz display, `2` = 30 Hz; dev only, for real-time pacing repros) |
 | `RC_NOVSYNC` | `1`: present without vsync, so `fps:` measures headroom |
-| `RC_FRAME_CAP` | `0`: no 60 fps limiter (`crate::frame_pace`; also off with `RC_NOVSYNC=1`); ticks then follow the wall clock. `1`: the limiter in frame-exact runs too (`RC_DUMP_FRAMES` / `RC_SCREENSHOT_FRAME` otherwise render as fast as they can) |
+| `RC_FRAME_CAP` | `0`: no frame limiter, whatever the Port Options' FPS limit (`crate::frame_pace`; also off with `RC_NOVSYNC=1`); ticks then follow the wall clock. `1`: the limiter in frame-exact runs too (`RC_DUMP_FRAMES` / `RC_SCREENSHOT_FRAME` otherwise render as fast as they can) |
 | `RC_THREADS` | `n`: Bevy's task pools share n threads (fewer idle workers waking: ~25% less CPU at 3 on a Mac); default and `0`: Bevy's default by core count (3 was the default in v0.3.1 and showed a black window on a Windows PC on Vulkan) |
 | `RC_RENDER_DIAG` | `1`: Bevy's per-pass render timings (CPU only on Metal) every 5 s, and the number of views rendered |
 | `RC_DRAW_STATS` | `1`: every 300 frames, per material type the mesh entities, the visible ones and their distinct materials / meshes, and the active cameras (`crate::draw_stats`) |
