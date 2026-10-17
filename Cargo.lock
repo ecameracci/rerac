@@ -4392,6 +4392,7 @@ dependencies = [
  "rc-formats",
  "rc-game",
  "rc-video",
+ "twox-hash",
 ]
 
 [[package]]

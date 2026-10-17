@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Mods: texture mods in a `mods` folder next to the game, turned on and off from Options → Mods. They can replace the HUD, fonts and icons, and the world, character, enemy and sky textures.
+
 ## v0.3.5-alpha
 
 - Widescreen: gameplay and cutscenes each have their own aspect ratio setting, and movies fill the cutscene's frame.

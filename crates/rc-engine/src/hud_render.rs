@@ -266,6 +266,8 @@ pub fn decode_cut(t: &IndexedFx, cut: u8) -> Texture {
 
 /// The level's HUD data.
 pub struct LevelHud {
+    /// The level number (the mods' `textures/levels/NN/…` paths).
+    pub index: u32,
     pub hud: Hud,
     /// Every frame with raw GS alpha.
     pub frames: Vec<Texture>,
@@ -330,25 +332,117 @@ pub fn load(root: &Path, index: u32, core: &rc_formats::level::LevelCore, core_i
         .collect();
     let lang = language();
     let messages = strings::parse_strings(gameplay, lang).context("level text")?;
-    Ok(LevelHud { hud, frames, fx, fx_indexed, glyphs, glyph_addrs, messages, lang })
+    Ok(LevelHud { index, hud, frames, fx, fx_indexed, glyphs, glyph_addrs, messages, lang })
 }
 
 /// Rectangles of every texture in the atlas.
 struct Atlas {
     rgba: Vec<u8>,
+    width: u32,
     height: u32,
     frames: Vec<[u32; 4]>,
     fx: Vec<Option<[u32; 4]>>,
 }
 
-/// Shelf-packs the frames and FX textures (tallest first) into one raw-byte image.
-fn build_atlas(frames: &[Texture], fx: &[Option<Texture>]) -> Atlas {
+/// Where each texture lies in the atlas and how many atlas texels one of its own texels is (1, or a mod's
+/// replacement's factor: the primitives keep the game's texel UVs, the shader scales them).
+#[derive(Clone, Debug, Default)]
+pub struct AtlasLayout {
+    pub width: u32,
+    pub frames: Vec<[u32; 4]>,
+    pub fx: Vec<Option<[u32; 4]>>,
+    pub frame_scale: Vec<u32>,
+    pub fx_scale: Vec<u32>,
+}
+
+/// The atlas width with a mod's replacements (they are up to 8× the game's 512-texel frames).
+const ATLAS_W_MODS: u32 = 4096;
+/// The tallest atlas allowed (wgpu's default `max_texture_dimension_2d`).
+const ATLAS_MAX_H: u32 = 8192;
+/// The 2D layer's resolution with replacements: at most this many target pixels per game pixel.
+const MAX_LAYER_SCALE: u32 = 4;
+
+/// A mod's replacement of the texture at `rel` (crate::mods), with raw GS alpha (the export's `a < 0x80 ? 2a : 255`
+/// undone), and its scale over `base`: None without one, or when its size is not a whole multiple (1..=8) of `base`'s.
+fn mod_texture(mods: &crate::mods::Mods, rel: &str, base: &Texture) -> Option<(Texture, u32)> {
+    use bevy::image::{CompressedImageFormats, ImageSampler, ImageType};
+    let path = mods.find(rel)?;
+    let bytes = std::fs::read(&path).map_err(|e| eprintln!("mods: {}: {e}", path.display())).ok()?;
+    let img = Image::from_buffer(&bytes, ImageType::Extension("png"), CompressedImageFormats::NONE, true, ImageSampler::Default, RenderAssetUsages::MAIN_WORLD)
+        .map_err(|e| eprintln!("mods: {}: {e}", path.display()))
+        .ok()?;
+    let img = if img.texture_descriptor.format == TextureFormat::Rgba8UnormSrgb { img } else { img.convert(TextureFormat::Rgba8UnormSrgb)? };
+    let (w, h) = (img.width(), img.height());
+    let k = w / base.width.max(1);
+    if !(1..=8).contains(&k) || w != base.width * k || h != base.height * k {
+        eprintln!("mods: {}: {w}x{h} is not 1..8 times the game's {}x{}; skipped", path.display(), base.width, base.height);
+        return None;
+    }
+    let mut rgba = img.data?;
+    for p in rgba.as_chunks_mut::<4>().0 { p[3] = ((p[3] as u16 + 1) >> 1) as u8; }
+    Some((Texture { width: w, height: h, rgba }, k))
+}
+
+/// The atlas of the level's frames and FX textures, with the enabled mods' replacements (crate::mods), and the 2D
+/// layer's resolution scale. Falls back to the game's textures when the replacements do not fit.
+fn build_layout(lh: &LevelHud, mods: &crate::mods::Mods) -> (Atlas, AtlasLayout, u32) {
+    let game = || {
+        let a = build_atlas(&lh.frames, &lh.fx, ATLAS_W);
+        let l = AtlasLayout { width: a.width, frames: a.frames.clone(), fx: a.fx.clone(), frame_scale: vec![1; lh.frames.len()], fx_scale: vec![1; lh.fx.len()] };
+        (a, l, 1)
+    };
+    if !mods.any_enabled() { return game(); }
+    let dir = format!("textures/levels/{:02}", lh.index);
+    let mut frames = lh.frames.clone();
+    let mut fx = lh.fx.clone();
+    let (mut frame_scale, mut fx_scale) = (vec![1u32; frames.len()], vec![1u32; fx.len()]);
+    for (i, t) in frames.iter_mut().enumerate() {
+        if let Some((r, k)) = mod_texture(mods, &format!("{dir}/hud/frame_{i:04}_{}x{}.png", t.width, t.height), t) { (*t, frame_scale[i]) = (r, k); }
+    }
+    for (i, t) in fx.iter_mut().enumerate() {
+        let Some(t) = t.as_mut() else { continue };
+        if let Some((r, k)) = mod_texture(mods, &format!("{dir}/fx/{i:03}_{}x{}.png", t.width, t.height), t) { (*t, fx_scale[i]) = (r, k); }
+    }
+    let replaced = frame_scale.iter().chain(&fx_scale).filter(|&&k| k > 1).count();
+    if replaced == 0 { return game(); }
+    let a = build_atlas(&frames, &fx, ATLAS_W_MODS);
+    if a.height + crate::hud_images::ROWS > ATLAS_MAX_H {
+        eprintln!("mods: the HUD atlas with {replaced} replaced textures would be {}x{} (more than {ATLAS_MAX_H} high); using the game's", a.width, a.height + crate::hud_images::ROWS);
+        return game();
+    }
+    let res = frame_scale.iter().chain(&fx_scale).copied().max().unwrap_or(1).min(MAX_LAYER_SCALE);
+    println!("mods: level {:02}: {replaced} HUD textures replaced; atlas {}x{}, 2D layer at {res}x", lh.index, a.width, a.height);
+    let l = AtlasLayout { width: a.width, frames: a.frames.clone(), fx: a.fx.clone(), frame_scale, fx_scale };
+    (a, l, res)
+}
+
+/// The atlas image: the packed textures, then the streamed pictures' slots (crate::hud_images) from row `dyn_y`.
+fn atlas_image(mut atlas: Atlas) -> (Image, u32) {
+    let dyn_y = atlas.height;
+    atlas.height += crate::hud_images::ROWS;
+    atlas.rgba.resize((atlas.width * atlas.height * 4) as usize, 0);
+    let mut img = Image::new(
+        Extent3d { width: atlas.width, height: atlas.height, depth_or_array_layers: 1 },
+        TextureDimension::D2,
+        atlas.rgba,
+        TextureFormat::Rgba8Unorm,
+        RenderAssetUsages::all(),
+    );
+    img.sampler = bevy::image::ImageSampler::nearest();
+    (img, dyn_y)
+}
+
+/// Shelf-packs the frames and FX textures (tallest first) into one raw-byte image `width` texels wide (wider when a
+/// texture is).
+fn build_atlas(frames: &[Texture], fx: &[Option<Texture>], width: u32) -> Atlas {
+    let widest = frames.iter().chain(fx.iter().flatten()).map(|t| t.width).max().unwrap_or(0);
+    let width = width.max(widest);
     let mut items: Vec<(usize, &Texture)> = frames.iter().enumerate().chain(fx.iter().enumerate().filter_map(|(i, t)| t.as_ref().map(|t| (frames.len() + i, t)))).collect();
     items.sort_by_key(|(i, t)| (std::cmp::Reverse(t.height), std::cmp::Reverse(t.width), *i));
     let mut rects = vec![[0u32; 4]; frames.len() + fx.len()];
     let (mut x, mut y, mut shelf) = (0u32, 0u32, 0u32);
     for (i, t) in &items {
-        if x + t.width > ATLAS_W {
+        if x + t.width > width {
             x = 0;
             y += shelf;
             shelf = 0;
@@ -358,18 +452,18 @@ fn build_atlas(frames: &[Texture], fx: &[Option<Texture>]) -> Atlas {
         shelf = shelf.max(t.height);
     }
     let height = (y + shelf).max(1);
-    let mut rgba = vec![0u8; (ATLAS_W * height * 4) as usize];
+    let mut rgba = vec![0u8; (width * height * 4) as usize];
     for (i, t) in &items {
         let [rx, ry, w, _] = rects[*i];
         for row in 0..t.height {
             let src = &t.rgba[(row * w * 4) as usize..((row + 1) * w * 4) as usize];
-            let dst = (((ry + row) * ATLAS_W + rx) * 4) as usize;
+            let dst = (((ry + row) * width + rx) * 4) as usize;
             rgba[dst..dst + src.len()].copy_from_slice(src);
         }
     }
     let fx_rects = (0..fx.len()).map(|i| fx[i].as_ref().map(|_| rects[frames.len() + i])).collect();
     rects.truncate(frames.len());
-    Atlas { rgba, height, frames: rects, fx: fx_rects }
+    Atlas { rgba, width, height, frames: rects, fx: fx_rects }
 }
 
 /// Pipeline key of [`HudMaterial`].
@@ -471,15 +565,16 @@ pub struct HudStaticComposite {
 }
 
 /// The composites' scaling uniform for the HUD option (crate::graphics): x = 1 bilinear (Original: the TV showed the
-/// 512×416 image smoothed), 0 nearest (Sharp pixels).
-pub fn scaling(h: crate::graphics::Hud) -> Vec4 { Vec4::new(if h == crate::graphics::Hud::Original { 1.0 } else { 0.0 }, 0.0, 0.0, 0.0) }
+/// 512×416 image smoothed), 0 nearest (Sharp pixels); y = the layer's target pixels per game pixel (a mod's
+/// replacements, [`build_layout`]: above 1 the layer is sampled plain bilinear whatever the option).
+pub fn scaling(h: crate::graphics::Hud, res: u32) -> Vec4 { Vec4::new(if h == crate::graphics::Hud::Original { 1.0 } else { 0.0 }, res.max(1) as f32, 0.0, 0.0) }
 
 /// Applies a changed HUD option to both composites.
 fn apply_scaling(gfx: Res<crate::graphics::GraphicsSettings>, mut a: ResMut<Assets<HudComposite>>, mut b: ResMut<Assets<HudStaticComposite>>) {
     if !gfx.is_changed() { return; }
-    let v = scaling(gfx.hud);
-    for (_, m) in a.iter_mut() { if m.scaling != v { m.scaling = v; } }
-    for (_, m) in b.iter_mut() { if m.scaling != v { m.scaling = v; } }
+    let x = scaling(gfx.hud, 1).x;
+    for (_, m) in a.iter_mut() { if m.scaling.x != x { m.scaling.x = x; } }
+    for (_, m) in b.iter_mut() { if m.scaling.x != x { m.scaling.x = x; } }
 }
 
 impl UiMaterial for HudStaticComposite {
@@ -526,8 +621,13 @@ struct HudRuntime {
     extra: i32,
     env: HudEnv,
     glyphs: [GlyphTable; 3],
-    atlas_frames: Vec<[u32; 4]>,
-    atlas_fx: Vec<Option<[u32; 4]>>,
+    atlas: Handle<Image>,
+    layout: AtlasLayout,
+    /// The main layer's target pixels per game pixel ([`build_layout`]), and the scale its target was made at.
+    res: u32,
+    target_res: u32,
+    /// The [`crate::mods::Mods::generation`] the atlas was built from.
+    mods_gen: u64,
     mesh: Handle<Mesh>,
     /// The static layer's three passes ([`Hud2dHook::statics`]).
     static_meshes: [Handle<Mesh>; 3],
@@ -654,7 +754,7 @@ impl Plugin for HudPlugin {
         if std::env::var("RC_HUD").is_ok_and(|v| v.trim() == "0") { return; }
         app.add_plugins((Material2dPlugin::<HudMaterial>::default(), UiMaterialPlugin::<HudComposite>::default(), UiMaterialPlugin::<HudStaticComposite>::default()))
             .add_systems(crate::level_switch::LevelStartup, setup)
-            .add_systems(Update, (target_main_camera, tick_and_build, apply_fx_cuts).chain().in_set(HudBuild))
+            .add_systems(Update, (target_main_camera, apply_mods, tick_and_build, apply_fx_cuts).chain().in_set(HudBuild))
             .add_systems(PostUpdate, apply_scaling);
     }
 }
@@ -666,30 +766,22 @@ fn setup(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<HudMaterial>>,
     (mut composites, mut static_composites): (ResMut<Assets<HudComposite>>, ResMut<Assets<HudStaticComposite>>),
-    gfx: Res<crate::graphics::GraphicsSettings>,
+    (gfx, mods): (Res<crate::graphics::GraphicsSettings>, Res<crate::mods::Mods>),
 ) {
-    let sc = scaling(gfx.hud);
     let Some(lh) = level.0.hud.as_ref() else {
         eprintln!("hud: no HUD data for this level");
         return;
     };
-    let mut atlas = build_atlas(&lh.frames, &lh.fx);
+    let (atlas, layout, res) = build_layout(lh, &mods);
+    let (atlas_w, atlas_h) = (atlas.width, atlas.height);
+    let sc = scaling(gfx.hud, res);
     // The streamed pictures' slots below the frames (crate::hud_images); the image stays in the main world so the slots
     // can be rewritten.
-    let dyn_y = atlas.height;
-    atlas.height += crate::hud_images::ROWS;
-    atlas.rgba.resize((ATLAS_W * atlas.height * 4) as usize, 0);
-    let mut img = Image::new(
-        Extent3d { width: ATLAS_W, height: atlas.height, depth_or_array_layers: 1 },
-        TextureDimension::D2,
-        atlas.rgba,
-        TextureFormat::Rgba8Unorm,
-        RenderAssetUsages::all(),
-    );
-    img.sampler = bevy::image::ImageSampler::nearest();
+    let (img, dyn_y) = atlas_image(atlas);
     let atlas_handle = images.add(img);
+    let atlas_handle_main = atlas_handle.clone();
     commands.insert_resource(crate::hud_images::HudImages::new(atlas_handle.clone(), dyn_y));
-    let target = images.add(Image::new_target_texture(W as u32, H as u32, TextureFormat::Rgba16Float, None));
+    let target = images.add(Image::new_target_texture(W as u32 * res, H as u32 * res, TextureFormat::Rgba16Float, None));
 
     commands.spawn((
         Camera2d,
@@ -745,7 +837,7 @@ fn setup(
         ));
         m
     });
-    commands.spawn((full(), MaterialNode(static_composites.add(HudStaticComposite { image: static_target.clone(), scaling: sc })), ZIndex(1), ChildOf(hud_node), Name::new("hud static composite")));
+    commands.spawn((full(), MaterialNode(static_composites.add(HudStaticComposite { image: static_target.clone(), scaling: scaling(gfx.hud, 1) })), ZIndex(1), ChildOf(hud_node), Name::new("hud static composite")));
 
     let assets = HudAssets::new(&lh.hud, lh.glyphs, lh.messages.clone());
     let frame_sizes = assets.frame_sizes.clone();
@@ -753,7 +845,7 @@ fn setup(
     println!(
         "hud: {} icons, {} frames, {} fx textures, glyph tables {:#x}/{:#x}/{:#x}, {} messages (language {}), atlas {}x{}{}{}{}",
         lh.hud.icons.len() - 1, lh.frames.len(), lh.fx.iter().flatten().count(), lh.glyph_addrs[0], lh.glyph_addrs[1], lh.glyph_addrs[2],
-        lh.messages.len(), lh.lang, ATLAS_W, atlas.height,
+        lh.messages.len(), lh.lang, atlas_w, atlas_h,
         if env.demo { "; RC_HUD_DEMO: bolts 1234 at tick 60, HP 3 at tick 180" } else { "" },
         env.text.as_ref().map_or(String::new(), |t| format!("; RC_HUD_TEXT {:?}{}", String::from_utf8_lossy(t), if env.text_window { " (window)" } else { "" })),
         env.help.map_or(String::new(), |id| format!("; RC_HUD_HELP {id}: {}", rc_formats::strings::display(rc_formats::strings::lookup(&lh.messages, id)))),
@@ -765,8 +857,11 @@ fn setup(
         extra: 0,
         env,
         glyphs: lh.glyphs,
-        atlas_frames: atlas.frames,
-        atlas_fx: atlas.fx,
+        atlas: atlas_handle_main,
+        layout,
+        res,
+        target_res: res,
+        mods_gen: mods.generation,
         mesh,
         static_meshes,
         built: Default::default(),
@@ -816,12 +911,14 @@ fn tick_and_build(
     // HUD's left / right slots.
     let extra = display.as_ref().map_or(0, |d| crate::display::side_extra(d.frame_aspect()));
     rt.state.side_extra = display.as_ref().map_or(0, |d| crate::display::side_extra(d.gameplay));
-    if extra != rt.extra {
+    if extra != rt.extra || rt.res != rt.target_res {
         rt.extra = extra;
+        rt.target_res = rt.res;
         // Fresh targets of the new width (crate::display::fresh_target); the two cameras and composites move to them.
+        // The main layer at the mods' scale ([`build_layout`]), the static layer at the game's.
         let size = UVec2::new((W + 2 * extra) as u32, H as u32);
-        for old in [rt.target.clone(), rt.static_target.clone()] {
-            let Some(new) = crate::display::fresh_target(&mut images, &old, size) else { continue };
+        for (old, k) in [(rt.target.clone(), rt.res), (rt.static_target.clone(), 1)] {
+            let Some(new) = crate::display::fresh_target(&mut images, &old, size * k) else { continue };
             for mut t in &mut targets {
                 if matches!(&*t, RenderTarget::Image(i) if i.handle.id() == old.id()) { *t = RenderTarget::Image(new.clone().into()); }
             }
@@ -945,10 +1042,10 @@ fn tick_and_build(
     let e = rt.extra;
     // Only the meshes whose inputs changed ([`Built`]).
     if rt.built[0].update(&rt.hud2d.prims, &rt.hud2d.fine, &rt.hud2d.add, &dyns, e) {
-        let _ = meshes.insert(&rt.mesh, build_mesh(&rt.hud2d.prims, &rt.hud2d.fine, &rt.hud2d.add, &rt.atlas_frames, &rt.atlas_fx, &dyns, e));
+        let _ = meshes.insert(&rt.mesh, build_mesh(&rt.hud2d.prims, &rt.hud2d.fine, &rt.hud2d.add, &rt.layout, &dyns, e, rt.res as i32));
     }
     for ((m, prims), b) in rt.static_meshes.iter().zip(&hook.statics).zip(&mut rt.built[1..]) {
-        if b.update(prims, &[], &[], &dyns, e) { let _ = meshes.insert(m, build_mesh(prims, &[], &[], &rt.atlas_frames, &rt.atlas_fx, &dyns, e)); }
+        if b.update(prims, &[], &[], &dyns, e) { let _ = meshes.insert(m, build_mesh(prims, &[], &[], &rt.layout, &dyns, e, 1)); }
     }
 }
 
@@ -1029,7 +1126,11 @@ fn empty_mesh() -> Mesh {
 /// screen is centred in the `512 + 2·extra` wide target (x + extra, scaled into the shader's 512-wide clip mapping;
 /// the scissors are target pixels); a primitive spanning the whole screen (x ≤ 0 to x ≥ 512: fades, letterbox
 /// bars, the menu's black) reaches the frame's edges, scissor included when it is the full screen's.
-fn build_mesh(prims: &[Prim], fine: &[(usize, [[i32; 2]; 4])], add: &[usize], frames: &[[u32; 4]], fx: &[Option<[u32; 4]>], dyns: &[Option<[u32; 4]>], extra: i32) -> Mesh {
+///
+/// `res` (port-only, a mod's replacements): the target's pixels per game pixel; the scissors are scaled to it, the
+/// positions stay in the clip mapping. Each textured vertex carries its texture's [`AtlasLayout`] scale.
+#[allow(clippy::too_many_arguments)]
+fn build_mesh(prims: &[Prim], fine: &[(usize, [[i32; 2]; 4])], add: &[usize], layout: &AtlasLayout, dyns: &[Option<[u32; 4]>], extra: i32, res: i32) -> Mesh {
     if prims.is_empty() { return empty_mesh(); }
     let mut fine = fine.iter().peekable();
     let mut add = add.iter().peekable();
@@ -1039,16 +1140,16 @@ fn build_mesh(prims: &[Prim], fine: &[(usize, [[i32; 2]; 4])], add: &[usize], fr
     for (i, p) in prims.iter().enumerate() {
         let pos16 = fine.next_if(|(k, _)| *k == i).map(|(_, q)| *q);
         let additive = add.next_if(|&&k| k == i).is_some();
-        let rect = match p.tex {
-            Tex::None => None,
-            Tex::Frame(i) => frames.get(i).copied(),
-            Tex::Fx(i) => fx.get(i).copied().flatten(),
-            Tex::Dyn(i) => dyns.get(i).copied().flatten(),
+        let (rect, k) = match p.tex {
+            Tex::None => (None, 1),
+            Tex::Frame(i) => (layout.frames.get(i).copied(), layout.frame_scale.get(i).copied().unwrap_or(1)),
+            Tex::Fx(i) => (layout.fx.get(i).copied().flatten(), layout.fx_scale.get(i).copied().unwrap_or(1)),
+            Tex::Dyn(i) => (dyns.get(i).copied().flatten(), 1),
         };
         let blend = if additive { 8 } else { 0 };
         let t = match rect {
-            Some([x, y, w, hh]) => [x | y << 16, w | hh << 16, 1 | if p.repeat { 2 } else { 0 } | if p.nearest { 4 } else { 0 } | blend, 0],
-            None => [0, 0x0001_0001, blend, 0],
+            Some([x, y, w, hh]) => [x | y << 16, w | hh << 16, 1 | if p.repeat { 2 } else { 0 } | if p.nearest { 4 } else { 0 } | blend, k],
+            None => [0, 0x0001_0001, blend, 1],
         };
         let (x_lo, x_hi) = (p.pos.iter().map(|q| q[0]).min().unwrap_or(0), p.pos.iter().map(|q| q[0]).max().unwrap_or(0));
         let spans = extra != 0 && x_lo <= 0 && x_hi >= W;
@@ -1061,6 +1162,7 @@ fn build_mesh(prims: &[Prim], fine: &[(usize, [[i32; 2]; 4])], add: &[usize], fr
             sc4[0] += extra;
             sc4[1] += extra;
         }
+        if res > 1 { sc4 = [sc4[0] * res, (sc4[1] + 1) * res - 1, sc4[2] * res, (sc4[3] + 1) * res - 1]; }
         let s = sc4.map(|v| v.clamp(-1, 0xffff) as u32);
         let kx = W as f32 / (W + 2 * extra) as f32;
         let wide_x = |x: f32| -> f32 {
@@ -1099,17 +1201,49 @@ fn apply_fx_cuts(rt: Option<ResMut<HudRuntime>>, level: Res<crate::Level>, play:
     for q in &p.svc.draw_callbacks.screen {
         let ScreenTex::FxCut { fx, cut } = q.tex else { continue };
         if rt.fx_cuts.get(&fx) == Some(&cut) { continue; }
-        let (Some(Some(src)), Some(Some([rx, ry, w, h]))) = (lh.fx_indexed.get(fx), rt.atlas_fx.get(fx).copied()) else { continue };
+        // A mod's replacement has no CLUT to cut: it is drawn as shipped.
+        if rt.layout.fx_scale.get(fx).is_some_and(|&k| k > 1) { continue; }
+        let (Some(Some(src)), Some(Some([rx, ry, w, h]))) = (lh.fx_indexed.get(fx), rt.layout.fx.get(fx).copied()) else { continue };
         let t = decode_cut(src, cut);
+        let aw = rt.layout.width;
         let Some(mut img) = images.get_mut(&di.atlas) else { return };
         let Some(data) = img.data.as_mut() else { return };
         for row in 0..h.min(t.height) {
             let src_row = &t.rgba[(row * t.width * 4) as usize..((row * t.width + w.min(t.width)) * 4) as usize];
-            let dst = (((ry + row) * ATLAS_W + rx) * 4) as usize;
+            let dst = (((ry + row) * aw + rx) * 4) as usize;
             if let Some(d) = data.get_mut(dst..dst + src_row.len()) { d.copy_from_slice(src_row); }
         }
         rt.fx_cuts.insert(fx, cut);
     }
+}
+
+/// A changed set of enabled mods (crate::mods, the main menu's Mods page): the atlas rebuilt in place (same image,
+/// so the materials keep it), the streamed pictures' slots emptied, the layer's targets remade at the new scale by
+/// [`tick_and_build`] and every mesh rebuilt.
+fn apply_mods(
+    mut commands: Commands,
+    rt: Option<ResMut<HudRuntime>>,
+    mods: Res<crate::mods::Mods>,
+    level: Res<crate::Level>,
+    mut images: ResMut<Assets<Image>>,
+    (mut composites, mut materials): (ResMut<Assets<HudComposite>>, ResMut<Assets<HudMaterial>>),
+) {
+    let (Some(mut rt), Some(lh)) = (rt, level.0.hud.as_ref()) else { return };
+    if rt.mods_gen == mods.generation { return; }
+    rt.mods_gen = mods.generation;
+    let (atlas, layout, res) = build_layout(lh, &mods);
+    let (img, dyn_y) = atlas_image(atlas);
+    // A new image, not the old one replaced in place: the materials' bind groups keep the texture they were prepared
+    // with, so an in-place atlas of another size is sampled through the old one (the whole 2D layer blank).
+    let atlas = images.add(img);
+    for (_, m) in materials.iter_mut() { if m.atlas.id() == rt.atlas.id() { m.atlas = atlas.clone(); } }
+    rt.atlas = atlas;
+    commands.insert_resource(crate::hud_images::HudImages::new(rt.atlas.clone(), dyn_y));
+    rt.layout = layout;
+    rt.res = res;
+    rt.fx_cuts.clear();
+    rt.built = Default::default();
+    for (_, m) in composites.iter_mut() { if m.image.id() == rt.target.id() { m.scaling.y = res as f32; } }
 }
 
 
@@ -1147,9 +1281,53 @@ mod tests {
         h.prims[2].nearest = true;
         h.rect(0, 4, 0, 4, 0x8000_0000);
         let fx = vec![None; 26].into_iter().chain([Some([64u32, 0, 32, 32])]).collect::<Vec<_>>();
-        let m = build_mesh(&h.prims, &[], &[], &[], &fx, &[], 0);
+        let layout = AtlasLayout { width: ATLAS_W, fx_scale: vec![1; fx.len()], fx, ..default() };
+        let m = build_mesh(&h.prims, &[], &[], &layout, &[], 0, 1);
         let Some(VertexAttributeValues::Uint32x4(t)) = m.attribute(ATTRIBUTE_TEX) else { panic!("no tex attribute") };
         assert_eq!([t[0][2], t[4][2], t[8][2], t[12][2]], [1, 3, 7, 0]);
+    }
+
+    #[test]
+    fn mod_scale_reaches_the_vertices_and_scissors() {
+        // A 4× replacement of FX texture 1 (128×128 in the atlas for a 32×32 texture), the layer at 4×.
+        let mut h = Hud2d::default();
+        h.set_scissor(10, 99, 20, 49);
+        h.strip_glyph(1, 0, 0, 8, 8, 0, 0, 8, 8, 0x8080_8080);
+        h.rect(0, 4, 0, 4, 0x8000_0000);
+        let layout = AtlasLayout { width: ATLAS_W_MODS, fx: vec![None, Some([0, 0, 128, 128])], fx_scale: vec![1, 4], ..default() };
+        let m = build_mesh(&h.prims, &[], &[], &layout, &[], 0, 4);
+        let Some(VertexAttributeValues::Uint32x4(t)) = m.attribute(ATTRIBUTE_TEX) else { panic!("no tex attribute") };
+        assert_eq!((t[0][1], t[0][3], t[4][3]), (128 | 128 << 16, 4, 1));
+        let Some(VertexAttributeValues::Uint32x4(s)) = m.attribute(ATTRIBUTE_SCISSOR) else { panic!("no scissor attribute") };
+        assert_eq!(s[0], [40, 399, 80, 199]);
+    }
+
+    #[test]
+    fn mod_png_alpha_and_scale() {
+        // The export's alpha (a < 0x80 ? 2a : 255) back to raw GS alpha, a 2× replacement accepted, a 3:2 one refused.
+        let root = std::env::temp_dir().join(format!("rerac-hud-mod-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let d = root.join("m/assets/t");
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(root.join("m/mod.toml"), "id = \"m\"\n").unwrap();
+        let png = |w: u32, h: u32, a: u8| {
+            let img = Image::new(Extent3d { width: w, height: h, depth_or_array_layers: 1 }, TextureDimension::D2, [9, 8, 7, a].repeat((w * h) as usize), TextureFormat::Rgba8UnormSrgb, RenderAssetUsages::all());
+            let mut out = std::io::Cursor::new(Vec::new());
+            img.try_into_dynamic().unwrap().write_to(&mut out, bevy::image::ImageFormat::Png.as_image_crate_format().unwrap()).unwrap();
+            out.into_inner()
+        };
+        std::fs::write(d.join("ok.png"), png(4, 4, 255)).unwrap();
+        std::fs::write(d.join("half.png"), png(4, 4, 0x40)).unwrap();
+        std::fs::write(d.join("bad.png"), png(6, 4, 255)).unwrap();
+        let mut mods = crate::mods::Mods { dir: Some(root.clone()), list: vec![crate::mods::ModInfo { id: "m".into(), name: "m".into(), version: String::new(), description: String::new(), dir: root.join("m"), enabled: true }], generation: 0 };
+        let base = Texture { width: 2, height: 2, rgba: vec![0; 16] };
+        let (t, k) = mod_texture(&mods, "t/ok.png", &base).unwrap();
+        assert_eq!((t.width, t.height, k, &t.rgba[..4]), (4, 4, 2, &[9u8, 8, 7, 0x80][..]));
+        assert_eq!(mod_texture(&mods, "t/half.png", &base).unwrap().0.rgba[3], 0x20);
+        assert!(mod_texture(&mods, "t/bad.png", &base).is_none());
+        mods.list[0].enabled = false;
+        assert!(mod_texture(&mods, "t/ok.png", &base).is_none());
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -1157,7 +1335,7 @@ mod tests {
         let tex = |w: u32, h: u32, v: u8| Texture { width: w, height: h, rgba: vec![v; (w * h * 4) as usize] };
         let frames = vec![tex(32, 32, 1), tex(256, 256, 2), tex(1024, 8, 3), tex(64, 16, 4)];
         let fx = vec![None, Some(tex(256, 128, 5))];
-        let a = build_atlas(&frames, &fx);
+        let a = build_atlas(&frames, &fx, ATLAS_W);
         let rects: Vec<[u32; 4]> = a.frames.iter().copied().chain(a.fx.iter().flatten().copied()).collect();
         for (i, r) in rects.iter().enumerate() {
             assert!(r[0] + r[2] <= ATLAS_W && r[1] + r[3] <= a.height);

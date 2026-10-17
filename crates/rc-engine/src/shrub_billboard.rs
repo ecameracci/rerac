@@ -187,7 +187,7 @@ pub(crate) fn spawn_billboards(
     };
 
     // Pass 1: records (one storage buffer for every class), meshes and textures.
-    struct ClassDraw { class: usize, o_class: i32, mesh: Handle<Mesh>, image: Handle<Image>, mxl: u32, k: f32, centroid: Vec3 }
+    struct ClassDraw { class: usize, o_class: i32, mesh: Handle<Mesh>, image: Handle<Image>, mxl: u32, k: f32, lod_scale: f32, centroid: Vec3 }
     let mut bytes = Vec::new();
     let mut n_records = 0u32;
     let mut draws = Vec::new();
@@ -226,9 +226,12 @@ pub(crate) fn spawn_billboards(
                 .with_inserted_attribute(ATTRIBUTE_BILLBOARD_INFO, VertexAttributeValues::Uint32(vinfo))
                 .with_inserted_indices(Indices::U32(idx)),
         );
-        let image = images.add(mip_image(levels, sampler.clone()).0);
         let mxl = regs.mxl().min(levels.len() as u32 - 1);
-        draws.push(ClassDraw { class: ci, o_class: c.o_class, mesh, image, mxl, k: regs.lod_k(), centroid: centroid / members.len() as f32 });
+        let (image, mxl, lod_scale) = match crate::mod_textures::find(&levels[0], sampler.clone()) {
+            Some(hd) => { let (img, mxl, lod_scale) = hd.into_parts(mxl); (images.add(img), mxl, lod_scale) }
+            None => (images.add(mip_image(levels, sampler.clone()).0), mxl, 1.0),
+        };
+        draws.push(ClassDraw { class: ci, o_class: c.o_class, mesh, image, mxl, k: regs.lod_k(), lod_scale, centroid: centroid / members.len() as f32 });
     }
     if n_records == 0 {
         println!("shrub billboards: none on this level");
@@ -239,7 +242,7 @@ pub(crate) fn spawn_billboards(
     let instances = buffers.add(ShaderBuffer::new(&bytes, RenderAssetUsages::RENDER_WORLD));
     for d in &draws {
         for variant in 0..3u8 {
-            let params = BillboardParams { misc: Vec4::new(variant as f32, d.mxl as f32, d.k, crate::game_camera::NEAR) };
+            let params = BillboardParams { misc: Vec4::new(variant as f32, d.mxl as f32, d.k, crate::game_camera::NEAR / d.lod_scale) };
             let mat = materials.add(BillboardMaterial { texture: d.image.clone(), fog: crate::game_camera::fog_buffer(), params, instances: instances.clone(), variant });
             let mut e = commands.spawn((
                 Mesh3d(d.mesh.clone()),
