@@ -7,7 +7,8 @@
 <p align="center">An unofficial native PC port of Ratchet & Clank (2002).</p>
 
 <p align="center">
-  <a href="https://github.com/re-rac/rerac/releases/latest"><img src="https://img.shields.io/badge/dynamic/toml?url=https%3A%2F%2Fraw.githubusercontent.com%2Fecameracci%2Frerac%2Fdev%2FCargo.toml&query=%24.workspace.package.version&label=version&prefix=v" alt="Version"></a>
+  <a href="https://github.com/ecameracci/rerac/tree/dev"><img src="https://img.shields.io/badge/dynamic/toml?url=https%3A%2F%2Fraw.githubusercontent.com%2Fecameracci%2Frerac%2Fdev%2FCargo.toml&query=%24.workspace.package.version&label=local%20version&prefix=v" alt="Local version"></a>
+  <a href="https://github.com/re-rac/rerac/releases/latest"><img src="https://img.shields.io/badge/dynamic/toml?url=https%3A%2F%2Fraw.githubusercontent.com%2Fre-rac%2Frerac%2Fmain%2FCargo.toml&query=%24.workspace.package.version&label=upstream%20version&prefix=v" alt="Upstream version"></a>
 </p>
 
 <p align="center">
