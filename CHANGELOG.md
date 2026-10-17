@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.3.5-alpha
+
+- Widescreen: gameplay and cutscenes each have their own aspect ratio setting, and movies fill the cutscene's frame.
+- Port Options can be opened from the main menu, and its list is taller. The window opens at the saved resolution and aspect ratio, and Quit Game closes the game.
+- Save slots show the time played, and the save date uses your local time.
+- The play timer stops on the pause menu.
+- The ammo counter comes back after a death.
+- Fixed the purple or black screen on the first start, and the blue bars on the planet title cards while the text fades in.
+- Windows builds are supported. On Linux, gamepads work behind a wireless keyboard receiver, and the 8BitDo Ultimate's X and Y no longer swap.
+
 ## v0.3.4-alpha
 
 Fixes from playing v0.3.3.
