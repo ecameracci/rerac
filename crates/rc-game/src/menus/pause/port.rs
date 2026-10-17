@@ -74,7 +74,7 @@ pub const ROW_STEP: i32 = 20;
 /// The frame mobys' stretch for page `page` ([`super::frame::FrameMobys::stretch`]): the list panel on the port pages.
 pub fn panel_stretch(page: u32) -> [Option<[i32; 2]>; super::frame::SLOTS] {
     let mut s = [None; super::frame::SLOTS];
-    if page == PAGE || page == FRONT_PAGE { s[LIST_SLOT] = Some(LIST_ROWS); }
+    if page == PAGE || page == FRONT_PAGE || page == super::mods::PAGE { s[LIST_SLOT] = Some(LIST_ROWS); }
     s
 }
 
@@ -124,6 +124,10 @@ pub mod text {
     pub const FPS_120: i32 = -0x1a3;
     pub const FPS_144: i32 = -0x1a4;
     pub const UNLIMITED: i32 = -0x1a5;
+    /// The main menu's Mods page (super::super::mods).
+    pub const MODS: i32 = -0x200;
+    pub const MODS_NONE: i32 = -0x201;
+    pub const MODS_WHERE: i32 = -0x202;
     /// The game's own "on" / "off" (20314 / 20315, the Subtitles / HelpDesk toggle values).
     pub const ON: i32 = 20314;
     pub const OFF: i32 = 20315;
@@ -170,6 +174,9 @@ pub mod text {
             FPS_120 => b"120",
             FPS_144 => b"144",
             UNLIMITED => b"Unlimited",
+            MODS => b"Mods",
+            MODS_NONE => b"No mods found",
+            MODS_WHERE => b"Put mods in the mods folder beside the game",
             _ => return None,
         })
     }

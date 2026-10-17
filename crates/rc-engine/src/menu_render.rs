@@ -338,6 +338,8 @@ fn setup(
     // Port-only: the "Port Options" page and its entry in the Options list (RC_SETTINGS_PAGE=0: none).
     if let Some(m) = menu.as_mut().filter(|_| std::env::var("RC_SETTINGS_PAGE").map_or(true, |v| v.trim() != "0")) {
         if !m.install_port_page(&overlay) { eprintln!("menus: Port Options page not installed (Options page records missing)"); }
+        // The main menu's Mods page (crate::mods), after Port Options in its Options lists.
+        else if !m.install_mods_page() { eprintln!("menus: Mods page not installed (the main menu's Port Options page is missing)"); }
     }
     println!(
         "menus: quick select {} (neighbour table {:#x}), page menu {} ({} pages, {} widgets); RC_MENU_TRACE=1 logs events",
@@ -561,11 +563,18 @@ struct PortSettings<'a, 'w> {
     gfx: &'a mut ResMut<'w, crate::graphics::GraphicsSettings>,
     fps: Option<&'a mut ResMut<'w, crate::frame_pace::FrameLimit>>,
     supported: SupportedMsaa,
+    /// The main menu's Mods page (crate::mods).
+    mods: Option<&'a mut ResMut<'w, crate::mods::Mods>>,
 }
 
 impl PortSettings<'_, '_> {
     /// Before the tick: the rows from the settings. Returns the graphics settings for [`PortSettings::rows_out`].
     fn rows_in(&self, menu: &mut PageMenu) -> crate::graphics::GraphicsSettings {
+        if let Some(m) = self.mods.as_deref() {
+            let names: Vec<&str> = m.list.iter().map(|i| i.name.as_str()).collect();
+            let on: Vec<bool> = m.list.iter().map(|i| i.enabled).collect();
+            menu.set_mod_rows(&names, &on);
+        }
         if let Some(s) = self.shadows.as_deref() { menu.set_port_value(Setting::Shadows, !s.enabled as u8); }
         menu.set_port_value(Setting::Resolution, self.display.resolution.index());
         menu.set_port_value(Setting::Aspect, self.display.gameplay.index());
@@ -579,6 +588,15 @@ impl PortSettings<'_, '_> {
 
     /// After the tick: a changed row into its setting, which is saved.
     fn rows_out(&mut self, menu: &PageMenu, gfx_before: &crate::graphics::GraphicsSettings, frame: u64) {
+        // A toggled mod: saved, and the HUD rebuilds its atlas (crate::hud_render).
+        if let (Some(states), Some(m)) = (menu.mod_states(), self.mods.as_mut()) {
+            for (i, &on) in states.iter().enumerate() {
+                if m.list.get(i).is_some_and(|x| x.enabled != on) {
+                    println!("menus: frame {frame}: Mods: {} {}", m.list[i].id, if on { "on" } else { "off" });
+                    m.set_enabled(i, on);
+                }
+            }
+        }
         if let (Some(v), Some(s)) = (menu.port_value(Setting::Shadows), self.shadows.as_mut()) {
             if s.enabled != (v == 0) {
                 s.enabled = v == 0;
@@ -633,12 +651,13 @@ type InteractParams<'w> = (
     Option<ResMut<'w, crate::audio_out::AudioOut>>,
 );
 
-/// The Port Options rows' resources ([`PortSettings`]).
+/// The Port Options and Mods rows' resources ([`PortSettings`]).
 type PortParams<'w> = (
     Option<ResMut<'w, crate::shadow_render::ShadowSettings>>,
     ResMut<'w, crate::display::DisplaySettings>,
     ResMut<'w, crate::graphics::GraphicsSettings>,
     Option<ResMut<'w, crate::frame_pace::FrameLimit>>,
+    Option<ResMut<'w, crate::mods::Mods>>,
 );
 
 #[allow(clippy::too_many_arguments)]
@@ -652,7 +671,7 @@ fn menu_frame(
     source: Res<crate::game_camera::CameraSource>,
     supported: Option<Res<SupportedMsaa>>,
     (mut vr, mut feed, mut view, mut audio): InteractParams,
-    (mut shadows, mut display, mut gfx, mut fps): PortParams,
+    (mut shadows, mut display, mut gfx, mut fps, mut mods): PortParams,
     mut widgets3d: ResMut<crate::menu_models::GadgetsPreview>,
     (mut fer, movies, mut app_exit): (ResMut<crate::saves::FrontEndRt>, Option<Res<crate::movie_render::MovieState>>, MessageWriter<AppExit>),
 ) {
@@ -663,7 +682,7 @@ fn menu_frame(
     if fer.fe.is_some() {
         let busy = movies.as_deref().is_some_and(|m| m.busy());
         let fer = &mut *fer;
-        let mut port = PortSettings { shadows: shadows.as_mut(), display: &mut display, gfx: &mut gfx, fps: fps.as_mut(), supported: supported.as_deref().cloned().unwrap_or_default() };
+        let mut port = PortSettings { shadows: shadows.as_mut(), display: &mut display, gfx: &mut gfx, fps: fps.as_mut(), supported: supported.as_deref().cloned().unwrap_or_default(), mods: mods.as_mut() };
         front_end_frame(rt, &mut mm, &mut play, gs, fer, &pad, &source, busy, audio.as_deref_mut(), &mut port);
         mm.state.end_frame();
         mm.loop_frame += 1;
@@ -799,7 +818,7 @@ fn menu_frame(
                 // The close's post-action 3 / 4 / 5 / 6 / 7: `FadeToBlack(ticks(16))` over the menu image, then the action.
                 post_fade_step(rt, &mut mm, &mut play, gs, sess.hp, audio.as_deref_mut(), frame, true);
             } else if let Some(menu) = rt.menu.as_mut() {
-                let mut port = PortSettings { shadows: shadows.as_mut(), display: &mut display, gfx: &mut gfx, fps: fps.as_mut(), supported: supported.as_deref().cloned().unwrap_or_default() };
+                let mut port = PortSettings { shadows: shadows.as_mut(), display: &mut display, gfx: &mut gfx, fps: fps.as_mut(), supported: supported.as_deref().cloned().unwrap_or_default(), mods: mods.as_mut() };
                 let gfx_before = port.rows_in(menu);
                 // The card and the save inputs moved into the menu for its tick (crate::saves).
                 saves_in(menu, &play);

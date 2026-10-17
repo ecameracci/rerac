@@ -32,6 +32,7 @@ pub mod gadgets;
 pub mod map_page;
 pub mod media;
 pub mod model_anim;
+pub mod mods;
 mod options;
 pub mod pages;
 pub mod planet_select;
@@ -361,6 +362,8 @@ pub enum Data {
     Scroller(media::Scroller),
     /// Port-only: the "Port Options" list ([`port`]).
     Port(port::PortList),
+    /// Port-only: the main menu's "Mods" list ([`mods`]).
+    Mods(mods::ModList),
     /// The icon grids, the item preview and the 3D Ratchet of the Gadgets / Weapons pages ([`gadgets`]).
     Grid(gadgets::Grid),
     Preview(gadgets::Preview),
@@ -955,6 +958,7 @@ impl PageMenu {
             func::MISSIONS_UPDATE => planet_select::missions_update(self, w, inp, gs, out),
             func::PICTURE_UPDATE => map_page::picture_update(self, w),
             port::UPDATE => port::update(self, w, inp, out),
+            mods::UPDATE => mods::update(self, w, inp, out),
             gadgets::func::GRID_UPDATE => gadgets::grid_update(self, w, inp, gs, out),
             // `LoadHandGadget` 0x297d70: the models follow the page's copy of the saved items (engine side).
             gadgets::func::MODEL_UPDATE => 0,
@@ -1167,6 +1171,7 @@ impl PageMenu {
             func::PLANET_LIST_DRAW => planet_select::list_draw(self, w, a, out),
             func::GALAXY_DRAW => planet_select::galaxy_draw(self, w, a, gs, env, out),
             port::DRAW => port::draw(self, w, a, out),
+            mods::DRAW => mods::draw(self, w, a, out),
             gadgets::func::GRID_DRAW => gadgets::grid_draw(self, w, a, gs, env.vsync, out),
             gadgets::func::MODEL_DRAW => gadgets::model_draw(self, w, gs),
             gadgets::func::PREVIEW_DRAW => gadgets::preview_draw(self, w, a, gs),

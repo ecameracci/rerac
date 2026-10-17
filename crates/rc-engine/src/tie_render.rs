@@ -440,7 +440,7 @@ fn spawn_ties_on(
         TextureFormat::Rgba8Unorm,
         RenderAssetUsages::RENDER_WORLD,
     ));
-    let mut image_cache: HashMap<(usize, SamplerKey), (Handle<Image>, AlphaRange, u32)> = HashMap::new();
+    let mut image_cache: HashMap<(usize, SamplerKey), crate::mod_textures::WorldImage> = HashMap::new();
     let mut image_for = |tex: usize, skey: SamplerKey, images: &mut Assets<Image>| {
         image_cache
             .entry((tex, skey))
@@ -453,6 +453,11 @@ fn spawn_ties_on(
                         *a = if *a == 0xff { 0x80 } else { *a / 2 };
                     }
                     let range = AlphaRange::of(rgba.iter().skip(3).step_by(4).copied());
+                    let mxl = levels.len() as u32 - 1;
+                    if let Some(hd) = crate::mod_textures::find(&levels[0], skey.descriptor()) {
+                        let (img, mxl, lod_scale) = hd.into_parts(mxl);
+                        return (images.add(img), range, mxl, lod_scale);
+                    }
                     let mut img = Image::new_uninit(
                         Extent3d { width: levels[0].width, height: levels[0].height, depth_or_array_layers: 1 },
                         TextureDimension::D2,
@@ -462,11 +467,11 @@ fn spawn_ties_on(
                     img.texture_descriptor.mip_level_count = levels.len() as u32;
                     img.data = Some(rgba);
                     img.sampler = ImageSampler::Descriptor(skey.descriptor());
-                    (images.add(img), range, levels.len() as u32 - 1)
+                    (images.add(img), range, mxl, 1.0)
                 }
                 None => {
                     warn!("tie texture {tex} has no decoded texture; drawing magenta");
-                    (fallback.clone(), AlphaRange::OPAQUE, 0)
+                    (fallback.clone(), AlphaRange::OPAQUE, 0, 1.0)
                 }
             })
             .clone()
@@ -489,7 +494,7 @@ fn spawn_ties_on(
             for l in 0..3 { st.triangles[l] += part.triangles[l]; }
             // Af of every slot the part reads (fat-vertex morph colours are blends of two of them).
             let vertex_alpha = AlphaRange::of((0..SLOTS).filter(|&s| part.slots & (1 << s) != 0).map(|s| colors[s][3]));
-            let (image, texel_alpha, mxl) = image_for(part.texture, part.skey, images);
+            let (image, texel_alpha, mxl, lod_scale) = image_for(part.texture, part.skey, images);
             for pass in gs_state::draws(gs_state::AREF_WORLD, texel_alpha, vertex_alpha) {
                 let mat = mats
                     .entry((part.texture, part.skey, pass))
@@ -497,7 +502,7 @@ fn spawn_ties_on(
                         materials.add(TieMaterial {
                             texture: image.clone(),
                             fog: crate::game_camera::fog_buffer(),
-                            params: TieParams { misc: Vec4::new(crate::game_camera::NEAR, mxl as f32, tint, 0.0) },
+                            params: TieParams { misc: Vec4::new(crate::game_camera::NEAR / lod_scale, mxl as f32, tint, 0.0) },
                             instances: inst_buffer.clone(),
                             lods: lod_buffer.clone(),
                             pass,

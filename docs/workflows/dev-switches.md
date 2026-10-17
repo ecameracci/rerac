@@ -42,6 +42,7 @@ module that reads it: `grep -rn '"RC_' crates/` lists them all.
 | `RC_UNPORTED` | `1`: every 600 ticks, print the calls the moby loop met without a port so far (`Services::unported`, by name and count) |
 | `RC_SKIP_LOGOS` | `1`: in the front end, skip the publisher logos movie and go straight to the title |
 | `RC_SAVE_DIR` | the memory-card folder (`0` or empty: no card); without it, the `memcard_dir = <path>` key of the port settings file (relative: from the settings file's folder), else a `memcard/` folder beside the executable if it exists, else `<config>/rerac/memcard` (deterministic runs: no card). `RC_SAVE_TRACE=1` logs every card state change |
+| `RC_MODS_DIR` | The mods folder (default: `mods/` beside the executable; docs/plan/mods.md §2.1b). Set, it also enables mods in deterministic runs, with the enabled set from `RC_SETTINGS_FILE`'s `mods = <id>, …` |
 | `RC_CAM` | Starting camera `ex,ey,ez,tx,ty,tz` (eye and target, game units) |
 | `RC_SCREENSHOT` | Save a screenshot to this path, then exit |
 | `RC_SCREENSHOT_DELAY` | Seconds before the screenshot (default 3) |

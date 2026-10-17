@@ -467,6 +467,49 @@ fn port_page_in_the_main_menu_from_the_disc() {
 }
 
 #[test]
+fn mods_page_in_the_main_menu_from_the_disc() {
+    use super::{mods, port};
+    const FRONT_OPTIONS: u32 = 0x1b8d08;
+    const FRONT_OPTIONS_W: u32 = 0x1b8cb8;
+    const FRONT_LIST: u32 = 0x1b8de8;
+    let p = rc_formats::test_data::root().join("levels/01/overlay.bin");
+    let Ok(bytes) = std::fs::read(&p) else { eprintln!("skipped: no {}", p.display()); return };
+    let ov = Overlay::parse(&bytes).unwrap();
+    let mut m = PageMenu::load(&ov).unwrap();
+    assert!(!m.install_mods_page(), "needs the Port Options' main-menu page");
+    assert!(m.install_port_page(&ov) && m.install_mods_page());
+    assert!(m.install_mods_page(), "idempotent");
+    // After Port Options in both of the front end's Options lists.
+    let ids = |l: &[Item]| l.iter().rev().take(2).map(|i| (i.label, i.arg)).collect::<Vec<_>>();
+    let tail = vec![(port::text::MODS as i16, mods::PAGE), (port::text::ENTRY as i16, port::FRONT_PAGE)];
+    assert_eq!((ids(&m.saves.front_options[0]), ids(&m.saves.front_options[1])), (tail.clone(), tail));
+    let (pg, model) = (&m.pages[&mods::PAGE], m.pages[&port::FRONT_PAGE].clone());
+    assert_eq!((pg.seqs, pg.parent, pg.focus, pg.widgets[2], pg.widgets[3]), (model.seqs, FRONT_OPTIONS, mods::LIST_W, mods::TITLE_W, mods::LIST_W));
+
+    // Main menu → Options → Down three times → ✕ → the page; ✕ toggles the cursor's mod; △ back to Options.
+    let mut g = gs();
+    let env = MenuEnv::default();
+    m.set_mod_rows(&["HD UI", "Other"], &[false, true]);
+    open(&mut m, &mut g, 0x2d);
+    m.pages.get_mut(&page::KIND2D).unwrap().focus = FRONT_OPTIONS_W;
+    m.tick(&press(button::CROSS), &mut g, &env);
+    for _ in 0..13 { m.tick(&NONE, &mut g, &env); }
+    assert_eq!(m.current, FRONT_OPTIONS);
+    for _ in 0..3 { m.tick(&press(button::DOWN), &mut g, &env); }
+    assert_eq!(list_of(&m, FRONT_LIST).items[list_of(&m, FRONT_LIST).cursor as usize].arg, mods::PAGE);
+    m.tick(&press(button::CROSS), &mut g, &env);
+    for _ in 0..13 { m.tick(&NONE, &mut g, &env); }
+    assert_eq!(m.current, mods::PAGE);
+    let o = m.tick(&press(button::CROSS), &mut g, &env);
+    assert_eq!((o.sounds, m.mod_states()), (vec![MenuSound::Confirm], Some(&[true, true][..])));
+    m.tick(&press(button::DOWN), &mut g, &env);
+    m.tick(&press(button::CROSS), &mut g, &env);
+    assert_eq!(m.mod_states(), Some(&[true, false][..]));
+    m.tick(&press(button::TRIANGLE), &mut g, &env);
+    assert_eq!(m.target, FRONT_OPTIONS);
+}
+
+#[test]
 fn port_page_from_the_disc() {
     use super::port::{self, Setting};
     let p = rc_formats::test_data::root().join("levels/01/overlay.bin");

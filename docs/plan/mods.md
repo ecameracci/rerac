@@ -1,6 +1,6 @@
 # Mods (design notes, last stage)
 
-Status: **documentation only.** Mods are the last piece (user, 2026-09-26). They must be real mods: assets,
+Status: **Stage 3a texture overrides are built** (§2.1b); the rest is design. Mods are the last piece (user, 2026-09-26). They must be real mods: assets,
 functionality and gameplay. This page records how OpenGOAL does it, our options, a recommendation and open
 questions. The data tiers and the launcher it builds on are in `docs/plan/launcher_extractor.md`.
 
@@ -74,6 +74,27 @@ the importer uses the export's sidecar (or extras) to rebuild what the standard 
 
 The exports are a starting point for mod authors: they are complete for the textures, audio, text and tables,
 and lossy only where §5.5 of the extractor plan says so (lighting not baked, LOD morphs not animated).
+
+### 2.1b What is built (texture overrides, 2026-10)
+- **Mods folder** (`crates/rc-engine/src/mods.rs`): `mods/<folder>/mod.toml` + `assets/` beside the executable
+  (`RC_MODS_DIR` overrides it). The settings file's `mods = <id>, …` holds the enabled set; the main menu's
+  Options → Mods page toggles it. The first mod in folder-name order that has a file wins.
+- **HUD frames and FX textures** (fonts, icons, the logo; `crates/rc-engine/src/hud_render.rs`): a PNG at the
+  export's path at a whole scale (1..=8). Applied live: a toggle rebuilds the HUD atlas.
+- **World, moby, shrub, billboard and sky textures** (`crates/rc-engine/src/mod_textures.rs`):
+  `assets/textures/hash/<key>.dds|png`, `key` = XXH3-64 of the decoded RGBA8 (alpha 0x80 → 0xff) in 16 hex digits
+  + `_<w>x<h>`. The same key holds in every level. DDS (BC3 or 32-bit, PCSX2 pack alpha 0..0x80) or PNG (export
+  alpha), at a power-of-two scale up to 16. The world shaders shift the GS mip level by the replacement's texel
+  density at the frame's height. Applied at the next level load.
+- **Not yet:** streamed pictures (`hud_images`: maps, backgrounds), environment / metal maps, particles, audio,
+  text, models, data patches.
+- **A first step, simpler than §2.1 and §3:** overrides are read from the mod folders at load time in `rc-engine`,
+  with no `rc-data` overlay or per-profile cache; one enabled set, in folder-name order, not ordered profiles; the
+  in-game Mods page, no launcher tab; `mod.toml` reads only `id`, `name`, `version`, `description`. World textures
+  are keyed by content hash rather than §2.1a's export paths, so one file covers a texture in every level and PCSX2
+  packs convert; the export does not write those names yet. The rest of the design stands for the later stages.
+- **PCSX2 packs** are keyed by GS texture and CLUT hash, not by our keys; converting one means matching each pack
+  file to a decoded texture by CLUT hash, size and content (a one-off tool, kept out of the repo with the pack).
 
 ### 2.2 Data (gameplay content)
 - Level content as editable data exported to JSON (Tier 2) and merged back as patches: moby instances and pvars,
