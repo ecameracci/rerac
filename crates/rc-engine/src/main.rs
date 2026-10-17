@@ -74,6 +74,7 @@ mod reticle_render;
 mod marker_render;
 mod tesla_render;
 mod walloper_render;
+mod window_icon;
 mod visibomb_view;
 mod gs_post;
 mod reactive_render;
@@ -173,6 +174,7 @@ fn main() -> anyhow::Result<()> {
     // The game frame every camera renders into and its presentation in the window (before anything spawns a camera,
     // and before the capture, which captures the frame).
     .add_plugins(display::DisplayPlugin)
+    .add_plugins(window_icon::WindowIconPlugin)
     // Frame-exact ticks / capture and the deterministic phase order, before anything spawns a camera.
     .add_plugins(determinism::DeterminismPlugin)
     // One game tick per drawn frame, at most 60 frames a second (crate::frame_pace).

@@ -30,3 +30,7 @@ anyhow.workspace = true
 # The save clock in the host's local time (crate::saves::clock_now: `localtime_r`; Windows calls kernel32 directly).
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+# The window's HWND for its icon (crate::window_icon); Bevy's own version, no new crate.
+[target.'cfg(windows)'.dependencies]
+raw-window-handle = "0.6"

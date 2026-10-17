@@ -4388,6 +4388,7 @@ dependencies = [
  "anyhow",
  "bevy",
  "libc",
+ "raw-window-handle",
  "rc-data",
  "rc-extract",
  "rc-formats",

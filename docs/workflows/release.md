@@ -31,6 +31,13 @@ macOS and Windows (Git Bash) are tested; the Linux branch is written but unteste
 runs Git for Windows' bash (found through `git --exec-path`), not a bare `bash`, which can be WSL's. No signing yet: a
 downloaded zip is quarantined by macOS Gatekeeper.
 
+## The icon
+
+`crates/rc-engine/icon/rerac.ico` is the launcher's app icon (re-rac/rerac-launcher `src-tauri/icons/icon.ico`).
+On Windows (MSVC) `crates/rc-engine/build.rs` links it into `rerac.exe` (Explorer, taskbar) and
+`crates/rc-engine/src/window_icon.rs` puts it on the window's title bar. macOS and Linux get no icon yet: a bare
+binary has none (a macOS `.app` would carry the launcher's `icon.icns`).
+
 ## Where the runtime finds its shaders
 
 The runtime loads its shaders from `assets/` next to its (symlink-resolved) executable, or from `../Resources/assets`
