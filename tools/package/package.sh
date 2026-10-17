@@ -15,7 +15,7 @@
 # the .iso on the first start (crates/rc-engine/src/first_run.rs). It is also a valid launcher version (the
 # launcher's Development source can point at it).
 #
-# macOS and Windows (Git Bash): tested. Linux: written, UNTESTED.
+# macOS, Windows (Git Bash) and Linux: tested. The portable first start inside the package: macOS UNTESTED.
 set -euo pipefail
 
 build=1
@@ -37,7 +37,7 @@ version="$(awk '/^\[/ { in_pkg = ($0 == "[workspace.package]") } in_pkg && /^ver
 exe=""
 case "$(uname -s)" in
   Darwin) os=macos ;;
-  Linux) os=linux ;;                                  # UNTESTED
+  Linux) os=linux ;;
   MINGW*|MSYS*|CYGWIN*) os=windows; exe=".exe" ;;
   *) echo "unsupported OS: $(uname -s)" >&2; exit 1 ;;
 esac
@@ -118,7 +118,7 @@ case "$os" in
   macos) (cd "$dist" && ditto -c -k --keepParent "$name" "$name.zip") ;;
   # Windows' own bsdtar writes a standard zip ('/' separators); PowerShell 5.1's Compress-Archive writes '\'.
   windows) (cd "$dist" && "$(cygpath "$SYSTEMROOT")/System32/tar.exe" -a -c -f "$name.zip" "$name") ;;
-  linux) (cd "$dist" && zip -qry "$name.zip" "$name") ;;  # UNTESTED; needs `zip`
+  linux) (cd "$dist" && zip -qry "$name.zip" "$name") ;;  # needs `zip`
 esac
 
 size=$(wc -c < "$dist/$name.zip" | tr -d ' ')

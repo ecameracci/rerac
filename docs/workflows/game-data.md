@@ -73,7 +73,8 @@ folder is a copy of the default card folder (`<config base>/rerac/memcard`), whi
 (`crates/rc-engine/src/saves.rs`). Started that way but not from a terminal
 (a double-click), the session's output goes to `logs/rerac-<unix time>.log` next to the executable (the 10 newest
 are kept), fatal errors and panics are also shown in a dialog, and on Windows the console window shows only the first
-start's progress and closes when the game window opens (`crates/rc-engine/src/standalone.rs`). Otherwise the engine prints one `error:` line saying
+start's progress and closes when the game window opens (`crates/rc-engine/src/standalone.rs`). Tested on Windows and
+Linux; macOS (the `osascript` prompts and picker, a start from Finder) is UNTESTED. Otherwise the engine prints one `error:` line saying
 what to do (re-extract via the launcher) and exits before opening a window: code 3 (folder missing, not a data folder,
 or extraction incomplete), code 4 (data format mismatch or unreadable `extract-info.json`), code 2 (`--data-dir`
 without a value). `--version-json` prints the contract line and exits without touching any data.

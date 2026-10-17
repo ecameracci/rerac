@@ -2,7 +2,7 @@
 //! crate::standalone's fatal errors.
 //!
 //! Windows `MessageBoxW` / `GetOpenFileNameW`; macOS `osascript` (UNTESTED); other Unix `zenity`, else `kdialog`,
-//! else the terminal (UNTESTED).
+//! else the terminal.
 
 pub use imp::{confirm, error, pick_iso, retry};
 

@@ -27,7 +27,9 @@ The script packages exactly these and fails if anything else ends up in the fold
 So nothing from `tools/`, `extracted/`, `work/` or `~/PS2/ratchet1/` can ship, and no disc data can be packaged. The
 script also runs the packaged `rerac --version-json` to check it.
 
-macOS and Windows (Git Bash) are tested; the Linux branch is written but untested. On Windows, `cargo xtask package`
+macOS, Windows (Git Bash) and Linux (the release workflow's Ubuntu job; its package has been run) are tested. The
+portable first start and standalone sessions (`docs/workflows/game-data.md`) are tested on Windows and Linux, not yet
+on macOS. On Windows, `cargo xtask package`
 runs Git for Windows' bash (found through `git --exec-path`), not a bare `bash`, which can be WSL's. No signing yet: a
 downloaded zip is quarantined by macOS Gatekeeper.
 
@@ -70,7 +72,7 @@ rustup and caches with `Swatinem/rust-cache`.
   `tools/package/package.sh` (directly: on Windows a bare `bash` from `cargo xtask package` can be WSL's) and checks
   that the tag matches the workspace version; then one release job publishes `rerac-<version>-macos-arm64.zip`,
   `rerac-<version>-windows-x86_64.zip` and `rerac-<version>-linux-x86_64.zip` (each left out with a warning if its
-  job failed; the Linux one is UNTESTED: built, never run) and the
+  job failed) and the
   macOS `rerac-manifest.json`. The launcher picks the zip for its OS and CPU. A missing macOS package stops the
   release. It is marked a prerelease when the tag contains `-alpha`,
   `-beta` or `-rc`. The notes are the tag's `CHANGELOG.md` section, else the tag's annotation. Permissions:

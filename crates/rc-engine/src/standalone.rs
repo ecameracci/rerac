@@ -6,7 +6,7 @@
 //! nothing changes: the output stays there and errors are its last lines.
 //!
 //! "Not from a terminal": on Windows the console has no other process attached (a double-click or Explorer made it
-//! for this one) and stdout is that console; elsewhere stdout is not a terminal (UNTESTED).
+//! for this one) and stdout is that console; elsewhere stdout is not a terminal (macOS UNTESTED).
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
