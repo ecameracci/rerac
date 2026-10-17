@@ -67,7 +67,10 @@ The folder must exist and hold `toc.bin`, and for 1 to 3 also the extractor's `e
 `data_format` (the development tree may lack it: one warning). When the portable folder fails that check (the first
 start, an interrupted extraction, another data format), the engine asks for the disc image in the system's file
 dialog (`RC_ISO=<image>` skips the prompt and the dialog) and extracts it there in-process before opening the window
-(`crates/rc-engine/src/first_run.rs`); cancelling exits with code 3. Started that way but not from a terminal
+(`crates/rc-engine/src/first_run.rs`); cancelling exits with code 3. Such a build also keeps its saves in `memcard/`
+next to the executable (unless `RC_SAVE_DIR` or the `memcard_dir` setting says otherwise); on its first start that
+folder is a copy of the default card folder (`<config base>/rerac/memcard`), which stays as it was
+(`crates/rc-engine/src/saves.rs`). Started that way but not from a terminal
 (a double-click), the session's output goes to `logs/rerac-<unix time>.log` next to the executable (the 10 newest
 are kept), fatal errors and panics are also shown in a dialog, and on Windows the console window shows only the first
 start's progress and closes when the game window opens (`crates/rc-engine/src/standalone.rs`). Otherwise the engine prints one `error:` line saying

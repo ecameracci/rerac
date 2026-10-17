@@ -165,6 +165,11 @@ fn check(root: &Path, origin: Origin) -> std::result::Result<String, DataError> 
 }
 
 static ROOT: OnceLock<PathBuf> = OnceLock::new();
+static PORTABLE: OnceLock<PathBuf> = OnceLock::new();
+
+/// The packaged build's folder when [`startup`] chose its portable data folder (the saves go beside it too,
+/// crate::saves).
+pub fn portable_dir() -> Option<PathBuf> { PORTABLE.get().cloned() }
 
 /// The process start (`main`, first line): handles `--version-json`, resolves and checks the data root, and
 /// remembers it for [`data_root`]. Prints and exits on any failure; never returns without a usable folder.
@@ -179,7 +184,10 @@ pub fn startup() -> PathBuf {
     };
     if !ignored.is_empty() { eprintln!("warning: ignoring unknown arguments {ignored:?}"); }
     let (root, origin) = resolve(arg, std::env::var_os("RC_DATA_DIR"), portable_data_dir(), std::env::var_os("RC_EXTRACTED"));
-    if let (Origin::Portable, Some(dir)) = (origin, root.parent()) { crate::standalone::start(dir); }
+    if let (Origin::Portable, Some(dir)) = (origin, root.parent()) {
+        let _ = PORTABLE.set(dir.to_path_buf());
+        crate::standalone::start(dir);
+    }
     // RC_ISO feeds the portable first start (crate::first_run).
     for var in ["RC_ISO", "RC_SOURCE"].into_iter().filter(|v| origin != Origin::Portable || *v != "RC_ISO") {
         if std::env::var_os(var).is_some_and(|v| !v.is_empty()) {
