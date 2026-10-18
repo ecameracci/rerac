@@ -23,7 +23,8 @@ commands:
         --force           also delete unknown files
         --check           only list what the folder holds; change nothing (no disc needed)
   package [--no-build]
-      Release packaging: runs tools/package/package.sh (dist/rerac-<version>-<os>-<arch>/ and its .zip).
+      Release packaging: runs tools/package/package.sh (dist/rerac-<version>-<hash>-<os>-<arch>/ and its .zip;
+      a release, GitHub Actions or HEAD on a v* tag, drops the hash).
   sweep [--limit <size>] [--dry-run]
       Keep target/ under a size limit (default 30GB; sizes like 30GB, 20G, 500MB, 2GiB) with cargo-sweep: the
       least recently used build units go first (never incremental/; `cargo clean` is the full reset). Refuses while
