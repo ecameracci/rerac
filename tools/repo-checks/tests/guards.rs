@@ -88,7 +88,7 @@ fn personal_patterns_match_segments_only() {
 }
 
 /// Rule: the top level holds only crates tools docs extracted work target dist, dotfiles, and the Cargo /
-/// README / CHANGELOG / LICENSE files.
+/// README / CHANGELOG / LICENSE / AGENTS files.
 #[test]
 fn top_level_holds_only_the_agreed_folders() {
     let root = repo_root();

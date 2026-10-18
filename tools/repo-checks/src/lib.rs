@@ -4,7 +4,7 @@
 //! 1. No product crate (`crates/*/Cargo.toml`) depends on anything under `tools/`.
 //! 2. No test and no product file names personal material or dev output ([`PERSONAL_PATTERNS`]; test files also
 //!    [`TEST_ONLY_PATTERNS`]). No allow-list: tests never rely on the user's personal files (docs/workflows/testing.md §10).
-//! 3. The top level holds only the agreed folders ([`TOP_LEVEL_DIRS`]), dotfiles and the Cargo / README / CHANGELOG / LICENSE files.
+//! 3. The top level holds only the agreed folders ([`TOP_LEVEL_DIRS`]), dotfiles and the Cargo / README / CHANGELOG / LICENSE / AGENTS files.
 //! 4. Tests run only through `cargo xtask test-*` (docs/workflows/testing.md §1): no Cargo alias runs tests, and no doc
 //!    or source comment recommends the retired alias or a by-hand `cargo test` ([`stale_test_command_hits`]).
 
@@ -16,7 +16,7 @@ pub fn repo_root() -> PathBuf { PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("
 /// Allowed top-level folders.
 pub const TOP_LEVEL_DIRS: &[&str] = &["crates", "tools", "docs", "extracted", "work", "target", "dist"];
 /// Allowed top-level files (besides dotfiles).
-pub const TOP_LEVEL_FILES: &[&str] = &["Cargo.toml", "Cargo.lock", "README.md", "CHANGELOG.md", "LICENSE"];
+pub const TOP_LEVEL_FILES: &[&str] = &["Cargo.toml", "Cargo.lock", "README.md", "CHANGELOG.md", "LICENSE", "AGENTS.md"];
 
 /// Text no product or test file may contain: savestates, the personal folder, dev output, recordings, the personal
 /// env var. `work/`, `/traces/` and `.mov` count only as a path segment / extension ([`personal_hits`]).

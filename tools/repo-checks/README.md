@@ -13,7 +13,7 @@ Dev only, never ships. No dependencies; it exists for its tests. Rules: `docs/pl
      `Application Support`). There is no allow-list. Tool sources (`tools/*/src`) are not scanned: the dev tools read
      personal material on purpose (`src/lib.rs` `guarded_dirs`).
   3. The top level holds only `crates tools docs extracted work target dist`, dotfiles, `Cargo.toml`, `Cargo.lock`,
-     `README.md`, `CHANGELOG.md` and `LICENSE`.
+     `README.md`, `CHANGELOG.md`, `LICENSE` and `AGENTS.md` (the fork's agent guide).
   4. Tests run only through `cargo xtask test-*` (docs/workflows/testing.md §1): no `.cargo/config.toml` alias runs
      `test` or `nextest`; no file under `crates/`, `tools/`, `docs/` (or `README.md`, `.config/nextest.toml`) names
      the retired `cargo test-all` alias except as the alias; and the workflow docs (`README.md`, `docs/workflows/`,
