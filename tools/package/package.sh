@@ -63,9 +63,9 @@ for b in rerac rerac-extract; do
 done
 
 rm -rf "$out" "$dist/$name.zip"
-mkdir -p "$out/assets"
+mkdir -p "$out/assets/shaders"
 cp "$target/rerac$exe" "$target/rerac-extract$exe" "$out/"
-cp -R crates/rc-engine/assets/. "$out/assets/"
+cp -R crates/rc-engine/assets/shaders/. "$out/assets/shaders/"
 find "$out/assets" -name '.*' -type f -delete
 
 cat > "$out/rerac-manifest.json" <<EOF
