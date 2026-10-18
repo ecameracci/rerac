@@ -268,6 +268,27 @@ impl GsPass {
         // Effect draws: the display-encoded target and its blend (crate::display_blend).
         if s.display { crate::display_blend::specialize(descriptor); }
     }
+
+    /// The sun's shadow-map pipeline of a draw (crate::sun_shadow; Bevy builds it from the material's prepass shader):
+    /// Bevy's depth state stays, a draw that writes no Z casts nothing (`SHADOW_SKIP`: its vertices are dropped),
+    /// and an alpha-tested one casts only its passing half (`GS_ATEST_PASS`, `GS_AREF`). Call instead of
+    /// [`Self::specialize`] when [`is_shadow_pipeline`].
+    pub fn specialize_shadow(self, descriptor: &mut RenderPipelineDescriptor, renderer: &str) {
+        let s = self.state();
+        let skip = !s.depth_write || s.depth_compare != CompareFunction::GreaterEqual || !crate::sun_shadow::casts(renderer);
+        if skip { descriptor.vertex.shader_defs.push("SHADOW_SKIP".into()); }
+        if let Some(f) = descriptor.fragment.as_mut() {
+            if skip { f.shader_defs.push("SHADOW_SKIP".into()); }
+            let aref = match s.discard { AlphaDiscard::Below(a) => { f.shader_defs.push("GS_ATEST_PASS".into()); a } _ => 0 };
+            f.shader_defs.push(ShaderDefVal::UInt("GS_AREF".into(), aref as u32));
+        }
+    }
+}
+
+/// Whether Bevy is building a prepass pipeline (the port has none but the sun's shadow maps, crate::sun_shadow).
+pub fn is_shadow_pipeline(descriptor: &RenderPipelineDescriptor) -> bool {
+    let def: ShaderDefVal = "PREPASS_PIPELINE".into();
+    descriptor.vertex.shader_defs.contains(&def)
 }
 
 /// Range of GS alpha values (0..0xff, 0x80 = 1.0) a texture or a vertex colour set can produce.

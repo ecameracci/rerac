@@ -1,6 +1,6 @@
 //! **Port-only** (not in the game): the "Port Options" page, for settings the PS2 never had (the graphics options and
-//! their preset, anti-aliasing, switching the moby shadows off, the gameplay and cutscene aspects, the render
-//! resolution, fullscreen and the FPS limit).
+//! their preset, anti-aliasing, ambient occlusion, water, particles, sun rays, the moby shadows off or as sun shadows,
+//! the gameplay and cutscene aspects, the render resolution, fullscreen and the FPS limit).
 //! Spec: docs/plan/menus.md "Port-only settings"; the graphics rows: docs/plan/graphics_options.md (every row's first
 //! value is the game's own look).
 //!
@@ -124,6 +124,11 @@ pub mod text {
     pub const FPS_120: i32 = -0x1a3;
     pub const FPS_144: i32 = -0x1a4;
     pub const UNLIMITED: i32 = -0x1a5;
+    pub const DYNAMIC: i32 = -0x121;
+    pub const AMBIENT_OCCLUSION: i32 = -0x1b0;
+    pub const WATER: i32 = -0x1b1;
+    pub const PARTICLES: i32 = -0x1b2;
+    pub const SOFT: i32 = -0x1b3;
     /// The main menu's Mods page (super::super::mods).
     pub const MODS: i32 = -0x200;
     pub const MODS_NONE: i32 = -0x201;
@@ -174,6 +179,11 @@ pub mod text {
             FPS_120 => b"120",
             FPS_144 => b"144",
             UNLIMITED => b"Unlimited",
+            DYNAMIC => b"Dynamic",
+            AMBIENT_OCCLUSION => b"Ambient occlusion",
+            WATER => b"Water",
+            PARTICLES => b"Particles",
+            SOFT => b"Soft",
             MODS => b"Mods",
             MODS_NONE => b"No mods found",
             MODS_WHERE => b"Put mods in the mods folder beside the game",
@@ -190,8 +200,15 @@ pub enum Setting {
     Preset,
     /// Anti-aliasing: value 0 Original (the game's own softening passes), 1 off, 2 2x, 3 4x, 4 8x multisampling.
     AntiAliasing,
-    /// The moby shadows (docs/plan/shadows.md): value 0 on (the game's look, the default), 1 off.
+    /// The moby shadows (docs/plan/shadows.md): value 0 on (the game's look, the default), 1 off, 2 dynamic (every
+    /// object casts a shadow from the level's key light, in place of the game's volumes, and the sun shows its rays).
     Shadows,
+    /// Ambient occlusion: value 0 Original (none), 1 on.
+    AmbientOcclusion,
+    /// The level-code water: value 0 Original, 1 Enhanced.
+    Water,
+    /// Particle sprites against the world: value 0 Original (hard cut), 1 Soft.
+    Particles,
     /// The render resolution (the engine's game frame): value 0 fits the window, 1..5 a height of 416 (the PS2's lines), 720, 1080, 1440 or 2160 (the width
     /// follows the Aspect row).
     Resolution,
@@ -231,7 +248,10 @@ pub const ENTRIES: &[Entry] = &[
     Entry { setting: Setting::Detail, label: text::DETAIL, values: &[text::ORIGINAL, text::FAR, text::FARTHER, text::MAXIMUM] },
     Entry { setting: Setting::Textures, label: text::TEXTURES, values: &[text::ORIGINAL, text::SMOOTH, text::SHARP] },
     Entry { setting: Setting::Hud, label: text::HUD, values: &[text::ORIGINAL, text::SHARP_PIXELS] },
-    Entry { setting: Setting::Shadows, label: text::SHADOWS, values: &[text::ON, text::OFF] },
+    Entry { setting: Setting::AmbientOcclusion, label: text::AMBIENT_OCCLUSION, values: &[text::ORIGINAL, text::ON] },
+    Entry { setting: Setting::Water, label: text::WATER, values: &[text::ORIGINAL, text::ENHANCED] },
+    Entry { setting: Setting::Particles, label: text::PARTICLES, values: &[text::ORIGINAL, text::SOFT] },
+    Entry { setting: Setting::Shadows, label: text::SHADOWS, values: &[text::ON, text::OFF, text::DYNAMIC] },
     Entry { setting: Setting::Aspect, label: text::ASPECT, values: &[text::ASPECT_4_3, text::ASPECT_16_10, text::ASPECT_16_9, text::ASPECT_FILL] },
     Entry { setting: Setting::CutsceneAspect, label: text::CUTSCENE_ASPECT, values: &[text::ASPECT_4_3, text::ASPECT_16_10, text::ASPECT_16_9, text::ASPECT_FILL] },
     Entry { setting: Setting::Resolution, label: text::RESOLUTION, values: &[text::RES_WINDOW, text::RES_416, text::RES_720, text::RES_1080, text::RES_1440, text::RES_2160] },

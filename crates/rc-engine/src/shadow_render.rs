@@ -23,7 +23,8 @@
 //! Not reproduced (hardware): the GS guard-band face drop, the destination-alpha counter's byte arithmetic, the
 //! NTSC / PAL register blocks. The darkening is a result-level reproduction (hardware_fidelity_layers.md).
 //!
-//! Environment: `RC_SHADOWS=0|1` overrides the Port Options setting at start (default on, as the game);
+//! Environment: `RC_SHADOWS=0|1|dynamic` overrides the Port Options setting at start (default on, as the game;
+//! `dynamic`: crate::sun_shadow instead of the volumes);
 //! `RC_SHADOW_DEBUG=1` draws the count target instead (red inside, blue negative); `RC_SHADOW_TRACE=1` prints the
 //! casters of each frame; `RC_SHADOW_PERF=1` the collection's mean CPU time.
 
@@ -68,27 +69,64 @@ pub const SHADOW_FACTOR: f32 = 0.53;
 /// The count target's format (blendable; counts the small integers exactly).
 pub const COUNT_FORMAT: TextureFormat = TextureFormat::R16Float;
 
+/// The Port Options "Shadows" row, in its order: the game's shadow volumes (the default), none, or sun shadows from
+/// the level's key light (crate::sun_shadow) in their place.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum ShadowMode {
+    #[default]
+    On,
+    Off,
+    Dynamic,
+}
+
+impl ShadowMode {
+    pub const ALL: [ShadowMode; 3] = [ShadowMode::On, ShadowMode::Off, ShadowMode::Dynamic];
+    pub fn index(self) -> u8 { Self::ALL.iter().position(|&m| m == self).unwrap_or(0) as u8 }
+    pub fn from_index(i: u8) -> Self { Self::ALL.get(i as usize).copied().unwrap_or_default() }
+    pub fn key(self) -> &'static str {
+        match self {
+            ShadowMode::On => "on",
+            ShadowMode::Off => "off",
+            ShadowMode::Dynamic => "dynamic",
+        }
+    }
+    /// The settings file's value (`on`, `off`, `dynamic`) or `RC_SHADOWS` (`0`, `1`, `dynamic`).
+    pub fn parse(v: &str) -> Self {
+        match v.trim() {
+            "off" | "0" => ShadowMode::Off,
+            "dynamic" => ShadowMode::Dynamic,
+            _ => ShadowMode::On,
+        }
+    }
+}
+
 /// The shadows' setting (Port Options "Shadows", on by default like the game).
 #[derive(Resource, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ShadowSettings {
-    pub enabled: bool,
+    pub mode: ShadowMode,
     /// `RC_SHADOW_DEBUG=1`: show the count target.
     pub debug: bool,
 }
 
 impl ShadowSettings {
-    /// `RC_SHADOWS=0|1`, else the port settings file's `shadows = on|off`, else on.
+    /// `RC_SHADOWS=0|1|dynamic`, else the port settings file's `shadows = on|off|dynamic`, else on.
     pub fn startup() -> (Self, &'static str) {
         let debug = std::env::var("RC_SHADOW_DEBUG").is_ok_and(|v| v.trim() == "1");
-        if let Ok(v) = std::env::var("RC_SHADOWS") { return (ShadowSettings { enabled: v.trim() != "0", debug }, "RC_SHADOWS"); }
+        if let Ok(v) = std::env::var("RC_SHADOWS") { return (ShadowSettings { mode: ShadowMode::parse(&v), debug }, "RC_SHADOWS"); }
         match crate::render_settings::load_key("shadows") {
-            Some(v) => (ShadowSettings { enabled: v.trim() != "off", debug }, "settings file"),
-            None => (ShadowSettings { enabled: true, debug }, "default"),
+            Some(v) => (ShadowSettings { mode: ShadowMode::parse(&v), debug }, "settings file"),
+            None => (ShadowSettings { mode: ShadowMode::On, debug }, "default"),
         }
     }
 
+    /// The game's shadow volumes are drawn.
+    pub fn volumes(&self) -> bool { self.mode == ShadowMode::On }
+
+    /// Sun shadows replace them (crate::sun_shadow).
+    pub fn sun(&self) -> bool { self.mode == ShadowMode::Dynamic }
+
     /// Writes the setting into the port settings file.
-    pub fn save(&self) { crate::render_settings::save_key("shadows", if self.enabled { "on" } else { "off" }); }
+    pub fn save(&self) { crate::render_settings::save_key("shadows", self.mode.key()); }
 }
 
 /// The game-side shadow state the engine keeps: the direction table 0x1af000, Ratchet's pitch 0x140070, the light
@@ -103,6 +141,16 @@ pub struct ShadowGame {
     blocks: HashMap<i16, Arc<ShadowBlock>>,
     /// o_class → index into `LevelMobys::classes` / `anim`.
     class_index: HashMap<i16, usize>,
+}
+
+impl ShadowGame {
+    /// The direction Ratchet's key light travels (`fun_0020d510` of the hero moby), in Bevy axes and normalised; None
+    /// when his light word selects no directional light. The sun of crate::sun_shadow and crate::sun_rays.
+    pub fn key_light(&self, play: &Play) -> Option<Vec3> {
+        let hero = play.game.mobys.mobys.get(play.game.hero_moby)?;
+        let d = game_to_bevy(shadows::light_dir(&self.dir_a, hero.light));
+        (d.length_squared() > 1e-6).then(|| d.normalize())
+    }
 }
 
 /// The frame's shadow volumes: triangles (3 points each) in Bevy world axes.
@@ -128,7 +176,7 @@ pub struct ShadowPlugin;
 impl Plugin for ShadowPlugin {
     fn build(&self, app: &mut App) {
         let (settings, source) = ShadowSettings::startup();
-        println!("shadows: {} ({source}){}", if settings.enabled { "on" } else { "off" }, if settings.debug { ", RC_SHADOW_DEBUG: count target shown" } else { "" });
+        println!("shadows: {} ({source}){}", settings.mode.key(), if settings.debug { ", RC_SHADOW_DEBUG: count target shown" } else { "" });
         app.insert_resource(settings)
             .init_resource::<ShadowVolumes>()
             .add_systems(crate::level_switch::LevelUnload, (crate::level_switch::reset::<ShadowVolumes>, crate::level_switch::remove::<ShadowGame>))
@@ -248,7 +296,7 @@ pub fn collect(
     let (Some(play), Some(sg), Some((cam, proj))) = (play, game, cams.iter().next()) else { return clear(&mut out) };
     // MobyProc's frustum planes from the view (16:9 widens them, crate::display).
     let tans = crate::game_camera::projection_tans(proj);
-    if !settings.enabled { return clear(&mut out); }
+    if !settings.volumes() { return clear(&mut out); }
     let (eye, rows) = (crate::game_camera::game_eye(cam), crate::game_camera::game_rows(cam));
     let cam_rows = moby_lod::camera_rows(rows[0], rows[1], rows[2]);
     let table = &play.game.mobys;

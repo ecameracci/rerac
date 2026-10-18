@@ -85,6 +85,9 @@ impl From<&TfragMaterial> for GsPass {
 impl Material for TfragMaterial {
     fn vertex_shader() -> ShaderRef { SHADER_PATH.into() }
     fn fragment_shader() -> ShaderRef { SHADER_PATH.into() }
+    /// The sun's shadow maps (crate::sun_shadow; the shader's `PREPASS_PIPELINE` half).
+    fn prepass_vertex_shader() -> ShaderRef { SHADER_PATH.into() }
+    fn prepass_fragment_shader() -> ShaderRef { SHADER_PATH.into() }
 
     /// GS state of the tfrag pass (boot ELF): `reset_gs_registers` (0x1f3868) sends the 19-register A+D
     /// table at 0x13cfc0, which holds ALPHA_1 = 0x8000000044, TEST_1 = 0x5360b, PABE = 0, FBA_1 = 0,
@@ -116,7 +119,11 @@ impl Material for TfragMaterial {
         key: MaterialPipelineKey<Self>,
     ) -> Result<(), SpecializedMeshPipelineError> {
         descriptor.primitive.cull_mode = None;
-        key.bind_group_data.specialize(descriptor);
+        if gs_state::is_shadow_pipeline(descriptor) {
+            key.bind_group_data.specialize_shadow(descriptor, "tfrag");
+        } else {
+            key.bind_group_data.specialize(descriptor);
+        }
         // Own position (bounds only) and the (vertex-info, tfrag | list) reference; everything else is in storage.
         descriptor.vertex.buffers = vec![layout.0.get_layout(&[
             Mesh::ATTRIBUTE_POSITION.at_shader_location(0),

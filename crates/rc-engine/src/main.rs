@@ -28,7 +28,7 @@
 //! - `RC_MSAA=0|2|4|8` the Anti-aliasing option at start: Off or that multisampling (default: Original, the game's own softening passes), crate::graphics
 //! - `RC_SETTINGS_FILE=<path>` the port-settings file (`0` or empty: none), crate::render_settings;
 //!   `RC_SETTINGS_PAGE=0` no "Port Options" page in the Options menu, crate::menu_render
-//! - `RC_SHADOWS=0|1`, `RC_SHADOW_DEBUG=1`, `RC_SHADOW_TRACE=1` the moby shadows, crate::shadow_render
+//! - `RC_SHADOWS=0|1|dynamic`, `RC_SHADOW_DEBUG=1`, `RC_SHADOW_TRACE=1` the moby shadows, crate::shadow_render
 
 mod crash_log;
 mod asset_write;
@@ -109,6 +109,11 @@ mod vendor_render;
 mod water_render;
 mod aa_blit;
 mod afterimage_render;
+mod ao_render;
+mod fx_view;
+mod scene_copy;
+mod sun_rays;
+mod sun_shadow;
 mod thruster_render;
 mod world_lights;
 
@@ -206,6 +211,9 @@ fn main() -> anyhow::Result<()> {
     // The moby shadows: the game's shadow rules and a native shadow-volume pass (crate::shadow_render).
     .add_plugins(shadow_render::ShadowPlugin)
     .add_plugins(pre_shadow::PreShadowPlugin)
+    // The port's modern options (crate::graphics, Shadows Dynamic): sun shadows, ambient occlusion, the scene copy
+    // the soft particles and the water read, sun rays.
+    .add_plugins((fx_view::FxViewPlugin, sun_shadow::SunShadowPlugin, ao_render::AoPlugin, scene_copy::SceneCopyPlugin, sun_rays::SunRaysPlugin))
     .add_plugins(frame_log::FrameLogPlugin)
     .add_plugins(session::SessionPlugin)
     .insert_resource(spawn)
@@ -329,7 +337,13 @@ fn setup_camera(mut commands: Commands, level: Res<Level>) {
     };
     let transform = Transform::from_translation(eye).looking_at(target, Vec3::Y);
     commands.spawn((
-        Camera3d::default(),
+        // The depth is also read by the port's full-screen passes (crate::fx_view).
+        Camera3d {
+            depth_texture_usages: (bevy::render::render_resource::TextureUsages::RENDER_ATTACHMENT
+                | bevy::render::render_resource::TextureUsages::TEXTURE_BINDING)
+                .into(),
+            ..default()
+        },
         game_camera::game_projection(),
         // No tonemapping or dithering: the shader already produces the final display value.
         Tonemapping::None,

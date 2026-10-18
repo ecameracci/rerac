@@ -64,6 +64,7 @@
 
 use crate::game_camera::{game_eye, GameFog, GameProjection, TfragFog};
 use crate::fx_draw::{FxPrimMaterial, FxPrimParams, PrimBuf};
+use crate::graphics::GraphicsSettings;
 use crate::gs_state::GsPass;
 use anyhow::{Context, Result};
 use bevy::asset::RenderAssetUsages;
@@ -191,8 +192,61 @@ pub struct WaterMaterial {
     /// Per-frame ripple patch data (see [`RIPPLE_WORDS`]).
     #[storage(5, read_only, visibility(vertex))]
     pub ripple: Handle<ShaderBuffer>,
+    /// Water Enhanced: the opaque scene behind the water (crate::scene_copy).
+    #[texture(6, sample_type = "float", filterable = false)]
+    pub scene_depth: Handle<Image>,
+    #[texture(7)]
+    #[sampler(8)]
+    pub scene_color: Handle<Image>,
+    #[uniform(9)]
+    pub look: WaterLook,
     /// Callback-order slot (Transparent3d position).
     pub slot: u32,
+    /// The FX texture index (−1: none yet), for [`WaterLook`]'s clear-water test.
+    pub fx: i32,
+}
+
+/// Water Enhanced (crate::graphics) of one draw.
+#[derive(Clone, Copy, Debug, Default, PartialEq, ShaderType)]
+pub struct WaterLook {
+    /// x = 1: enhanced (the option is on and the texture is clear water: [`clear_water`]).
+    pub misc: Vec4,
+    /// xyz = toward the key light (world; crate::sun_shadow::KeyLight), for the glint.
+    pub sun: Vec4,
+}
+
+/// Whether an FX texture is clear water, by its average colour: blue over red and not far under green (lava, mud
+/// and sludge are not).
+fn clear_water(t: &rc_formats::texture::Texture) -> bool {
+    let n = (t.rgba.len() / 4).max(1) as f32;
+    let sum = t.rgba.as_chunks::<4>().0.iter().fold([0.0f32; 3], |a, p| [a[0] + p[0] as f32, a[1] + p[1] as f32, a[2] + p[2] as f32]);
+    let [r, g, b] = sum.map(|s| s / n);
+    b >= 1.15 * r && b >= 0.8 * g
+}
+
+/// The Water option and the key light into every water material (only those whose look changes are touched).
+fn follow_look(
+    g: Res<GraphicsSettings>,
+    key: Option<Res<crate::sun_shadow::KeyLight>>,
+    level: Res<crate::Level>,
+    state: Option<ResMut<WaterState>>,
+    mut materials: ResMut<Assets<WaterMaterial>>,
+) {
+    let Some(mut st) = state else { return };
+    let st = &mut *st;
+    let tex = level.0.particles.textures.as_ref();
+    let sun = key.map_or(Vec3::Y, |k| k.to_light).extend(0.0);
+    for h in &st.materials {
+        let Some(m) = materials.get(h) else { continue };
+        let clear = *st.clear_fx.entry(m.fx).or_insert_with(|| {
+            let clear = usize::try_from(m.fx).ok().and_then(|i| tex?.fx_textures.get(i)?.as_ref()).is_some_and(clear_water);
+            if m.fx >= 0 { println!("water: fx texture {} is {}", m.fx, if clear { "clear water (Enhanced applies)" } else { "not clear water (kept Original)" }); }
+            clear
+        });
+        let want = WaterLook { misc: Vec4::new((g.water.on() && clear) as u32 as f32, 0.0, 0.0, 0.0), sun };
+        let moved = m.look.misc != want.misc || m.look.sun.distance(want.sun) > 0.01;
+        if moved { if let Some(mut m) = materials.get_mut(h) { m.look = want; } }
+    }
 }
 
 impl Material for WaterMaterial {
@@ -275,6 +329,8 @@ pub struct WaterState {
     frame_bytes: Vec<u8>,
     ripple_buf: Handle<ShaderBuffer>,
     ripple_bytes: Vec<u8>,
+    /// [`clear_water`] by FX index, found on first use.
+    clear_fx: std::collections::HashMap<i32, bool>,
 }
 
 pub struct WaterPlugin;
@@ -289,7 +345,7 @@ impl Plugin for WaterPlugin {
             .add_systems(crate::level_switch::LevelStartup, (setup, fire_field_setup))
             .add_systems(crate::level_switch::LevelUnload, (crate::level_switch::remove::<WaterState>, crate::level_switch::remove::<FireFieldDraw>))
             .add_systems(FixedUpdate, tick)
-            .add_systems(PostUpdate, (draw, draw_fire_fields).before(bevy::asset::AssetEventSystems));
+            .add_systems(PostUpdate, ((draw, follow_look).chain(), draw_fire_fields).before(bevy::asset::AssetEventSystems));
     }
 }
 
@@ -371,6 +427,7 @@ fn fx_image(cache: &mut Vec<Option<Handle<Image>>>, images: &mut Assets<Image>, 
     cache[i].clone()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn setup(
     mut commands: Commands,
     level: Res<crate::Level>,
@@ -379,6 +436,7 @@ fn setup(
     mut images: ResMut<Assets<Image>>,
     mut materials: ResMut<Assets<WaterMaterial>>,
     mut buffers: ResMut<Assets<ShaderBuffer>>,
+    copy: Res<crate::scene_copy::SceneCopy>,
 ) {
     let lw = &level.0.water;
     if lw.order.is_empty() { return; }
@@ -411,8 +469,19 @@ fn setup(
     let frame = buffers.add(ShaderBuffer::new(&frame_bytes, RenderAssetUsages::default()));
     let ripple_buf = buffers.add(ShaderBuffer::new(&ripple_bytes, RenderAssetUsages::default()));
     let mut all_mats = Vec::new();
-    let mut new_mat = |materials: &mut Assets<WaterMaterial>, texture: Handle<Image>, params: WaterParams, slot: u32| {
-        let h = materials.add(WaterMaterial { texture, fog, params, frame: frame.clone(), ripple: ripple_buf.clone(), slot });
+    let mut new_mat = |materials: &mut Assets<WaterMaterial>, texture: Handle<Image>, params: WaterParams, slot: u32, fx: i32| {
+        let h = materials.add(WaterMaterial {
+            texture,
+            fog,
+            params,
+            frame: frame.clone(),
+            ripple: ripple_buf.clone(),
+            scene_depth: copy.depth.clone(),
+            scene_color: copy.color.clone(),
+            look: WaterLook::default(),
+            slot,
+            fx,
+        });
         all_mats.push(h.clone());
         h
     };
@@ -427,8 +496,8 @@ fn setup(
                     patches.push(None);
                     continue;
                 };
-                let mw = new_mat(&mut materials, tw, params(p.fix_water, 2, slot, i), slot);
-                let me = new_mat(&mut materials, te, params(p.fix_env, 3, slot + 1, i), slot + 1);
+                let mw = new_mat(&mut materials, tw, params(p.fix_water, 2, slot, i), slot, p.fx_water);
+                let me = new_mat(&mut materials, te, params(p.fix_env, 3, slot + 1, i), slot + 1, p.fx_env);
                 let ew = spawn(&mut commands, mesh.clone(), mw.clone(), Visibility::Hidden, format!("ripple patch {i} water"));
                 let ee = spawn(&mut commands, mesh.clone(), me.clone(), Visibility::Hidden, format!("ripple patch {i} env"));
                 patches.push(Some(PatchDraw { entities: [ew, ee], mats: [mw, me], fx: [p.fx_water, p.fx_env], fix: [p.fix_water, p.fix_env], slots: [slot, slot + 1], visible: false }));
@@ -452,7 +521,7 @@ fn setup(
             let mut slots = Vec::new();
             for layer in 0..2 {
                 let Some(t) = fx_image(&mut fx_images, &mut images, tex, d.fx[layer]) else { continue };
-                let m = new_mat(&mut materials, t, params(d.fix[layer], layer as u32, slot, 0), slot);
+                let m = new_mat(&mut materials, t, params(d.fix[layer], layer as u32, slot, 0), slot, d.fx[layer]);
                 // Until the first draw: the class's z blend, no scroll, no wobble.
                 write_frame(&mut frame_bytes, slot, w.to_f32(), [0.0; 2], &[[0.0; 2]; 8]);
                 slots.push(slot);
@@ -469,8 +538,8 @@ fn setup(
     if let Some(mesh) = patch_mesh_handle {
         for (i, p) in patches.iter_mut().enumerate() {
             if p.is_some() { continue; }
-            let mw = new_mat(&mut materials, Handle::default(), params(0, 2, slot, i), slot);
-            let me = new_mat(&mut materials, Handle::default(), params(0, 3, slot + 1, i), slot + 1);
+            let mw = new_mat(&mut materials, Handle::default(), params(0, 2, slot, i), slot, -1);
+            let me = new_mat(&mut materials, Handle::default(), params(0, 3, slot + 1, i), slot + 1, -1);
             let ew = spawn(&mut commands, mesh.clone(), mw.clone(), Visibility::Hidden, format!("ripple patch {i} water"));
             let ee = spawn(&mut commands, mesh.clone(), me.clone(), Visibility::Hidden, format!("ripple patch {i} env"));
             *p = Some(PatchDraw { entities: [ew, ee], mats: [mw, me], fx: [-1, -1], fix: [0, 0], slots: [slot, slot + 1], visible: false });
@@ -508,6 +577,7 @@ fn setup(
         frame_bytes,
         ripple_buf,
         ripple_bytes,
+        clear_fx: Default::default(),
     });
 }
 
@@ -651,6 +721,7 @@ fn draw_ripples(
                         if let (Some(img), Some(mut m)) = (img, materials.get_mut(&pd.mats[k])) {
                             m.texture = img;
                             m.params = params(fix[k], 2 + k as u32, pd.slots[k], p);
+                            m.fx = fx[k];
                             pd.fx[k] = fx[k];
                             pd.fix[k] = fix[k];
                         }

@@ -68,6 +68,7 @@
 //! vertex value are the ones a per-frame mesh of the same sprites would have.
 
 use crate::game_camera::{game_eye, game_rows, TAN_HALF_FOV_X, NTSC_Y_RATIO};
+use crate::graphics::GraphicsSettings;
 use crate::tfrag_render::game_to_bevy;
 use bevy::asset::RenderAssetUsages;
 use bevy::camera::visibility::NoFrustumCulling;
@@ -252,18 +253,37 @@ impl From<&ParticleMaterial> for ParticleKey {
 const DRAW_A: u8 = 0;
 const DRAW_B: u8 = 1;
 
+/// Particles Soft: a sprite fades out over this distance in front of the scene (world units).
+pub const SOFT_DISTANCE: f32 = 1.5;
+
+fn soft_distance(g: &GraphicsSettings) -> f32 { if g.particles.on() { SOFT_DISTANCE } else { 0.0 } }
+
+/// The Particles option into the materials.
+fn follow_soft(g: Res<GraphicsSettings>, mut materials: ResMut<Assets<ParticleMaterial>>) {
+    if !g.is_changed() { return; }
+    let z = soft_distance(&g);
+    let ids: Vec<_> = materials.iter().filter(|(_, m)| m.params.z != z).map(|(id, _)| id).collect();
+    for id in ids {
+        if let Some(mut m) = materials.get_mut(id) { m.params.z = z; }
+    }
+}
+
 #[derive(Asset, TypePath, AsBindGroup, Debug, Clone)]
 #[bind_group_data(ParticleKey)]
 pub struct ParticleMaterial {
     #[texture(0, dimension = "2d_array")]
     #[sampler(1)]
     pub textures: Handle<Image>,
-    /// x = draw (0 = A: modulated A ≥ 0x80, Z write; 1 = B: the rest), y = AREF (0x80).
+    /// x = draw (0 = A: modulated A ≥ 0x80, Z write; 1 = B: the rest), y = AREF (0x80), z = the Particles Soft fade
+    /// distance ([`SOFT_DISTANCE`], 0 at Original).
     #[uniform(2)]
     pub params: Vec4,
     /// This group's sprites ([`SpriteBuffer`]).
     #[storage(3, read_only, visibility(vertex))]
     pub sprites: Handle<ShaderBuffer>,
+    /// The opaque scene's depth (crate::scene_copy), read while Particles is Soft.
+    #[texture(4, sample_type = "float", filterable = false)]
+    pub scene_depth: Handle<Image>,
     pub draw: u8,
     /// Transparent3d position among the four particle draws (normal A, normal B, additive B, additive A).
     pub slot: u8,
@@ -302,10 +322,11 @@ impl Plugin for ParticlePlugin {
             .add_systems(crate::level_switch::LevelStartup, setup)
             .add_systems(crate::level_switch::LevelUnload, (crate::level_switch::remove::<ParticleSim>, crate::level_switch::remove::<ParticleMesh>))
             .add_systems(FixedUpdate, tick)
-            .add_systems(PostUpdate, build_sprites.after(crate::fog_state::FogSet));
+            .add_systems(PostUpdate, (build_sprites.after(crate::fog_state::FogSet), follow_soft));
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn setup(
     mut commands: Commands,
     level: Res<crate::Level>,
@@ -313,6 +334,8 @@ fn setup(
     mut images: ResMut<Assets<Image>>,
     mut materials: ResMut<Assets<ParticleMaterial>>,
     mut shader_buffers: ResMut<Assets<ShaderBuffer>>,
+    copy: Res<crate::scene_copy::SceneCopy>,
+    g: Res<GraphicsSettings>,
 ) {
     let lp = &level.0.particles;
     let defs = lp.textures.as_ref().map(|t| t.defs.clone());
@@ -382,8 +405,9 @@ fn setup(
     for (additive, draw, slot) in [(false, DRAW_A, 0u8), (false, DRAW_B, 1), (true, DRAW_B, 2), (true, DRAW_A, 3)] {
         let mat = materials.add(ParticleMaterial {
             textures: textures.clone(),
-            params: Vec4::new(draw as f32, 128.0, 0.0, 0.0),
+            params: Vec4::new(draw as f32, 128.0, soft_distance(&g), 0.0),
             sprites: buffers[additive as usize].clone(),
+            scene_depth: copy.depth.clone(),
             draw,
             slot,
         });

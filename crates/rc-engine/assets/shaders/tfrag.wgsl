@@ -235,6 +235,66 @@ fn value(s: u32, m: u32) -> Vtx {
     return blend(c, p1, p2, t);
 }
 
+#ifdef PREPASS_PIPELINE
+// The sun's shadow map (crate::sun_shadow): the strip list this frame's mode draws at the slots' own positions (the
+// morphs follow the view's depth, which here is the light's), and only the alpha test's passing half
+// (gs_state::specialize_shadow).
+struct TfragShadowOutput {
+    @builtin(position) position: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+    @location(1) alpha: f32,
+#ifdef UNCLIPPED_DEPTH_ORTHO_EMULATION
+    @location(2) unclipped_depth: f32,
+#endif
+}
+
+@vertex
+fn vertex(v: TfragVertex) -> TfragShadowOutput {
+    var out: TfragShadowOutput;
+    let tf = v.tref.y & 0xffffu;
+    let list = (v.tref.y >> 16u) & 3u;
+    let m = modes[tf];
+    let mlist = select(select(0u, 1u, m == 8u || m == 10u), 2u, m == 6u);
+#ifdef SHADOW_SKIP
+    let skip = true;
+#else
+    let skip = m == 0u || mlist != list;
+#endif
+    if (skip) {
+        out.position = vec4<f32>(2.0, 2.0, 2.0, 1.0);
+        return out;
+    }
+    let e = vinfos[v.tref.x];
+    let sl = slots[e.slot];
+    out.position = position_world_to_clip(sl.pos);
+    out.uv = e.uv;
+    out.alpha = unpack4x8unorm(sl.color).a * (255.0 / 128.0);
+#ifdef UNCLIPPED_DEPTH_ORTHO_EMULATION
+    out.unclipped_depth = out.position.z;
+    out.position.z = min(out.position.z, 1.0);
+#endif
+    return out;
+}
+
+fn shadow_test(in: TfragShadowOutput) {
+#ifdef GS_ATEST_PASS
+    let t = textureSampleLevel(tex, tex_sampler, in.uv, 0.0);
+    let a_s = min(floor(round(t.a * 255.0) * round(in.alpha * 128.0) / 128.0), 255.0);
+    if (a_s < f32(#{GS_AREF})) { discard; }
+#endif
+}
+
+#ifdef UNCLIPPED_DEPTH_ORTHO_EMULATION
+@fragment
+fn fragment(in: TfragShadowOutput) -> @builtin(frag_depth) f32 {
+    shadow_test(in);
+    return in.unclipped_depth;
+}
+#else
+@fragment
+fn fragment(in: TfragShadowOutput) { shadow_test(in); }
+#endif
+#else
 @vertex
 fn vertex(v: TfragVertex) -> TfragVertexOutput {
     var out: TfragVertexOutput;
@@ -298,3 +358,4 @@ fn fragment(in: TfragVertexOutput) -> @location(0) vec4<f32> {
 #endif
     return vec4<f32>(srgb_to_linear(rgb), a_s / 128.0);
 }
+#endif

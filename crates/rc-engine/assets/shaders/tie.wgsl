@@ -167,6 +167,62 @@ fn vu_fat_lane(c0: u32, c1: u32, c2: u32, w: u32, z: u32) -> u32 {
     return vu_add(vu_mul(avg, w), vu_mul(0x4b000000u | c0, z)) & 0xffu;
 }
 
+#ifdef PREPASS_PIPELINE
+// The sun's shadow map (crate::sun_shadow): this frame's LOD and morph, and only the alpha test's passing half
+// (gs_state::specialize_shadow).
+struct TieShadowOutput {
+    @builtin(position) position: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+    @location(1) alpha: f32,
+#ifdef UNCLIPPED_DEPTH_ORTHO_EMULATION
+    @location(2) unclipped_depth: f32,
+#endif
+}
+
+@vertex
+fn vertex(v: TieVertex) -> TieShadowOutput {
+    var out: TieShadowOutput;
+    let tag = mesh_functions::get_tag(v.instance_index);
+    let lod = lods[tag];
+#ifdef SHADOW_SKIP
+    let skip = true;
+#else
+    let skip = (lod.x & 3u) != ((v.morph >> 13u) & 3u);
+#endif
+    if (skip) {
+        out.position = vec4<f32>(2.0, 2.0, 2.0, 1.0);
+        return out;
+    }
+    let k = bitcast<f32>(lod.y);
+    out.position = position_world_to_clip((insts[tag].model * vec4<f32>(v.position + k * v.delta, 1.0)).xyz);
+    out.uv = v.uv;
+    out.alpha = unpack4x8unorm(insts[tag].colors[v.info & 63u]).a * (255.0 / 128.0);
+#ifdef UNCLIPPED_DEPTH_ORTHO_EMULATION
+    out.unclipped_depth = out.position.z;
+    out.position.z = min(out.position.z, 1.0);
+#endif
+    return out;
+}
+
+fn shadow_test(in: TieShadowOutput) {
+#ifdef GS_ATEST_PASS
+    let t = textureSampleLevel(tex, tex_sampler, in.uv, 0.0);
+    let a_s = min(floor(round(t.a * 255.0) * round(in.alpha * 128.0) / 128.0), 255.0);
+    if (a_s < f32(#{GS_AREF})) { discard; }
+#endif
+}
+
+#ifdef UNCLIPPED_DEPTH_ORTHO_EMULATION
+@fragment
+fn fragment(in: TieShadowOutput) -> @builtin(frag_depth) f32 {
+    shadow_test(in);
+    return in.unclipped_depth;
+}
+#else
+@fragment
+fn fragment(in: TieShadowOutput) { shadow_test(in); }
+#endif
+#else
 @vertex
 fn vertex(v: TieVertex) -> TieVertexOutput {
     var out: TieVertexOutput;
@@ -238,3 +294,4 @@ fn fragment(in: TieVertexOutput) -> @location(0) vec4<f32> {
 #endif
     return vec4<f32>(srgb_to_linear(rgb), a_s / 128.0);
 }
+#endif
