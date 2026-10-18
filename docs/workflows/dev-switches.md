@@ -64,6 +64,9 @@ module that reads it: `grep -rn '"RC_' crates/` lists them all.
 | `RC_CUTSCENE_ASPECT` | `4:3`, `16:10`, `16:9` or `fill`: the cutscenes' aspect only (over `RC_ASPECT`); the frame takes the wider of the two and the narrower view is pillarboxed (crate::display) |
 | `RC_RESOLUTION` | `window` (default: the largest frame of the Aspect ratio that fits the window) or `416`, `720`, `1080`, `1440`, `2160` (a frame that many lines high at the Aspect ratio, scaled to the window); overrides the Port Options value at start (crate::display) |
 | `RC_FULLSCREEN` | `1`: borderless fullscreen on the current monitor; `0`: windowed; overrides the Port Options value at start (F11 toggles in game) |
+| `RC_GFX_<OPTION>` | A Port Options graphics value at start, over the settings file: `RC_GFX_ANTI_ALIASING`, `RC_GFX_DETAIL`, `RC_GFX_TEXTURES`, `RC_GFX_HUD`, `RC_GFX_AMBIENT_OCCLUSION=original\|on`, `RC_GFX_WATER=original\|enhanced`, `RC_GFX_PARTICLES=original\|soft`; `RC_GFX_PRESET=original\|enhanced` sets them all (docs/plan/graphics_options.md) |
+| `RC_SHADOWS` | `0`: no shadows; `1`: the game's shadows (default); `dynamic`: instead, every object casts from the port's sun, which also shows its rays (crate::sun_shadow, crate::sun_rays) |
+| `RC_SUN_DIR`, `RC_SUN_CASTERS`, `RC_SUN_DEBUG`, `RC_SUN_DUMP` | Shadows Dynamic checks: the sun's travel direction `x,y,z`; the renderers that cast (`tfrag,tie,shrub,moby`); `1`/`2` the receiver's cascades and shadow test in solid colours; `<n>` reads the shadow map and the frame back on the n-th frame into `work/fx/` (works where screenshots come back blank; use with `RC_MSAA=0`). See crate::sun_shadow |
 | `RC_FOG` | `0`: disable fog |
 | `RC_NO_LIGHT` | `1`: skip the load-time lighting passes (tfrag, tie, shrub, moby); stored colours used |
 | `RC_WORLD_LIGHTS` | `0`: point lights (explosions) do not relight tfrags, ties and shrubs |

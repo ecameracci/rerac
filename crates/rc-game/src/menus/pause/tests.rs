@@ -564,7 +564,7 @@ fn port_page_from_the_disc() {
     for _ in 0..3 { m.tick(&press(button::CROSS), &mut g, &env); }
     assert_eq!(m.port_value(Setting::AntiAliasing), Some(0), "wraps after 8x");
     // Down moves through the rows and stops at the last one (port::ENTRIES); back up to the shadows row (default on =
-    // value 0), ✕ toggles it off and back on.
+    // value 0), ✕ cycles it off, dynamic and back on.
     assert_eq!(m.port_value(Setting::Shadows), Some(0));
     for _ in aa + 1..port::ENTRIES.len() {
         let o = m.tick(&press(button::DOWN), &mut g, &env);
@@ -579,7 +579,9 @@ fn port_page_from_the_disc() {
     m.tick(&press(button::CROSS), &mut g, &env);
     assert_eq!((m.port_value(Setting::Shadows), m.port_value(Setting::AntiAliasing)), (Some(1), Some(0)));
     m.tick(&press(button::CROSS), &mut g, &env);
-    assert_eq!(m.port_value(Setting::Shadows), Some(0), "on / off wrap");
+    assert_eq!(m.port_value(Setting::Shadows), Some(2), "dynamic");
+    m.tick(&press(button::CROSS), &mut g, &env);
+    assert_eq!(m.port_value(Setting::Shadows), Some(0), "on / off / dynamic wrap");
     // Its values are the game's own on / off strings (the Subtitles toggle's).
     let Data::Toggle(sub_t) = &m.widgets[&0x1b5160].data else { panic!() };
     assert_eq!((sub_t.entries[0].on, sub_t.entries[0].off), (port::text::ON as u32, port::text::OFF as u32));

@@ -91,6 +91,72 @@ struct MobyVertexOutput {
 
 fn s16(x: i32) -> i32 { return (x << 16u) >> 16u; }
 
+#ifdef PREPASS_PIPELINE
+// The sun's shadow map (crate::sun_shadow): the skinned position as below, and only the alpha test's passing half
+// (gs_state::specialize_shadow).
+struct MobyShadowOutput {
+    @builtin(position) position: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+    @location(1) alpha: f32,
+#ifdef UNCLIPPED_DEPTH_ORTHO_EMULATION
+    @location(2) unclipped_depth: f32,
+#endif
+}
+
+@vertex
+fn vertex(v: MobyVertex) -> MobyShadowOutput {
+    var out: MobyShadowOutput;
+#ifdef SHADOW_SKIP
+    out.position = vec4<f32>(2.0, 2.0, 2.0, 1.0);
+    return out;
+#else
+    let tag = mesh_functions::get_tag(v.instance_index);
+    let inst = &insts[tag];
+    let base = (*inst).misc.x;
+    let count = (v.skin.x >> 16u) & 0xffu;
+    let j = vec3<u32>(v.skin.y & 0xffu, (v.skin.y >> 8u) & 0xffu, (v.skin.y >> 16u) & 0xffu);
+    var m = palette[base + j.x];
+    if (count == 0u) {
+        m = mat4x4<f32>(vec4<f32>(1.0, 0.0, 0.0, 0.0), vec4<f32>(0.0, 1.0, 0.0, 0.0), vec4<f32>(0.0, 0.0, 1.0, 0.0), vec4<f32>(0.0, 0.0, 0.0, 1.0));
+    }
+    if (count >= 2u) {
+        let w = vec3<f32>(f32(v.skin.z & 0x3ffu), f32((v.skin.z >> 10u) & 0x3ffu), f32((v.skin.z >> 20u) & 0x3ffu)) / 256.0;
+        m = palette[base + j.x] * w.x + palette[base + j.y] * w.y;
+        if (count >= 3u) { m = m + palette[base + j.z] * w.z; }
+    }
+    let sp = clamp(trunc((m * vec4<f32>(v.position, 1.0)).xyz), vec3<f32>(-2147483520.0), vec3<f32>(2147483520.0));
+    let pi = vec3<i32>(s16(i32(sp.x)), s16(i32(sp.y)), s16(i32(sp.z)));
+    out.position = position_world_to_clip(((*inst).model * vec4<f32>(vec3<f32>(pi), 1.0)).xyz);
+    let scroll = (*inst).misc.w;
+    out.uv = v.uv + vec2<f32>(f32(s16(i32(scroll & 0xffffu))), f32(s16(i32(scroll >> 16u)))) / 4096.0;
+    out.alpha = f32(lods[tag].misc.x) / 128.0;
+#ifdef UNCLIPPED_DEPTH_ORTHO_EMULATION
+    out.unclipped_depth = out.position.z;
+    out.position.z = min(out.position.z, 1.0);
+#endif
+    return out;
+#endif
+}
+
+fn shadow_test(in: MobyShadowOutput) {
+#ifdef GS_ATEST_PASS
+    let t = textureSampleLevel(tex, tex_sampler, in.uv, 0.0);
+    let a_s = min(floor(round(t.a * 255.0) * round(in.alpha * 128.0) / 128.0), 255.0);
+    if (a_s < f32(#{GS_AREF})) { discard; }
+#endif
+}
+
+#ifdef UNCLIPPED_DEPTH_ORTHO_EMULATION
+@fragment
+fn fragment(in: MobyShadowOutput) -> @builtin(frag_depth) f32 {
+    shadow_test(in);
+    return in.unclipped_depth;
+}
+#else
+@fragment
+fn fragment(in: MobyShadowOutput) { shadow_test(in); }
+#endif
+#else
 @vertex
 fn vertex(v: MobyVertex) -> MobyVertexOutput {
     var out: MobyVertexOutput;
@@ -196,3 +262,4 @@ fn fragment(in: MobyVertexOutput) -> @location(0) vec4<f32> {
     return vec4<f32>(srgb_to_linear(rgb), a_s / 128.0);
 #endif
 }
+#endif

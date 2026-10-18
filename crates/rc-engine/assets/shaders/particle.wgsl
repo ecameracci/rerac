@@ -13,7 +13,12 @@
 // the rest), then the record's ALPHA_1 on the frame's display bytes like the GS: 0x44 `gs_mix`, 0x48 `gs_add`
 // (crate::display_blend, `display_blend.wgsl`; blend One, OneMinusSrcAlpha).
 
-#import bevy_pbr::view_transformations::position_world_to_clip
+//
+// Particles Soft (crate::graphics, misc.z = the fade distance in world units, 0 = Original): the blend's alpha fades
+// with the sprite's distance in front of the opaque scene behind it (crate::scene_copy's depth), so a sprite
+// crossing a wall or the ground shows no hard line.
+
+#import bevy_pbr::view_transformations::{position_world_to_clip, depth_ndc_to_view_z}
 #import bevy_pbr::mesh_view_bindings::view
 #import rerac::display_blend::{gs_add, gs_mix}
 
@@ -22,7 +27,7 @@
 fn half_w() -> f32 { return 256.0 * 0.775 * view.clip_from_view[1][1] / view.clip_from_view[0][0]; }
 
 struct ParticleParams {
-    // x = draw (0 = A >= AREF with Z, 1 = the rest), y = AREF.
+    // x = draw (0 = A >= AREF with Z, 1 = the rest), y = AREF, z = soft fade distance (0: off).
     misc: vec4<f32>,
 }
 
@@ -45,6 +50,18 @@ struct Sprites {
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(3) var<storage, read> sprites: Sprites;
+@group(#{MATERIAL_BIND_GROUP}) @binding(4) var scene_depth: texture_2d<f32>;
+
+// 1 far in front of the scene, 0 where the sprite meets it (Particles Soft); 1 when off or before the copy is sized.
+fn soft_fade(frag: vec4<f32>) -> f32 {
+    let soft = params.misc.z;
+    if (soft <= 0.0) { return 1.0; }
+    let size = vec2<i32>(textureDimensions(scene_depth));
+    if (size.x <= 1) { return 1.0; }
+    let d = textureLoad(scene_depth, clamp(vec2<i32>(floor(frag.xy)), vec2<i32>(0), size - 1), 0).r;
+    if (d <= 0.0) { return 1.0; }
+    return saturate((depth_ndc_to_view_z(frag.z) - depth_ndc_to_view_z(d)) / soft);
+}
 
 struct ParticleVertex {
     @location(0) sprite_corner: u32,
@@ -137,8 +154,9 @@ fn fragment(in: ParticleVertexOutput) -> @location(0) vec4<f32> {
     let aref = params.misc.y;
     if ((draw < 0.5 && a < aref) || (draw >= 0.5 && a >= aref)) { discard; }
     let cs = min(floor(ct * cv / 128.0), vec3<f32>(255.0));
+    let a_blend = a * soft_fade(in.position);
     if (additive) {
-        return gs_add(cs, a);
+        return gs_add(cs, a_blend);
     }
-    return gs_mix(cs, a);
+    return gs_mix(cs, a_blend);
 }

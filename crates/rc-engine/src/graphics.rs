@@ -8,11 +8,15 @@
 //! | [`Hud`] | Original (the 512×416 HUD scaled up smoothly, as the TV showed it), Sharp pixels | crate::hud_render composite |
 //! | [`Textures`] | Original (the GS mip rule, one level per pixel), Smooth (blended levels), Sharp (the GPU's own choice, anisotropic) | the world shaders, through crate::game_camera's shared fog buffer |
 //! | [`Detail`] | Original (the game's LOD distances), Far (×2), Farther (×4), Maximum (the full model whenever it is drawn) | crate::tfrag_lod, crate::tie_lod, crate::moby_render, crate::shrub_render (drawing only: the game logic keeps its own decisions) |
+//! | [`AmbientOcclusion`] | Original (none: the shade is the artists' baked vertex colours), On (screen-space occlusion from the depth buffer) | crate::ao_render |
+//! | [`Water`] | Original (the GS blend of the water textures), Enhanced (clear by depth, reflections, a sun glint, foam at the shore) | crate::water_render, crate::scene_copy |
+//! | [`Particles`] | Original (sprites cut where they meet the world), Soft (faded by their depth in front of it) | crate::particle_render, crate::scene_copy |
 //!
 //! Persisted in the port settings file (`crate::render_settings::save_key`); `RC_HUD`-style switches are not used here
-//! (`RC_HUD=0` already hides the HUD): `RC_GFX_ANTI_ALIASING`, `RC_GFX_HUD`, `RC_GFX_TEXTURES`, `RC_GFX_DETAIL` (the
-//! keys below), `RC_MSAA=0|2|4|8` (Anti-aliasing Off or that multisampling) and `RC_GFX_PRESET=original|enhanced`
-//! override the file at start.
+//! (`RC_HUD=0` already hides the HUD): `RC_GFX_ANTI_ALIASING`, `RC_GFX_HUD`, `RC_GFX_TEXTURES`, `RC_GFX_DETAIL`,
+//! `RC_GFX_AMBIENT_OCCLUSION`, `RC_GFX_WATER`, `RC_GFX_PARTICLES` (the keys below),
+//! `RC_MSAA=0|2|4|8` (Anti-aliasing Off or that multisampling) and `RC_GFX_PRESET=original|enhanced` override the file
+//! at start.
 
 use bevy::prelude::*;
 
@@ -157,6 +161,54 @@ impl GfxOption for Detail {
     }
 }
 
+/// Two-valued options: `Original`, then the one modern alternative.
+macro_rules! two_valued {
+    ($(#[$doc:meta])* $name:ident, $key:literal, $(#[$alt_doc:meta])* $alt:ident = $alt_key:literal) => {
+        $(#[$doc])*
+        #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+        pub enum $name {
+            #[default]
+            Original,
+            $(#[$alt_doc])*
+            $alt,
+        }
+
+        impl GfxOption for $name {
+            const ALL: &'static [Self] = &[$name::Original, $name::$alt];
+            const KEY: &'static str = $key;
+            fn key(self) -> &'static str {
+                match self {
+                    $name::Original => "original",
+                    $name::$alt => $alt_key,
+                }
+            }
+        }
+
+        impl $name {
+            pub fn on(self) -> bool { self != $name::Original }
+        }
+    };
+}
+
+two_valued!(
+    /// Shade where surfaces meet: Original is the baked vertex colours only.
+    AmbientOcclusion, "ambient_occlusion",
+    /// Screen-space occlusion from the depth buffer (crate::ao_render).
+    On = "on"
+);
+two_valued!(
+    /// The level-code water's look.
+    Water, "water",
+    /// Clear by depth, with reflections, a sun glint and foam at the shore (crate::water_render).
+    Enhanced = "enhanced"
+);
+two_valued!(
+    /// How smoke and other sprites meet the world.
+    Particles, "particles",
+    /// Faded by their distance in front of the world behind them (crate::particle_render).
+    Soft = "soft"
+);
+
 /// A preset: a value for every option.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Preset {
@@ -172,13 +224,16 @@ impl Preset {
     pub fn from_index(i: u8) -> Self { Self::ALL.get(i as usize).copied().unwrap_or(Preset::Custom) }
 }
 
-/// The graphics options (module docs).
-#[derive(Resource, Clone, Copy, Debug, PartialEq, Eq, Default)]
+/// The graphics options (module docs; the render world has a copy for the port's own passes).
+#[derive(Resource, Clone, Copy, Debug, PartialEq, Eq, Default, bevy::render::extract_resource::ExtractResource)]
 pub struct GraphicsSettings {
     pub aa: AntiAliasing,
     pub hud: Hud,
     pub textures: Textures,
     pub detail: Detail,
+    pub ao: AmbientOcclusion,
+    pub water: Water,
+    pub particles: Particles,
 }
 
 impl GraphicsSettings {
@@ -187,7 +242,15 @@ impl GraphicsSettings {
         match p {
             Preset::Original => GraphicsSettings::default(),
             // 4x: the best count every GPU offers (crate::render_settings clamps a count a device lacks).
-            Preset::Enhanced => GraphicsSettings { aa: AntiAliasing::X4, hud: Hud::Original, textures: Textures::Smooth, detail: Detail::Far },
+            Preset::Enhanced => GraphicsSettings {
+                aa: AntiAliasing::X4,
+                hud: Hud::Original,
+                textures: Textures::Smooth,
+                detail: Detail::Far,
+                ao: AmbientOcclusion::On,
+                water: Water::Enhanced,
+                particles: Particles::Soft,
+            },
             Preset::Custom => self,
         }
     }
@@ -210,6 +273,9 @@ impl GraphicsSettings {
             s.hud = file_value(s.hud);
             s.textures = file_value(s.textures);
             s.detail = file_value(s.detail);
+            s.ao = file_value(s.ao);
+            s.water = file_value(s.water);
+            s.particles = file_value(s.particles);
         }
         s.aa = env_value(s.aa);
         // The older switch: `RC_MSAA=0|2|4|8` (0 = Off).
@@ -217,6 +283,9 @@ impl GraphicsSettings {
         s.hud = env_value(s.hud);
         s.textures = env_value(s.textures);
         s.detail = env_value(s.detail);
+        s.ao = env_value(s.ao);
+        s.water = env_value(s.water);
+        s.particles = env_value(s.particles);
         s
     }
 
@@ -226,6 +295,9 @@ impl GraphicsSettings {
         save(self.hud);
         save(self.textures);
         save(self.detail);
+        save(self.ao);
+        save(self.water);
+        save(self.particles);
     }
 }
 
@@ -252,7 +324,9 @@ impl Plugin for GraphicsPlugin {
     fn build(&self, app: &mut App) {
         let s = GraphicsSettings::startup();
         if s != GraphicsSettings::default() { println!("graphics: {s:?} ({:?})", s.preset()); }
-        app.insert_resource(s).add_systems(PreUpdate, (apply_detail, apply_samples));
+        app.insert_resource(s)
+            .add_plugins(bevy::render::extract_resource::ExtractResourcePlugin::<GraphicsSettings>::default())
+            .add_systems(PreUpdate, (apply_detail, apply_samples));
     }
 }
 
@@ -293,6 +367,10 @@ mod tests {
         for &v in Hud::ALL { assert_eq!(Hud::parse(v.key()), Some(v)); }
         for &v in Textures::ALL { assert_eq!(Textures::parse(v.key()), Some(v)); }
         for &v in Detail::ALL { assert_eq!(Detail::parse(v.key()), Some(v)); }
+        for &v in AmbientOcclusion::ALL { assert_eq!(AmbientOcclusion::parse(v.key()), Some(v)); }
+        for &v in Water::ALL { assert_eq!(Water::parse(v.key()), Some(v)); }
+        for &v in Particles::ALL { assert_eq!(Particles::parse(v.key()), Some(v)); }
+        assert!(!AmbientOcclusion::Original.on() && Water::Enhanced.on());
         assert_eq!(Detail::from_index(9), Detail::Original);
         assert_eq!(AntiAliasing::from_samples(0), AntiAliasing::Off);
         assert_eq!(AntiAliasing::from_samples(4).samples(), 4);

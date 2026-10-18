@@ -120,6 +120,65 @@ fn culled() -> ShrubVertexOutput {
     return out;
 }
 
+#ifdef PREPASS_PIPELINE
+// The sun's shadow map (crate::sun_shadow). The view here is the light's, so the camera-distance rules stay with
+// shrub_render's cull (a hidden instance casts nothing); the fading list's draws skip, the opaque one casts with the
+// wind sway, cut out by the texture's alpha (the draw's AREF, gs_state::specialize_shadow; 0x20 without an alpha test).
+struct ShrubShadowOutput {
+    @builtin(position) position: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+#ifdef UNCLIPPED_DEPTH_ORTHO_EMULATION
+    @location(1) unclipped_depth: f32,
+#endif
+}
+
+@vertex
+fn vertex(v: ShrubVertex) -> ShrubShadowOutput {
+    var out: ShrubShadowOutput;
+    let tag = mesh_functions::get_tag(v.instance_index);
+#ifdef SHADOW_SKIP
+    let skip = true;
+#else
+    let skip = params.misc.x == 2.0;
+#endif
+    if (skip) {
+        out.position = vec4<f32>(2.0, 2.0, 2.0, 1.0);
+        return out;
+    }
+    let inst = &insts[tag];
+    let sw = sway[tag];
+    var off = ((*inst).model * vec4<f32>(v.position, 0.0)).xyz;
+    off = vec3<f32>(off.x + sw.x * off.y, off.y, off.z - sw.y * off.y);
+    out.position = position_world_to_clip(off + (*inst).model[3].xyz);
+    out.uv = v.uv;
+#ifdef UNCLIPPED_DEPTH_ORTHO_EMULATION
+    out.unclipped_depth = out.position.z;
+    out.position.z = min(out.position.z, 1.0);
+#endif
+    return out;
+}
+
+fn shadow_test(in: ShrubShadowOutput) {
+    let t = textureSampleLevel(tex, tex_sampler, in.uv, 0.0);
+#ifdef GS_ATEST_PASS
+    let aref = f32(#{GS_AREF});
+#else
+    let aref = 32.0;
+#endif
+    if (round(t.a * 255.0) < aref) { discard; }
+}
+
+#ifdef UNCLIPPED_DEPTH_ORTHO_EMULATION
+@fragment
+fn fragment(in: ShrubShadowOutput) -> @builtin(frag_depth) f32 {
+    shadow_test(in);
+    return in.unclipped_depth;
+}
+#else
+@fragment
+fn fragment(in: ShrubShadowOutput) { shadow_test(in); }
+#endif
+#else
 @vertex
 fn vertex(v: ShrubVertex) -> ShrubVertexOutput {
     let tag = mesh_functions::get_tag(v.instance_index);
@@ -194,3 +253,4 @@ fn fragment(in: ShrubVertexOutput) -> @location(0) vec4<f32> {
 #endif
     return vec4<f32>(srgb_to_linear(rgb), a_s / 128.0);
 }
+#endif

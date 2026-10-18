@@ -16,7 +16,20 @@
 // with SrcAlpha / OneMinusSrcAlpha (gs_state::GS_BLEND). The vertex alpha is 0, so As = 0 always fails the
 // TEST (AREF 0x60, AFAIL RGB_ONLY): colour only, never Z (depth write off, GEQUAL test).
 
-#import bevy_pbr::view_transformations::{position_world_to_clip, position_world_to_view}
+//
+// Water Enhanced (crate::graphics; look.misc.x = 1, clear water only): the strip and ripple water passes (kinds 0, 2)
+// draw the whole surface from the opaque scene behind it (crate::scene_copy), opaque over the frame; their second
+// layers (kinds 1, 3) draw nothing. Per pixel:
+// * a wave normal: a sum of travelling sine waves over the world position and the frame time;
+// * the bed: the scene copy at the pixel bent by the waves (refraction; unbent where the bent pixel is in front of
+//   the surface), absorbed over the water's thickness toward the water texture's own colour, with caustics (ridges of
+//   moving gradient noise, fading with the depth under the surface) where the key light reaches;
+// * a reflection along the wave normal, traced in screen space against the scene copy (the fog colour where the ray
+//   leaves the screen), weighted by a Fresnel term, plus the key light's glint;
+// * foam along the shore. At the shore line (no thickness) the result is the scene behind, so the edge has no seam.
+
+#import bevy_pbr::view_transformations::{position_world_to_clip, position_world_to_view, depth_ndc_to_view_z, position_ndc_to_view, frag_coord_to_ndc, ndc_to_frag_coord}
+#import bevy_pbr::mesh_view_bindings::{view, globals}
 
 struct WaterFog {
     color: vec4<f32>,
@@ -43,6 +56,18 @@ struct FrameRecord {
 @group(#{MATERIAL_BIND_GROUP}) @binding(3) var<uniform> params: WaterParams;
 @group(#{MATERIAL_BIND_GROUP}) @binding(4) var<storage, read> frame: array<FrameRecord>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(5) var<storage, read> ripple: array<u32>;
+
+struct WaterLook {
+    // x = 1: enhanced.
+    misc: vec4<f32>,
+    // xyz = toward the key light (world).
+    sun: vec4<f32>,
+}
+
+@group(#{MATERIAL_BIND_GROUP}) @binding(6) var scene_depth: texture_2d<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(7) var scene_color: texture_2d<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(8) var scene_sampler: sampler;
+@group(#{MATERIAL_BIND_GROUP}) @binding(9) var<uniform> look: WaterLook;
 
 struct WaterVertex {
     @location(0) position: vec3<f32>,
@@ -114,6 +139,99 @@ fn srgb_to_linear(c: vec3<f32>) -> vec3<f32> {
     return select(hi, lo, c <= vec3<f32>(0.04045));
 }
 
+// The scene copy's view z at a target pixel (None-like: 0 depth = the sky, returned as −1e6).
+fn scene_z(p: vec2<i32>, size: vec2<i32>) -> f32 {
+    let d = textureLoad(scene_depth, clamp(p, vec2<i32>(0), size - 1), 0).r;
+    if (d <= 0.0) { return -1e6; }
+    return depth_ndc_to_view_z(d);
+}
+
+// The target pixel of a view position (x: −1 when behind the camera).
+fn view_to_coord(p: vec3<f32>) -> vec3<f32> {
+    let clip = view.clip_from_view * vec4<f32>(p, 1.0);
+    if (clip.w <= 0.0) { return vec3<f32>(-1.0, -1.0, 0.0); }
+    let ndc = clip.xy / clip.w;
+    return vec3<f32>(ndc_to_frag_coord(ndc), max(abs(ndc.x), abs(ndc.y)));
+}
+
+// The reflection along `rd` from view position `vp`, traced against the scene copy (steps growing with the distance,
+// then halved four times around the first crossing); the fog colour when it misses.
+fn reflection(vp: vec3<f32>, rd: vec3<f32>, size: vec2<i32>) -> vec3<f32> {
+    let miss = srgb_to_linear(fog.color.rgb);
+    if (rd.z > 0.35) { return miss; }
+    let len = max(0.3, -vp.z * 0.03);
+    var p = vp;
+    var step = len;
+    for (var i = 1; i <= 32; i += 1) {
+        step = len * (1.0 + f32(i) * 0.15);
+        p = p + rd * step;
+        let c = view_to_coord(p);
+        if (c.x < 0.0 || c.z > 1.0) { break; }
+        let sz = scene_z(vec2<i32>(floor(c.xy)), size);
+        if (sz > p.z && sz - p.z < step * 4.0) {
+            var lo = p - rd * step;
+            var hi = p;
+            for (var j = 0; j < 4; j += 1) {
+                let mid = (lo + hi) * 0.5;
+                let mc = view_to_coord(mid);
+                if (scene_z(vec2<i32>(floor(mc.xy)), size) > mid.z) { hi = mid; } else { lo = mid; }
+            }
+            let hc = view_to_coord(hi);
+            let edge = 1.0 - smoothstep(0.85, 1.0, hc.z);
+            let col = textureSampleLevel(scene_color, scene_sampler, hc.xy / vec2<f32>(size), 0.0).rgb;
+            return mix(miss, col, edge);
+        }
+    }
+    return miss;
+}
+
+// The surface's world normal (y up) from travelling sine waves: (direction, wavenumber, amplitude·wavenumber, speed).
+fn wave_normal(xz: vec2<f32>, t: f32) -> vec3<f32> {
+    var waves = array<vec4<f32>, 6>(
+        vec4<f32>(0.96, 0.28, 1.6, 0.050),
+        vec4<f32>(-0.42, 0.91, 2.3, 0.040),
+        vec4<f32>(0.71, -0.70, 3.4, 0.030),
+        vec4<f32>(-0.89, -0.45, 5.1, 0.022),
+        vec4<f32>(0.20, 0.98, 7.3, 0.016),
+        vec4<f32>(-0.60, 0.80, 10.7, 0.012),
+    );
+    var g = vec2<f32>(0.0);
+    for (var i = 0; i < 6; i += 1) {
+        let w = waves[i];
+        let d = w.xy;
+        let k = w.z;
+        let phase = dot(d, xz) * k + t * sqrt(9.8 * k) * 0.35;
+        g += d * (w.w * k * cos(phase));
+    }
+    return normalize(vec3<f32>(-g.x, 1.0, -g.y));
+}
+
+fn hash2(p: vec2<f32>) -> vec2<f32> {
+    let q = vec2<f32>(dot(p, vec2<f32>(127.1, 311.7)), dot(p, vec2<f32>(269.5, 183.3)));
+    return fract(sin(q) * 43758.5453) * 2.0 - 1.0;
+}
+
+// Gradient noise, about −0.7..0.7.
+fn gnoise(p: vec2<f32>) -> f32 {
+    let i = floor(p);
+    let f = fract(p);
+    let u = f * f * (3.0 - 2.0 * f);
+    let a = dot(hash2(i), f);
+    let b = dot(hash2(i + vec2<f32>(1.0, 0.0)), f - vec2<f32>(1.0, 0.0));
+    let c = dot(hash2(i + vec2<f32>(0.0, 1.0)), f - vec2<f32>(0.0, 1.0));
+    let d = dot(hash2(i + vec2<f32>(1.0, 1.0)), f - vec2<f32>(1.0, 1.0));
+    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+}
+
+// Caustic light on the bed (0..~1.5): the zero lines of two drifting, warped noise layers, sharpened.
+fn caustics(xz: vec2<f32>, t: f32) -> f32 {
+    let warp = vec2<f32>(gnoise(xz * 0.45 + vec2<f32>(t * 0.07, 0.0)), gnoise(xz * 0.45 + vec2<f32>(5.2, -t * 0.06)));
+    let p = xz * 1.4 + warp * 1.2;
+    let a = 1.0 - abs(gnoise(p + vec2<f32>(t * 0.31, t * 0.17)) * 2.2);
+    let b = 1.0 - abs(gnoise(p * 1.37 + vec2<f32>(-t * 0.23, t * 0.29) + 3.7) * 2.2);
+    return pow(clamp(a, 0.0, 1.0), 7.0) * 0.8 + pow(clamp(b, 0.0, 1.0), 7.0) * 0.6;
+}
+
 @fragment
 fn fragment(in: WaterVertexOutput) -> @location(0) vec4<f32> {
     let t = textureSample(tex, tex_sampler, in.uv);
@@ -123,5 +241,61 @@ fn fragment(in: WaterVertexOutput) -> @location(0) vec4<f32> {
     if (fog.color.w > 0.5) {
         rgb = mix(fog.color.rgb, rgb, in.fog);
     }
-    return vec4<f32>(srgb_to_linear(rgb), params.misc.x);
+    let size = vec2<i32>(textureDimensions(scene_depth));
+    if (look.misc.x < 0.5 || size.x <= 1) {
+        return vec4<f32>(srgb_to_linear(rgb), params.misc.x);
+    }
+
+    let kind = u32(params.misc.y + 0.5);
+    if (kind == 1u || kind == 3u) { return vec4<f32>(0.0); }
+    let vp = position_ndc_to_view(frag_coord_to_ndc(in.position));
+    let wp = (view.world_from_view * vec4<f32>(vp, 1.0)).xyz;
+    let t_now = globals.time;
+    let here = vec2<i32>(floor(in.position.xy));
+    let thickness = clamp(vp.z - scene_z(here, size), 0.0, 1e4);
+    let shore = smoothstep(0.0, 0.6, thickness);
+
+    let n_world = normalize(mix(vec3<f32>(0.0, 1.0, 0.0), wave_normal(wp.xz, t_now), shore));
+    let n = normalize((view.view_from_world * vec4<f32>(n_world, 0.0)).xyz);
+    let to_eye = normalize(-vp);
+    let dist = -vp.z;
+
+    // The bed through the surface: the pixel bent by the waves, kept only where the bent pixel lies under the water.
+    let bend = n_world.xz * (18.0 * clamp(thickness, 0.0, 2.0) / (1.0 + dist * 0.05));
+    var coord = in.position.xy + vec2<f32>(bend.x, -bend.y);
+    if (scene_z(vec2<i32>(floor(coord)), size) > vp.z) { coord = in.position.xy; }
+    let ci = clamp(vec2<i32>(floor(coord)), vec2<i32>(0), size - 1);
+    let bed_d = textureLoad(scene_depth, ci, 0).r;
+    var bed = textureSampleLevel(scene_color, scene_sampler, coord / vec2<f32>(size), 0.0).rgb;
+    var path = 60.0;
+    if (bed_d > 0.0) {
+        let bed_vp = position_ndc_to_view(vec3<f32>(frag_coord_to_ndc(vec4<f32>(coord, 0.0, 1.0)).xy, bed_d));
+        let bed_wp = (view.world_from_view * vec4<f32>(bed_vp, 1.0)).xyz;
+        path = max(length(bed_vp - vp), 0.0);
+        let under = max(wp.y - bed_wp.y, 0.0);
+        let sun_up = max(look.sun.y, 0.0);
+        let c = caustics(bed_wp.xz, t_now) * smoothstep(0.05, 0.4, under) * exp(-under * 0.35) * (0.35 + 0.65 * sun_up);
+        bed = bed * (1.0 + c * 1.6);
+    }
+    // Absorption toward the water's own colour (the texture as the game drew it, darkened with depth).
+    let tint = srgb_to_linear(rgb);
+    let deep = tint * 0.55;
+    let absorb = vec3<f32>(0.30, 0.12, 0.07) * (0.6 + params.misc.x);
+    let trans = exp(-absorb * path);
+    var col = bed * trans + deep * (1.0 - trans);
+    col = mix(col, tint, 0.12 * shore);
+
+    // Reflection (Fresnel, raised a little so the surface reads as water from above) and the key light's glint.
+    let cos_v = max(dot(n, to_eye), 0.0);
+    let f = (0.08 + 0.92 * pow(1.0 - cos_v, 4.0)) * shore;
+    var r = reflection(vp, reflect(-to_eye, n), size);
+    let l = normalize((view.view_from_world * vec4<f32>(look.sun.xyz, 0.0)).xyz);
+    let glint = pow(max(dot(n, normalize(l + to_eye)), 0.0), 300.0) * 4.0 * smoothstep(0.0, 0.1, look.sun.y);
+    col = mix(col, r, clamp(f, 0.0, 0.9)) + vec3<f32>(1.0, 0.96, 0.88) * glint * shore;
+
+    // Foam along the shore, broken up by drifting noise.
+    let foam_n = smoothstep(0.1, 0.5, gnoise(wp.xz * 3.0 + vec2<f32>(t_now * 0.2, -t_now * 0.15)) + 0.35);
+    let foam = (1.0 - smoothstep(0.05, 0.45, thickness)) * smoothstep(0.02, 0.1, thickness) * foam_n;
+    col = mix(col, vec3<f32>(0.92, 0.96, 1.0), foam * 0.55);
+    return vec4<f32>(col, 1.0);
 }

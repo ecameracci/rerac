@@ -334,6 +334,9 @@ impl From<&MobyMaterial> for GsPass {
 impl Material for MobyMaterial {
     fn vertex_shader() -> ShaderRef { SHADER_PATH.into() }
     fn fragment_shader() -> ShaderRef { SHADER_PATH.into() }
+    /// The sun's shadow maps (crate::sun_shadow; the shader's `PREPASS_PIPELINE` half).
+    fn prepass_vertex_shader() -> ShaderRef { SHADER_PATH.into() }
+    fn prepass_fragment_shader() -> ShaderRef { SHADER_PATH.into() }
     fn alpha_mode(&self) -> AlphaMode { self.pass.alpha_mode() }
     /// A caster's late draws first in Transparent3d ([`CASTER_BAND`]); `LateTested` is only a caster's here.
     fn depth_bias(&self) -> f32 {
@@ -352,7 +355,11 @@ impl Material for MobyMaterial {
         key: MaterialPipelineKey<Self>,
     ) -> Result<(), SpecializedMeshPipelineError> {
         descriptor.primitive.cull_mode = None;
-        key.bind_group_data.specialize(descriptor);
+        if crate::gs_state::is_shadow_pipeline(descriptor) {
+            key.bind_group_data.specialize_shadow(descriptor, "moby");
+        } else {
+            key.bind_group_data.specialize(descriptor);
+        }
         descriptor.vertex.buffers = vec![layout.0.get_layout(&[
             Mesh::ATTRIBUTE_POSITION.at_shader_location(0),
             Mesh::ATTRIBUTE_UV_0.at_shader_location(1),
@@ -397,6 +404,8 @@ impl Material for MobyMetalMaterial {
     fn vertex_shader() -> ShaderRef { METAL_SHADER_PATH.into() }
     fn fragment_shader() -> ShaderRef { METAL_SHADER_PATH.into() }
     fn alpha_mode(&self) -> AlphaMode { self.pass.alpha_mode() }
+    /// The moby's own draws cast its sun shadow (crate::sun_shadow).
+    fn enable_shadows() -> bool { false }
     fn depth_bias(&self) -> f32 {
         match self.order {
             Some(k) => order_bias(k, 2),

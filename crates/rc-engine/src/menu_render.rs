@@ -534,12 +534,15 @@ fn sync_graphics_rows(menu: &mut PageMenu, g: &crate::graphics::GraphicsSettings
     menu.set_port_value(Setting::Hud, g.hud.index());
     menu.set_port_value(Setting::Textures, g.textures.index());
     menu.set_port_value(Setting::Detail, g.detail.index());
+    menu.set_port_value(Setting::AmbientOcclusion, g.ao.index());
+    menu.set_port_value(Setting::Water, g.water.index());
+    menu.set_port_value(Setting::Particles, g.particles.index());
 }
 
 /// The graphics rows back into the settings after the menu tick: a new preset sets every option; otherwise each row is
 /// read. A change is saved to the port settings file.
 fn read_graphics_rows(menu: &PageMenu, g: &mut crate::graphics::GraphicsSettings, before: &crate::graphics::GraphicsSettings, frame: u64) {
-    use crate::graphics::{AntiAliasing, Detail, GfxOption, Hud, Preset, Textures};
+    use crate::graphics::{AmbientOcclusion, AntiAliasing, Detail, GfxOption, Hud, Particles, Preset, Textures, Water};
     let preset = menu.port_value(Setting::Preset).map(Preset::from_index);
     match preset {
         Some(p) if p != Preset::Custom && p != before.preset() => *g = before.with_preset(p),
@@ -548,7 +551,9 @@ fn read_graphics_rows(menu: &PageMenu, g: &mut crate::graphics::GraphicsSettings
             if let Some(v) = menu.port_value(Setting::Hud) { g.hud = Hud::from_index(v); }
             if let Some(v) = menu.port_value(Setting::Textures) { g.textures = Textures::from_index(v); }
             if let Some(v) = menu.port_value(Setting::Detail) { g.detail = Detail::from_index(v); }
-        }
+            if let Some(v) = menu.port_value(Setting::AmbientOcclusion) { g.ao = AmbientOcclusion::from_index(v); }
+            if let Some(v) = menu.port_value(Setting::Water) { g.water = Water::from_index(v); }
+            if let Some(v) = menu.port_value(Setting::Particles) { g.particles = Particles::from_index(v); }        }
     }
     if *g != *before {
         println!("menus: frame {frame}: Port Options: graphics {g:?} ({:?})", g.preset());
@@ -575,7 +580,7 @@ impl PortSettings<'_, '_> {
             let on: Vec<bool> = m.list.iter().map(|i| i.enabled).collect();
             menu.set_mod_rows(&names, &on);
         }
-        if let Some(s) = self.shadows.as_deref() { menu.set_port_value(Setting::Shadows, !s.enabled as u8); }
+        if let Some(s) = self.shadows.as_deref() { menu.set_port_value(Setting::Shadows, s.mode.index()); }
         menu.set_port_value(Setting::Resolution, self.display.resolution.index());
         menu.set_port_value(Setting::Aspect, self.display.gameplay.index());
         menu.set_port_value(Setting::CutsceneAspect, self.display.cutscenes.index());
@@ -598,9 +603,10 @@ impl PortSettings<'_, '_> {
             }
         }
         if let (Some(v), Some(s)) = (menu.port_value(Setting::Shadows), self.shadows.as_mut()) {
-            if s.enabled != (v == 0) {
-                s.enabled = v == 0;
-                println!("menus: frame {frame}: Port Options: shadows {}", if s.enabled { "on" } else { "off" });
+            let want = crate::shadow_render::ShadowMode::from_index(v);
+            if s.mode != want {
+                s.mode = want;
+                println!("menus: frame {frame}: Port Options: shadows {}", want.key());
                 s.save();
             }
         }

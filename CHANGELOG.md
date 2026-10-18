@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Mods: texture mods in a `mods` folder next to the game, turned on and off from Options → Mods. They can replace the HUD, fonts and icons, and the world, character, enemy and sky textures.
+- Port Options has three new graphics options: Ambient occlusion, Water (Enhanced: clear water with rippling reflections, light patterns on the riverbed and foam at the shore) and Particles (Soft: smoke no longer cuts into walls and floors). The Enhanced preset turns them all on. Shadows has a new Dynamic setting: everything (the level, plants, characters and objects) casts shadows from the sun, and the sun shines rays through the scenery. Original still looks like the PS2 game.
 
 ## v0.3.5-alpha
 
