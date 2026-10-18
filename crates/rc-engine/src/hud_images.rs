@@ -104,6 +104,23 @@ pub fn read_lump_picture(field: u32, index: u32) -> Option<Texture> {
     rc_formats::pif::Pif::parse(&bytes).and_then(|p| p.decode_raw()).map_err(|e| eprintln!("hud images: {} {index}: {e}", f.name)).ok()
 }
 
+/// Port-only: the Options picture of the Port Options entry (`rc_game::menus::pause::port::PICTURE`), a picture of the
+/// port's own in the `options_ss` pictures' style (256×256 on black), with raw GS alpha.
+pub fn port_picture() -> Option<Arc<Texture>> {
+    use bevy::asset::RenderAssetUsages;
+    use bevy::image::{CompressedImageFormats, ImageSampler, ImageType};
+    use bevy::render::render_resource::TextureFormat;
+    static PNG: &[u8] = include_bytes!("../assets/menus/port_options.png");
+    let img = Image::from_buffer(PNG, ImageType::Extension("png"), CompressedImageFormats::NONE, true, ImageSampler::Default, RenderAssetUsages::MAIN_WORLD)
+        .map_err(|e| eprintln!("hud images: the Port Options picture: {e}"))
+        .ok()?;
+    let img = if img.texture_descriptor.format == TextureFormat::Rgba8UnormSrgb { img } else { img.convert(TextureFormat::Rgba8UnormSrgb)? };
+    let (width, height) = (img.width(), img.height());
+    let mut rgba = img.data?;
+    for p in rgba.as_chunks_mut::<4>().0 { p[3] = ((p[3] as u16 + 1) >> 1) as u8; }
+    Some(Arc::new(Texture { width, height, rgba }))
+}
+
 /// A picture quad as a primitive of slot `slot` (the caller's panel offset and scissor applied later).
 #[allow(clippy::too_many_arguments)]
 pub fn prim(slot: usize, x: i32, y: i32, w: i32, h: i32, u: i32, v: i32, tw: i32, th: i32, rgba: u32) -> Prim {

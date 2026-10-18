@@ -340,6 +340,7 @@ fn setup(
         if !m.install_port_page(&overlay) { eprintln!("menus: Port Options page not installed (Options page records missing)"); }
         // The main menu's Mods page (crate::mods), after Port Options in its Options lists.
         else if !m.install_mods_page() { eprintln!("menus: Mods page not installed (the main menu's Port Options page is missing)"); }
+        m.port_picture = crate::hud_images::port_picture();
     }
     println!(
         "menus: quick select {} (neighbour table {:#x}), page menu {} ({} pages, {} widgets); RC_MENU_TRACE=1 logs events",
