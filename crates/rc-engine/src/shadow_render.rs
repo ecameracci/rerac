@@ -144,11 +144,12 @@ pub struct ShadowGame {
 }
 
 impl ShadowGame {
-    /// The direction Ratchet's key light travels (`fun_0020d510` of the hero moby), in Bevy axes and normalised; None
-    /// when his light word selects no directional light. The sun of crate::sun_shadow and crate::sun_rays.
-    pub fn key_light(&self, play: &Play) -> Option<Vec3> {
-        let hero = play.game.mobys.mobys.get(play.game.hero_moby)?;
-        let d = game_to_bevy(shadows::light_dir(&self.dir_a, hero.light));
+    /// The direction the level's key light travels (light set 0's light A: light word 0, Ratchet's light where no fog
+    /// zone cross-fades it), in Bevy axes and normalised; None when the set has no direction. The sun of
+    /// crate::sun_shadow and crate::sun_rays: one per level, not Ratchet's own light, which the fog zones swing
+    /// between sets (Novalis: 68° to 106° of bearing across a cave mouth) and so would turn every shadow with him.
+    pub fn sun_light(&self) -> Option<Vec3> {
+        let d = game_to_bevy(shadows::light_dir(&self.dir_a, 0));
         (d.length_squared() > 1e-6).then(|| d.normalize())
     }
 }

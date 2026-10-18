@@ -2,11 +2,12 @@
 //! along the level's key light, in place of the game's shadow volumes under mobys.
 //!
 //! Standard cascaded shadow mapping:
-//! - **Casters:** a Bevy `DirectionalLight` with shadow maps follows the light the hero is lit by (the light bank's
-//!   direction A of its set: `ShadowGame::key_light`; a fixed high sun where there is no game), raised to at least
+//! - **Casters:** a Bevy `DirectionalLight` with shadow maps along the level's key light (light set 0's direction A:
+//!   `ShadowGame::sun_light`, fixed for the level; a fixed high sun where there is no game), raised to at least
 //!   [`MIN_ELEVATION`] on the same bearing. Bevy renders its
 //!   cascades from the materials' shadow halves (the shaders' `PREPASS_PIPELINE` branch,
-//!   gs_state::specialize_shadow): tfrags, ties, shrubs (cut out by their texture's alpha) and mobys. The metal pass
+//!   gs_state::specialize_shadow): tfrags (a tfrag the game culls for the camera casts with its LOD-2 list, so the
+//!   shadows do not change with the view), ties, shrubs (cut out by their texture's alpha) and mobys. The metal pass
 //!   and every blended or effect draw cast nothing. crate::sun_rays shows the same sun's rays.
 //! - **Receiver:** the port's shaders compute no Bevy lighting, so after the opaque world a full-screen pass
 //!   (`assets/shaders/sun_shadow.wgsl`) rebuilds each pixel's world position and normal from the depth buffer,
@@ -14,8 +15,8 @@
 //!   `1 − STRENGTH` where shadowed. Only surfaces turned toward the light are darkened (the game's baked lighting
 //!   already shades the others), and the shadows fade out toward [`MAX_DISTANCE`].
 //!
-//! Limits: the game culls tfrags, ties and mobys outside the camera's view before they are drawn, so a caster just
-//! off screen casts nothing; the blended draws (water, particles, effects) are not shadowed.
+//! Limits: the game culls ties and mobys outside the camera's view (and those its occlusion data hides) before they
+//! are drawn, so such a caster casts nothing; the blended draws (water, particles, effects) are not shadowed.
 //!
 //! Dev switches: `RC_SUN_DIR=x,y,z` (the light's travel direction, world), `RC_SUN_CASTERS` ([`casts`]),
 //! `RC_SUN_DEBUG=1` (the receiver replaces the frame: cascade 0/1/2/3 red/green/blue/yellow, dark where shadowed;
@@ -118,7 +119,7 @@ fn follow(
     mut key: ResMut<KeyLight>,
     mut suns: Query<(Entity, &mut Transform), With<Sun>>,
 ) {
-    let mut dir = game.zip(play).and_then(|(g, p)| g.key_light(&p)).unwrap_or(DEFAULT_DIR.normalize());
+    let mut dir = game.filter(|_| play.is_some()).and_then(|g| g.sun_light()).unwrap_or(DEFAULT_DIR.normalize());
     dir = raised(dir);
     if let Some(d) = std::env::var("RC_SUN_DIR").ok().and_then(|v| {
         let n: Vec<f32> = v.split(',').filter_map(|s| s.trim().parse().ok()).collect();
