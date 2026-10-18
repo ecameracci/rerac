@@ -137,6 +137,12 @@ impl Hero {
         let n = if self.f524 == 0 { ticks(9) } else { 1 };
         if pad.pressed_within(button::CROSS, n).is_some() && (!(ticks(4) < air) || self.f532 != 0) {
             self.stick_target(c.env, Pf::ONE);
+            // Port-only, Strafing = Modern: the strafe flip (super::strafe).
+            if super::strafe::flip_wanted(self, c) {
+                self.set_state(c, 0xb, true);
+                super::strafe::flip_entered(self);
+                return;
+            }
             if self.try_jump(c, n, true) { return; }
             if self.substate <= 0 { self.set_state(c, 7, true); return; }
             self.jump_or_running_jump(c);
