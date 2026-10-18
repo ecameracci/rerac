@@ -77,7 +77,7 @@ pub fn clock_now() -> [u8; 8] {
 
 /// The host's local date and time now: year, month, day, hour, minute, second.
 #[cfg(windows)]
-fn local_time() -> Option<[u64; 6]> {
+pub(crate) fn local_time() -> Option<[u64; 6]> {
     // `GetLocalTime` (kernel32): SYSTEMTIME = year, month, day of week, day, hour, minute, second, milliseconds.
     #[repr(C)]
     struct SystemTime([u16; 8]);
@@ -92,7 +92,7 @@ fn local_time() -> Option<[u64; 6]> {
 
 /// The host's local date and time now: year, month, day, hour, minute, second.
 #[cfg(unix)]
-fn local_time() -> Option<[u64; 6]> {
+pub(crate) fn local_time() -> Option<[u64; 6]> {
     // SAFETY: `time` and `localtime_r` only read / write the values they are given (the reentrant form).
     unsafe {
         let t = libc::time(std::ptr::null_mut());
@@ -103,7 +103,7 @@ fn local_time() -> Option<[u64; 6]> {
 }
 
 #[cfg(not(any(windows, unix)))]
-fn local_time() -> Option<[u64; 6]> { None }
+pub(crate) fn local_time() -> Option<[u64; 6]> { None }
 
 /// The per-OS config base the port settings use (crate::render_settings).
 fn config_base() -> Option<std::path::PathBuf> {
@@ -155,7 +155,7 @@ fn adopt_saves(card: &std::path::Path) {
     }
 }
 
-fn copy_dir(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
+pub(crate) fn copy_dir(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
     std::fs::create_dir_all(to)?;
     for e in std::fs::read_dir(from)? {
         let e = e?;
@@ -164,6 +164,9 @@ fn copy_dir(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()>
     }
     Ok(())
 }
+
+/// The card folder [`setup_card`] will use (None: no card).
+pub fn card_root() -> Option<std::path::PathBuf> { rc_game::memcard::save_root(configured_root().map(|c| c.0), config_base().as_deref()) }
 
 /// `memcard_Init` + `memcard_GetName` (`InitOnce`): the card on the save root, its directory from SYSTEM.CNF, the lump.
 pub fn setup_card() {

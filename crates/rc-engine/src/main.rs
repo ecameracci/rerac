@@ -85,6 +85,7 @@ mod saves;
 mod scene_render;
 mod sea_render;
 mod screen_canvas;
+mod session;
 mod shadow_render;
 mod standalone;
 mod pre_shadow;
@@ -133,10 +134,13 @@ struct ScreenshotRequest {
 }
 
 fn main() -> anyhow::Result<()> {
+    // RC_REPLAY sets the recorded environment before anything reads it (crate::session).
+    session::prepare();
     input_map::install_sdl_mappings();
     crash_log::install();
     // `--version-json` exits here; a missing or wrong data folder exits with a clear error (crate::disc_source).
     let root = disc_source::startup();
+    session::start();
     let index = level_load::level_index();
     // The one level load (the boot's and every runtime level change's, crate::level_switch): the level data, the loader's
     // ship and the load-time update pass (crate::moby_spawn; RC_SPAWN_RULES=0 skips it), the fog zones and the
@@ -203,6 +207,7 @@ fn main() -> anyhow::Result<()> {
     .add_plugins(shadow_render::ShadowPlugin)
     .add_plugins(pre_shadow::PreShadowPlugin)
     .add_plugins(frame_log::FrameLogPlugin)
+    .add_plugins(session::SessionPlugin)
     .insert_resource(spawn)
     .add_plugins(tie_render::TieRenderPlugin)
     .add_plugins(shrub_render::ShrubRenderPlugin)

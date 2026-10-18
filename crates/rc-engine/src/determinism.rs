@@ -137,7 +137,7 @@ pub struct DeterminismPlugin;
 
 /// Frame-exact mode: clears this frame's keyboard, mouse and gamepad state right after Bevy's input systems, so no
 /// live device input reaches the game, the dev keys or the fly camera.
-fn no_live_input(
+pub(crate) fn no_live_input(
     mut keys: ResMut<ButtonInput<KeyCode>>,
     mut mouse: ResMut<ButtonInput<MouseButton>>,
     mut motion: ResMut<bevy::input::mouse::AccumulatedMouseMotion>,
@@ -227,9 +227,10 @@ fn no_indirect_drawing(add: On<Add, Camera3d>, mut commands: Commands) {
 fn advance_ticks(det: Res<Deterministic>, time: Res<Time<Virtual>>, mut ticks: ResMut<GameTicks>, mut frame: ResMut<FrameNumber>) {
     frame.0 += 1;
     ticks.0 = if det.0 {
-        match tick_pattern() {
-            Some(p) => ticks.0 + p[((frame.0 - 1) % p.len() as u64) as usize] as u64,
-            None => frame.0,
+        match (crate::session::replay_steps(frame.0), tick_pattern()) {
+            (Some(n), _) => ticks.0 + n as u64,
+            (None, Some(p)) => ticks.0 + p[((frame.0 - 1) % p.len() as u64) as usize] as u64,
+            (None, None) => frame.0,
         }
     } else {
         (time.elapsed().as_nanos() * TICK_HZ as u128 / 1_000_000_000) as u64
