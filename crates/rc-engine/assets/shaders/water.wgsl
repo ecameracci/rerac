@@ -20,7 +20,9 @@
 // Water Enhanced (crate::graphics; look.misc.x = 1, clear water only): the strip and ripple water passes (kinds 0, 2)
 // draw the whole surface from the opaque scene behind it (crate::scene_copy), opaque over the frame; their second
 // layers (kinds 1, 3) draw nothing. Per pixel:
-// * a wave normal: a sum of travelling sine waves over the world position and the frame time;
+// * a wave normal: a sum of travelling sine waves over the world position and the frame time, plus the ripple
+//   module's slope on the ripple patches (from the patch's height grid, per vertex) and the expanding rings where
+//   Ratchet meets the water (`rings`, crate::water_render::WaterRings);
 // * the bed: the scene copy at the pixel bent by the waves (refraction; unbent where the bent pixel is in front of
 //   the surface), absorbed over the water's thickness toward the water texture's own colour, with caustics (ridges of
 //   moving gradient noise, fading with the depth under the surface) where the key light reaches;
@@ -69,6 +71,20 @@ struct WaterLook {
 @group(#{MATERIAL_BIND_GROUP}) @binding(8) var scene_sampler: sampler;
 @group(#{MATERIAL_BIND_GROUP}) @binding(9) var<uniform> look: WaterLook;
 
+const MAX_RINGS: u32 = 16u;
+
+struct WaterRings {
+    // x = ring count.
+    head: vec4<f32>,
+    // (Bevy x, Bevy z, start time in globals.time, strength).
+    ring: array<vec4<f32>, MAX_RINGS>,
+}
+
+@group(#{MATERIAL_BIND_GROUP}) @binding(10) var<storage, read> rings: WaterRings;
+
+// Grid vertices per patch side (rc_game::water::VG).
+const VG: u32 = 17u;
+
 struct WaterVertex {
     @location(0) position: vec3<f32>,
     @location(1) z1: f32,
@@ -82,6 +98,13 @@ struct WaterVertexOutput {
     // Gouraud RGB bytes / 128 and GS F / 255, screen-space linear like the GS.
     @location(1) @interpolate(linear) color: vec3<f32>,
     @location(2) @interpolate(linear) fog: f32,
+    // The ripple module's surface slope (d height / d Bevy x, d height / d Bevy z); 0 on the strips.
+    @location(3) ripple_grad: vec2<f32>,
+}
+
+fn ripple_pos(base: u32, g: u32) -> vec3<f32> {
+    let k = base + 4u + g * 6u;
+    return vec3<f32>(bitcast<f32>(ripple[k]), bitcast<f32>(ripple[k + 1u]), bitcast<f32>(ripple[k + 2u]));
 }
 
 fn wobble(f: FrameRecord, g: u32) -> vec2<f32> {
@@ -98,6 +121,7 @@ fn vertex(v: WaterVertex) -> WaterVertexOutput {
     var uv = v.uv.xy;
     var c = v.tag.x;
     var drop = false;
+    var grad = vec2<f32>(0.0);
     if (kind < 2u) {
         let f = frame[params.ids.x];
         let w = f.misc.x;
@@ -117,7 +141,21 @@ fn vertex(v: WaterVertex) -> WaterVertexOutput {
             uv = vec2<f32>(bitcast<f32>(ripple[g + 3u]), bitcast<f32>(ripple[g + 4u]));
         }
         c = ripple[g + 5u];
+        // Central differences over the grid neighbours (one-sided at the patch edge), in game space.
+        let row = v.tag.y / VG;
+        let col = v.tag.y % VG;
+        let l = ripple_pos(base, row * VG + max(col, 1u) - 1u);
+        let r = ripple_pos(base, row * VG + min(col + 1u, VG - 1u));
+        let u = ripple_pos(base, (max(row, 1u) - 1u) * VG + col);
+        let d = ripple_pos(base, min(row + 1u, VG - 1u) * VG + col);
+        let sx = r.x - l.x;
+        let sy = d.y - u.y;
+        let gx = select((r.z - l.z) / sx, 0.0, abs(sx) < 1e-4);
+        let gy = select((d.z - u.z) / sy, 0.0, abs(sy) < 1e-4);
+        // Game y is Bevy −z.
+        grad = vec2<f32>(gx, -gy);
     }
+    out.ripple_grad = grad;
     // Game (x, y, z) -> Bevy (x, z, -y).
     let p = vec3<f32>(pos.x, z, -pos.y);
     out.position = position_world_to_clip(p);
@@ -185,8 +223,8 @@ fn reflection(vp: vec3<f32>, rd: vec3<f32>, size: vec2<i32>) -> vec3<f32> {
     return miss;
 }
 
-// The surface's world normal (y up) from travelling sine waves: (direction, wavenumber, amplitude·wavenumber, speed).
-fn wave_normal(xz: vec2<f32>, t: f32) -> vec3<f32> {
+// The surface's height gradient over world xz from travelling sine waves: (direction, wavenumber, amplitude·wavenumber).
+fn wave_grad(xz: vec2<f32>, t: f32) -> vec2<f32> {
     var waves = array<vec4<f32>, 6>(
         vec4<f32>(0.96, 0.28, 1.6, 0.050),
         vec4<f32>(-0.42, 0.91, 2.3, 0.040),
@@ -203,7 +241,29 @@ fn wave_normal(xz: vec2<f32>, t: f32) -> vec3<f32> {
         let phase = dot(d, xz) * k + t * sqrt(9.8 * k) * 0.35;
         g += d * (w.w * k * cos(phase));
     }
-    return normalize(vec3<f32>(-g.x, 1.0, -g.y));
+    return g;
+}
+
+// The height gradient of the rings: each a wave packet running outward from its point, widening and fading.
+fn ring_grad(xz: vec2<f32>, t: f32) -> vec2<f32> {
+    let k = 12.0;
+    let speed = 1.3;
+    var g = vec2<f32>(0.0);
+    let n = min(u32(rings.head.x + 0.5), MAX_RINGS);
+    for (var i = 0u; i < n; i += 1u) {
+        let r = rings.ring[i];
+        let age = t - r.z;
+        if (age <= 0.0 || age > 3.0) { continue; }
+        let off = xz - r.xy;
+        let dist = length(off);
+        if (dist < 1e-3) { continue; }
+        let s = dist - speed * age;
+        let w = 0.25 + 0.2 * age;
+        let env = exp(-(s * s) / (w * w));
+        let amp = r.w * 0.1 * exp(-1.3 * age) / (1.0 + dist);
+        g += (off / dist) * (-amp * k * sin(k * s) * env);
+    }
+    return g;
 }
 
 fn hash2(p: vec2<f32>) -> vec2<f32> {
@@ -255,7 +315,8 @@ fn fragment(in: WaterVertexOutput) -> @location(0) vec4<f32> {
     let thickness = clamp(vp.z - scene_z(here, size), 0.0, 1e4);
     let shore = smoothstep(0.0, 0.6, thickness);
 
-    let n_world = normalize(mix(vec3<f32>(0.0, 1.0, 0.0), wave_normal(wp.xz, t_now), shore));
+    let g = wave_grad(wp.xz, t_now) + in.ripple_grad + ring_grad(wp.xz, t_now);
+    let n_world = normalize(mix(vec3<f32>(0.0, 1.0, 0.0), normalize(vec3<f32>(-g.x, 1.0, -g.y)), shore));
     let n = normalize((view.view_from_world * vec4<f32>(n_world, 0.0)).xyz);
     let to_eye = normalize(-vp);
     let dist = -vp.z;

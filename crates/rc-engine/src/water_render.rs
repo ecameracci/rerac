@@ -200,6 +200,9 @@ pub struct WaterMaterial {
     pub scene_color: Handle<Image>,
     #[uniform(9)]
     pub look: WaterLook,
+    /// Water Enhanced: the rings where Ratchet meets the water (see [`WaterRings`]).
+    #[storage(10, read_only, visibility(fragment))]
+    pub rings: Handle<ShaderBuffer>,
     /// Callback-order slot (Transparent3d position).
     pub slot: u32,
     /// The FX texture index (−1: none yet), for [`WaterLook`]'s clear-water test.
@@ -213,6 +216,38 @@ pub struct WaterLook {
     pub misc: Vec4,
     /// xyz = toward the key light (world; crate::sun_shadow::KeyLight), for the glint.
     pub sun: Vec4,
+}
+
+/// **Port-only (Water Enhanced): the rings where Ratchet meets the water.** crate::gameplay queues the contact points
+/// ([`crate::gameplay::Play::water_contacts`]: the swim's splashes away from the ripple patches, which draw their own,
+/// and his wake while wading or swimming at the surface); each becomes a wave packet the water shader adds to the
+/// surface's slope for [`RING_LIFE`] seconds. Drawing only: nothing here reaches the game state.
+#[derive(Default)]
+struct WaterRings {
+    /// (game x, game y, start time in `Time::elapsed_secs_wrapped` = the shader's `globals.time`, strength).
+    live: Vec<[f32; 4]>,
+}
+
+/// The shader's ring count (`MAX_RINGS`) and a ring's lifetime (its `ring_grad` cut-off).
+const MAX_RINGS: usize = 16;
+const RING_LIFE: f32 = 3.0;
+/// Bytes of the `rings` buffer: the count, then [`MAX_RINGS`] vec4s.
+const RINGS_BYTES: usize = 16 * (1 + MAX_RINGS);
+
+impl WaterRings {
+    /// Adds this tick's contacts at `now`, drops the finished and the oldest beyond [`MAX_RINGS`], and writes the buffer.
+    fn update(&mut self, contacts: impl IntoIterator<Item = [f32; 3]>, now: f32, bytes: &mut [u8]) {
+        self.live.retain(|r| (0.0..RING_LIFE).contains(&(now - r[2])));
+        self.live.extend(contacts.into_iter().map(|[x, y, s]| [x, y, now, s]));
+        let over = self.live.len().saturating_sub(MAX_RINGS);
+        self.live.drain(..over);
+        bytes.fill(0);
+        let mut w = bytes.as_chunks_mut::<4>().0.iter_mut();
+        let mut put = |x: f32| if let Some(d) = w.next() { *d = x.to_le_bytes() };
+        for x in [self.live.len() as f32, 0.0, 0.0, 0.0] { put(x); }
+        // Game (x, y) -> Bevy (x, −z).
+        for r in &self.live { for x in [r[0], -r[1], r[2], r[3]] { put(x); } }
+    }
 }
 
 /// Whether an FX texture is clear water, by its average colour: blue over red and not far under green (lava, mud
@@ -329,6 +364,10 @@ pub struct WaterState {
     frame_bytes: Vec<u8>,
     ripple_buf: Handle<ShaderBuffer>,
     ripple_bytes: Vec<u8>,
+    /// The rings ([`WaterRings`]), their buffer and its CPU copy.
+    rings: WaterRings,
+    rings_buf: Handle<ShaderBuffer>,
+    rings_bytes: Vec<u8>,
     /// [`clear_water`] by FX index, found on first use.
     clear_fx: std::collections::HashMap<i32, bool>,
 }
@@ -468,6 +507,8 @@ fn setup(
     let ripple_bytes = vec![0u8; n_patches.max(1) * RIPPLE_WORDS * 4];
     let frame = buffers.add(ShaderBuffer::new(&frame_bytes, RenderAssetUsages::default()));
     let ripple_buf = buffers.add(ShaderBuffer::new(&ripple_bytes, RenderAssetUsages::default()));
+    let rings_bytes = vec![0u8; RINGS_BYTES];
+    let rings_buf = buffers.add(ShaderBuffer::new(&rings_bytes, RenderAssetUsages::default()));
     let mut all_mats = Vec::new();
     let mut new_mat = |materials: &mut Assets<WaterMaterial>, texture: Handle<Image>, params: WaterParams, slot: u32, fx: i32| {
         let h = materials.add(WaterMaterial {
@@ -479,6 +520,7 @@ fn setup(
             scene_depth: copy.depth.clone(),
             scene_color: copy.color.clone(),
             look: WaterLook::default(),
+            rings: rings_buf.clone(),
             slot,
             fx,
         });
@@ -577,6 +619,9 @@ fn setup(
         frame_bytes,
         ripple_buf,
         ripple_bytes,
+        rings: WaterRings::default(),
+        rings_buf,
+        rings_bytes,
         clear_fx: Default::default(),
     });
 }
@@ -628,11 +673,15 @@ fn draw(
     mut buffers: ResMut<Assets<ShaderBuffer>>,
     mut vis: Query<&mut Visibility>,
     frame: Res<crate::display::GameFrame>,
+    time: Res<Time>,
 ) {
     let Some(mut st) = state else { return };
     let st = &mut *st;
     if st.ticks == st.drawn_ticks { return; }
     st.drawn_ticks = st.ticks;
+    let contacts = play.as_deref_mut().map(|p| std::mem::take(&mut p.water_contacts)).unwrap_or_default();
+    st.rings.update(contacts, time.elapsed_secs_wrapped(), &mut st.rings_bytes);
+    crate::asset_write::set_buffer(&mut buffers, &st.rings_buf, &st.rings_bytes);
     let fog = fog.map(|f| f.uniform).unwrap_or_else(|| TfragFog::new(&level.0.fog));
     // The fog uniform is the only material field that changes: written only when the frame's fog differs.
     if fog != st.fog {
