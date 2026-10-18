@@ -270,7 +270,7 @@ impl Plugin for GameplayPlugin {
             .init_resource::<TickBudget>()
             .add_systems(
                 PreUpdate,
-                (setup, input_map::sample_system, set_budget, keys).chain().after(bevy::input::InputSystems),
+                (setup, input_map::sample_system, set_budget, crate::session::pad_frame, keys).chain().after(bevy::input::InputSystems),
             )
             .add_systems(FixedUpdate, tick.in_set(GameTick).before(crate::particle_render::tick))
             .add_systems(FixedUpdate, elapsed_frame.after(GameTick).after(crate::menu_render::MenuFrameSet))
@@ -562,7 +562,7 @@ fn load_game_state(root: &std::path::Path, index: u32) -> anyhow::Result<(GameSt
 
 /// Gameplay ticks still allowed this rendered frame (the main loop's catch-up rule).
 #[derive(Resource, Default)]
-struct TickBudget(u32);
+pub(crate) struct TickBudget(pub(crate) u32);
 
 /// The black frames between the death fade and the respawn: the PS2's `LoadLevelCoreData(0, 1)` re-reads the level
 /// from the disc with the screen black (measured on the original: 0.70 s after the 16-frame fade; the port's reload
@@ -1999,7 +1999,8 @@ fn debug_dump(
         (at, std::env::var("RC_MOBY_DUMP_RADIUS").ok().and_then(|v| v.trim().parse().ok()).unwrap_or(12.0))
     });
     let timed = !*done && at.is_some_and(|t| play.as_ref().is_some_and(|p| p.game.counter >= t));
-    if !keys.just_pressed(KeyCode::F9) && !timed { return; }
+    // F8 (a session's bug marker, crate::session) dumps too.
+    if !keys.any_just_pressed([KeyCode::F9, KeyCode::F8]) && !timed { return; }
     if timed { *done = true; }
     let Some(p) = play else { println!("dump: no gameplay"); return };
     let h = &p.game.hero;

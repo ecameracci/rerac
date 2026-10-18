@@ -13,15 +13,20 @@ pub fn path() -> Option<std::path::PathBuf> { crate::render_settings::settings_p
 pub fn install() {
     let default = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
+        let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+        let thread = std::thread::current().name().unwrap_or("?").to_string();
+        let bt = std::backtrace::Backtrace::force_capture();
+        let text = format!("=== panic at unix time {secs}, version {}, thread {thread}\n{info}\n{bt}\n", env!("CARGO_PKG_VERSION"));
         if let Some(p) = path() {
-            let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
-            let thread = std::thread::current().name().unwrap_or("?").to_string();
-            let bt = std::backtrace::Backtrace::force_capture();
             if let Some(dir) = p.parent() { let _ = std::fs::create_dir_all(dir); }
             if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&p) {
-                let _ = writeln!(f, "=== panic at unix time {secs}, version {}, thread {thread}\n{info}\n{bt}\n", env!("CARGO_PKG_VERSION"));
+                let _ = writeln!(f, "{text}");
                 eprintln!("crash log: {}", p.display());
             }
+        }
+        // The session's own copy (crate::session): its log's last lines may not reach the file before the process ends.
+        if let Some(d) = crate::session::dir() {
+            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(d.join("crash.txt")) { let _ = writeln!(f, "{text}"); }
         }
         default(info);
         crate::standalone::crashed(&info.to_string(), path().as_deref());
