@@ -650,6 +650,9 @@ pub struct Play {
     help_vag: Option<std::sync::Arc<[u8]>>,
     /// `RC_HUD_HELP=<id>`: the help message forced at the first tick (dev switch; the first-input gate skipped).
     help_debug: Option<i32>,
+    /// Port-only: where Ratchet met the water since the last water draw, (game x, game y, strength), for Water
+    /// Enhanced's rings (crate::water_render, which drains it; [`water_contacts`]).
+    pub water_contacts: Vec<[f32; 3]>,
 }
 
 impl Play {
@@ -1572,6 +1575,7 @@ fn setup(
         layer_joints,
         help_vag: None,
         help_debug: std::env::var("RC_HUD_HELP").ok().and_then(|v| v.trim().parse().ok()),
+        water_contacts: Vec::new(),
         debug_hits: std::env::var("RC_DEBUG_HIT").ok().map(|v| {
             v.split(',').filter_map(|h| {
                 let (a, b) = h.trim().split_once('@')?;
@@ -1719,6 +1723,26 @@ fn keys(
             println!("noclip: {} (stick: move, R1 / ✕: up, L1: down, R2: fast)", if p.noclip.is_some() { "on" } else { "off" });
         }
     }
+}
+
+/// Port-only (Water Enhanced, crate::water_render's rings): Ratchet's wake at the surface into
+/// [`Play::water_contacts`]: while wading or swimming at the surface, a ring every 6 ticks when moving (stronger
+/// with speed), every 50 when still. Reads the hero block only; the list is capped for levels that never drain it.
+fn water_contacts(p: &mut Play) {
+    use rc_game::hero::swim::id;
+    let h = &p.game.hero;
+    let surface = matches!(h.state, id::SURFACE_SWIM | id::SURFACE_IDLE | id::WADE)
+        || (matches!(h.state, 0..=4) && h.f0634 != 0 && (h.f13f9 != 0 || h.f15f4.to_f32() < 0.85));
+    if surface {
+        let speed = h.eff_len_xy.to_f32() * crate::determinism::TICK_HZ as f32;
+        let moving = speed > 0.5;
+        if p.game.counter.is_multiple_of(if moving { 6 } else { 50 }) {
+            let strength = if moving { 0.25 + 0.05 * speed.min(8.0) } else { 0.15 };
+            p.water_contacts.push([h.pos[0].to_f32(), h.pos[1].to_f32(), strength]);
+        }
+    }
+    let over = p.water_contacts.len().saturating_sub(64);
+    p.water_contacts.drain(..over);
 }
 
 /// Dev builds: the noclip's move from the pad (the stick along the camera's view, R1 or ✕ up, L1 down, R2 fast), the
@@ -2515,6 +2539,10 @@ fn tick(
     for e in std::mem::take(&mut p.game.hero.swim.events) {
         if let rc_game::hero::swim::SwimEvent::Ripple { x, y, r, amp } = e {
             p.svc.water.disturb(x, y, r, amp, false);
+            let z = p.game.hero.water_level.to_f32();
+            if !p.svc.water.sim.as_ref().is_some_and(|s| s.patch_height(x, y, z).is_some()) {
+                p.water_contacts.push([x, y, amp.abs() * 3.0]);
+            }
         }
         // The surface jump's store `0x167494 = 0` (`0x2406b0`), made in the hero update after the moby loop (so it
         // overrides a HeroTeleport store of the same tick, as in the game); the camera applies it before its test.
@@ -2522,6 +2550,7 @@ fn tick(
             p.svc.water.underwater_store = Some((p.game.counter.wrapping_sub(1), rc_game::water::world::UnderwaterStore::Off));
         }
     }
+    water_contacts(p);
     // Hits taken and deaths (rc_game::hero::damage): the game state's counters (0x15eea8 / 0x13df88[level],
     // 0x15eeac / 0x13dfd8[level]) and the killer's mission deaths (0x14ee90, `LevelMissions::hero_death`).
     for e in std::mem::take(&mut p.game.hero.damage.events) {
