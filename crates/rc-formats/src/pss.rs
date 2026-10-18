@@ -14,7 +14,7 @@
 //!   takes the header, `sendADPCM` 0x31ae68 de-interleaves by `interleave`).
 
 use crate::buf::{invalid, Result};
-use crate::vag::{decode_frame, History, Variant, FRAME_BYTES, FRAME_SAMPLES};
+use crate::vag::{decode_frame, History, Variant, FLAG_END, FRAME_BYTES, FRAME_SAMPLES};
 use std::collections::BTreeMap;
 
 /// Stream ids.
@@ -256,17 +256,21 @@ impl<'a> Audio<'a> {
 
     /// Decodes both channels (a mono stream is duplicated) with the port's SPU ADPCM decoder
     /// ([`crate::vag::decode_frame`], rounded form), each channel one continuous stream from zero history, at the
-    /// header rate. A trailing partial block is dropped.
+    /// header rate. A trailing partial block is dropped. A channel is silent after its first frame with the end flag:
+    /// the SPU voice stops there, and every movie follows it with a flags-7 frame of nibbles 7 (a DC step of 0x7000).
     pub fn decode(&self) -> Vec<[i16; 2]> {
         let il = self.header.interleave as usize;
         let ch = self.header.channels as usize;
         let mut out = vec![[0i16; 2]; self.samples()];
         let mut hist = [History::default(); 2];
+        let mut ended = [false; 2];
         let per_block = il / FRAME_BYTES * FRAME_SAMPLES;
         for b in 0..self.blocks() {
             for c in 0..ch {
                 let block = &self.body[(b * ch + c) * il..(b * ch + c + 1) * il];
                 for (f, frame) in block.as_chunks::<FRAME_BYTES>().0.iter().enumerate() {
+                    if ended[c] { continue; }
+                    ended[c] = frame[1] & FLAG_END != 0;
                     let s = decode_frame(frame, &mut hist[c], Variant::Rounded);
                     let at = b * per_block + f * FRAME_SAMPLES;
                     for (k, v) in s.into_iter().enumerate() {
@@ -407,5 +411,35 @@ mod tests {
             }
         }
         eprintln!("{} movies, {:.1} s of audio (channel 0)", files.len(), total_audio);
+    }
+
+    /// A channel stops at its end-flag frame: the flags-7 terminator after it (nibbles 7, shift 0: 0x7000) and
+    /// anything later decode to silence, while the other channel plays on to its own end.
+    #[test]
+    fn audio_stops_at_the_end_flag() {
+        let frame = |flags: u8, seed: u8| -> Vec<u8> { let mut v = vec![0x14u8, flags]; v.extend((0..14u8).map(|k| seed.wrapping_mul(17).wrapping_add(k.wrapping_mul(29)))); v };
+        let term = [vec![0, 7], vec![0x77; 14]].concat();
+        let l = [frame(0, 1), frame(FLAG_END, 2), term.clone(), frame(0, 3)];
+        let r = [frame(0, 101), frame(0, 102), frame(0, 103), frame(FLAG_END, 104)];
+        let body: Vec<u8> = (0..2).flat_map(|b| [l[2 * b].clone(), l[2 * b + 1].clone(), r[2 * b].clone(), r[2 * b + 1].clone()].concat()).collect();
+        let bytes = [audio_header(48000, 2, 0x20, body.len() as u32), body].concat();
+        let pcm = Audio::parse(&bytes).unwrap().decode();
+        let ref_l = crate::vag::decode(&l[..2].concat());
+        let ref_r = crate::vag::decode(&r.concat());
+        assert_eq!(pcm.len(), 4 * FRAME_SAMPLES);
+        assert!(pcm[..2 * FRAME_SAMPLES].iter().zip(&ref_l).all(|(p, a)| p[0] == *a));
+        assert!(pcm[2 * FRAME_SAMPLES..].iter().all(|p| p[0] == 0), "silent after the end flag");
+        assert!(pcm.iter().zip(&ref_r).all(|(p, b)| p[1] == *b));
+    }
+
+    /// `mpegs[0]` (the logos) ends quietly: no terminator DC step in its last samples. Skips without `extracted/`.
+    #[test]
+    fn logos_audio_ends_quietly() {
+        let p = crate::test_data::root().join("global/mpegs/000.bin");
+        let Ok(data) = std::fs::read(&p) else { eprintln!("skip: no {}", p.display()); return };
+        let d = demux(&data).unwrap();
+        let pcm = Audio::parse(&d.audio[&0]).unwrap().decode();
+        let peak = pcm[pcm.len() - 200..].iter().flatten().map(|s| s.unsigned_abs()).max().unwrap_or(0);
+        assert!(peak < 1000, "last 200 samples peak {peak}");
     }
 }
