@@ -104,7 +104,8 @@ Background and the decisions behind it: `docs/plan/launcher_extractor.md`, `docs
    052–062, 075–079, 084–087. `extract-info.json` records `"ntsc_only":true` and `verify` then skips those files.
    Files already present from an earlier full extraction are left alone.
 9. **`extract-info.json`** has exactly the contract's keys. `files`/`bytes` count the archive files written by this run
-   (not `extract-info.json` itself). `extractor_version` is the `rerac-extract` crate version.
+   (not `extract-info.json` itself). `extractor_version` is the build version `<version>-<hash>-<platform>`
+   (`0.4.0-1a2b3c4d-windows-x86_64`; `docs/workflows/release.md`).
 10. **Paths.** `--out` is created if missing. `--iso` may be omitted when the environment variable `RC_ISO` is set
     (developer convenience; the launcher always passes `--iso`). `--flag=value` is accepted as well as `--flag value`.
 11. **Verify** reads `extract-info.json` to learn the disc and `ntsc_only`, then checks exactly the table's files.
@@ -132,7 +133,8 @@ Background and the decisions behind it: `docs/plan/launcher_extractor.md`, `docs
     `RC_DATA_DIR`, and `--data-dir=<dir>` is accepted.
 15. **Packaged version folder** (`tools/package/package.sh`, `docs/workflows/release.md`): `rerac` (`rerac.exe` on
     Windows), `rerac-extract`, `assets/shaders/*.wgsl`, `rerac-manifest.json`, `README.txt`. The manifest names
-    the binaries by these relative paths. The runtime finds `assets/` next to its real (symlink-resolved) executable,
+    the binaries by these relative paths; its `version`, like `--version-json`'s, is the build version
+    (`0.4.0-1a2b3c4d-windows-x86_64`). The runtime finds `assets/` next to its real (symlink-resolved) executable,
     so the folder can be copied or moved as a whole, but `rerac` must not be copied out of it alone.
 16. `<game_data_dir>` (`games/rac1/data/`) holds the Tier 0 archive directly, in the same layout as the development
     `extracted/` tree: `boot/`, `toc.bin`, `global/`, `levels/NN/`, plus `extract-info.json`. See

@@ -23,8 +23,11 @@ mod workers;
 use json::Value;
 use std::fmt;
 
+/// The build version of `rerac` and `rerac-extract`: `<version>-<hash>-<platform>`
+/// (`0.4.0-1a2b3c4d-windows-x86_64`; `build.rs`).
+pub const BUILD_VERSION: &str = env!("RERAC_BUILD_VERSION");
 /// `rerac-extract` version, recorded as `extractor_version` in `extract-info.json`.
-pub const EXTRACTOR_VERSION: &str = env!("CARGO_PKG_VERSION");
+pub const EXTRACTOR_VERSION: &str = BUILD_VERSION;
 /// Version of the data folder layout (`data_format` in the manifest and `extract-info.json`).
 pub const DATA_FORMAT: u32 = 1;
 /// Written last by a successful `extract`; its absence marks an incomplete data folder.

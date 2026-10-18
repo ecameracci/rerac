@@ -16,7 +16,7 @@ pub fn install() {
         let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
         let thread = std::thread::current().name().unwrap_or("?").to_string();
         let bt = std::backtrace::Backtrace::force_capture();
-        let text = format!("=== panic at unix time {secs}, version {}, thread {thread}\n{info}\n{bt}\n", env!("CARGO_PKG_VERSION"));
+        let text = format!("=== panic at unix time {secs}, version {}, thread {thread}\n{info}\n{bt}\n", rc_extract::BUILD_VERSION);
         if let Some(p) = path() {
             if let Some(dir) = p.parent() { let _ = std::fs::create_dir_all(dir); }
             if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&p) {

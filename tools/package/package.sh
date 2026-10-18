@@ -8,7 +8,8 @@
 #   rerac[.exe]              the runtime (crate rc-engine; plain release build, never `--features dev`)
 #   rerac-extract[.exe]      the extractor (crate rc-extract)
 #   assets/shaders/*.wgsl    the runtime's shaders (found next to the executable; rc-engine main.rs `asset_dir`)
-#   rerac-manifest.json      the version manifest, version taken from [workspace.package] in Cargo.toml
+#   rerac-manifest.json      the version manifest, version = the build version <version>-<hash>-<platform>:
+#                            [workspace.package] version in Cargo.toml, the git commit's first 8 hex digits, os-arch
 #   README.txt
 # Nothing from the disc is ever packaged: the folder is checked against that exact file list.
 # The folder is portable: started without --data-dir, rerac keeps its game data in data/ beside itself and asks for
@@ -22,7 +23,7 @@ build=1
 for a in "$@"; do
   case "$a" in
     --no-build) build=0 ;;
-    -h|--help) sed -n '2,16p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,17p' "$0"; exit 0 ;;
     *) echo "unknown argument: $a" >&2; exit 2 ;;
   esac
 done
@@ -33,6 +34,7 @@ cd "$repo"
 # The one workspace version: `version` under [workspace.package] (every crate inherits it).
 version="$(awk '/^\[/ { in_pkg = ($0 == "[workspace.package]") } in_pkg && /^version = "/ { gsub(/^version = "|"$/, ""); print; exit }' Cargo.toml)"
 [ -n "$version" ] || { echo "cannot read the version from [workspace.package] in Cargo.toml" >&2; exit 1; }
+commit="$(git rev-parse HEAD 2>/dev/null || true)"
 
 exe=""
 case "$(uname -s)" in
@@ -47,6 +49,9 @@ case "$(uname -m)" in
   *) arch="$(uname -m)" ;;
 esac
 
+# The build version, as crates/rc-extract/build.rs makes it: <version>-<hash>-<platform>.
+hash="${commit:0:8}"
+build_version="$version-${hash:-unknown}-$os-$arch"
 name="rerac-$version-$os-$arch"
 target="${CARGO_TARGET_DIR:-$repo/target}/release"
 dist="$repo/dist"
@@ -69,7 +74,7 @@ cp -R crates/rc-engine/assets/shaders/. "$out/assets/shaders/"
 find "$out/assets" -name '.*' -type f -delete
 
 cat > "$out/rerac-manifest.json" <<EOF
-{"schema":1,"name":"rerac","version":"$version","game":"rac1","runtime":"rerac$exe","extractor":"rerac-extract$exe","supported_discs":["SCUS_971.99"],"data_format":1}
+{"schema":1,"name":"rerac","version":"$build_version","game":"rac1","runtime":"rerac$exe","extractor":"rerac-extract$exe","supported_discs":["SCUS_971.99"],"data_format":1}
 EOF
 
 # The settings folder (crates/rc-engine/src/render_settings.rs settings_path): the sessions and crash.log live there.
@@ -80,7 +85,7 @@ case "$os" in
 esac
 
 cat > "$out/README.txt" <<EOF
-ReRAC $version ($os-$arch)
+ReRAC $build_version ($os-$arch)
 A reimplementation of Ratchet & Clank (PS2). It contains no game data: it runs from data
 extracted once from your own disc image (NTSC-U SCUS_971.99, .iso).
 
@@ -113,7 +118,7 @@ Reporting a bug:
      10 newest are kept.
   3. If the game crashed, the session folder also holds crash.txt; every crash is also
      added to ${settings}crash.log
-  Say which version you played (ReRAC $version, $os-$arch).
+  Say which version you played (ReRAC $build_version, $os-$arch).
 EOF
 if [ "$os" = windows ]; then
   sed -i 's#\./rerac#rerac#g; s/$/\r/' "$out/README.txt"
@@ -131,7 +136,7 @@ fi
 
 # The packaged runtime must answer the contract line with this version.
 got="$("$out/rerac$exe" --version-json)"
-want="{\"name\":\"rerac\",\"version\":\"$version\",\"game\":\"rac1\",\"data_format\":1}"
+want="{\"name\":\"rerac\",\"version\":\"$build_version\",\"game\":\"rac1\",\"data_format\":1}"
 [ "$got" = "$want" ] || { echo "rerac --version-json: got $got, want $want" >&2; exit 1; }
 
 case "$os" in

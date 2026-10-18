@@ -32,7 +32,7 @@ use rc_formats::tie::{self, LevelTieClass};
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
-pub(crate) const GENERATOR: &str = concat!("rerac-extract ", env!("CARGO_PKG_VERSION"));
+pub(crate) const GENERATOR: &str = concat!("rerac-extract ", env!("RERAC_BUILD_VERSION"));
 
 /// A GS drawing pass as the game sets it up (engine `gs_state.rs` table).
 #[derive(Clone, Copy)]

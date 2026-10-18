@@ -37,7 +37,7 @@ pub const EXIT_DATA_FORMAT: i32 = 4;
 
 /// The launcher contract's `--version-json` line.
 pub fn version_json() -> String {
-    format!(r#"{{"name":"rerac","version":"{}","game":"rac1","data_format":{DATA_FORMAT}}}"#, env!("CARGO_PKG_VERSION"))
+    format!(r#"{{"name":"rerac","version":"{}","game":"rac1","data_format":{DATA_FORMAT}}}"#, rc_extract::BUILD_VERSION)
 }
 
 /// Which rule chose the data root.
@@ -243,7 +243,7 @@ mod tests {
     #[test]
     fn version_json_is_the_contract_line() {
         let v = version_json();
-        assert_eq!(v, format!(r#"{{"name":"rerac","version":"{}","game":"rac1","data_format":1}}"#, env!("CARGO_PKG_VERSION")));
+        assert_eq!(v, format!(r#"{{"name":"rerac","version":"{}","game":"rac1","data_format":1}}"#, rc_extract::BUILD_VERSION));
         assert_eq!(json_uint(&v, "data_format"), Some(1));
         assert_eq!(json_str(&v, "game"), Some("rac1"));
     }

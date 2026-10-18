@@ -73,7 +73,9 @@ jobs:
         run: |
           zip="$(ls dist/rerac-*.zip)"
           dir="${zip%.zip}"
+          # The manifest carries the build version (0.4.0-1a2b3c4d-macos-arm64); the tag names its first part.
           version="$(sed -n 's/.*"version":"\([^"]*\)".*/\1/p' "$dir/rerac-manifest.json")"
+          version="${version%%-*}"
           ls -l "$zip" "$dir" "$dir/assets/shaders"
           if [ -n "$TAG" ]; then
             want="${TAG#v}"; want="${want%%-*}"

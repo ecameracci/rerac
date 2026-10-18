@@ -15,6 +15,12 @@ Output: `dist/rerac-<version>-<os>-<arch>/` and its `.zip` (git-ignored). The ve
 `version` under `[workspace.package]` in `Cargo.toml` (every crate has `version.workspace = true`). The build is a
 plain `--release` build (never `--features dev`).
 
+The build version is `<version>-<hash>-<platform>`: that version, the first 8 hex digits of the git commit (`unknown`
+without git) and the package's `<os>-<arch>`, e.g. `0.4.0-1a2b3c4d-windows-x86_64` (`crates/rc-extract/build.rs`). `rerac-manifest.json`,
+`rerac --version-json`, `rerac-extract --version`, `extract-info.json`'s `extractor_version`, `README.txt`, the session
+logs, `session.txt` and the crash log carry it, so every build names its commit. The folder and zip names keep the
+plain version.
+
 ## The allow-list
 
 The script packages exactly these and fails if anything else ends up in the folder:

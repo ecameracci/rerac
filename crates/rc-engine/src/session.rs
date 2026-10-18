@@ -166,7 +166,7 @@ pub fn start() {
         let res = if card.is_dir() { crate::saves::copy_dir(&card, &to) } else { std::fs::create_dir_all(&to) };
         if let Err(e) = res { eprintln!("session: cannot copy the memory card {}: {e}", card.display()); }
     }
-    let mut text = format!("rerac session 1\nversion {}\nargs {}\nlevel {}\n", env!("CARGO_PKG_VERSION"), std::env::args().skip(1).collect::<Vec<_>>().join(" "), crate::level_load::boot_level_index());
+    let mut text = format!("rerac session 1\nversion {}\nargs {}\nlevel {}\n", rc_extract::BUILD_VERSION, std::env::args().skip(1).collect::<Vec<_>>().join(" "), crate::level_load::boot_level_index());
     let mut vars: Vec<(String, String)> = std::env::vars().filter(|(k, _)| k.starts_with("RC_")).collect();
     vars.sort();
     for (k, v) in vars { text += &format!("env {k}={v}\n"); }

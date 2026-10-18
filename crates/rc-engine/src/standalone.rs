@@ -39,7 +39,7 @@ pub fn start(dir: &Path) {
     println!("session log: {}", log.display());
     let console = redirect(file);
     let _ = SESSION.set(Session { log, console });
-    println!("ReRAC {} session log", env!("CARGO_PKG_VERSION"));
+    println!("ReRAC {} session log", rc_extract::BUILD_VERSION);
 }
 
 /// The log's older sessions beyond the [`KEPT`] newest (names sort by time: same digit count until 2286).
