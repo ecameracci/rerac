@@ -2,6 +2,8 @@
 resolver = "2"
 # Product crates (ship) under crates/; dev-only tools under tools/ (never shipped; product never depends on them).
 members = ["crates/rc-formats", "crates/rc-engine", "crates/rc-game", "crates/rc-extract", "crates/rc-data", "crates/rc-video", "tools/trace", "tools/repo-checks", "tools/xtask"]
+# Patched third-party code (crates/gilrs-core/PATCHED.md): a dependency, not one of ours.
+exclude = ["crates/gilrs-core"]
 
 [workspace.package]
 # The one ReRAC version (every crate: `version.workspace = true`). Release tags are `v<version>[-pre]`
@@ -15,6 +17,10 @@ publish = false
 anyhow = "1"
 thiserror = "2"
 bytemuck = { version = "1", features = ["derive", "min_const_generics", "extern_crate_alloc"] }
+
+[patch.crates-io]
+# Windows: Steam Input's virtual pad dropped presses and left buttons held (crates/gilrs-core/PATCHED.md).
+gilrs-core = { path = "crates/gilrs-core" }
 
 # Fast iteration: optimise dependencies (Bevy) fully, our crates lightly.
 [profile.dev]

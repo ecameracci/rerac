@@ -250,7 +250,7 @@ fn main() -> anyhow::Result<()> {
     .add_plugins(title_world::TitleWorldPlugin)
     .add_systems(Startup, setup_camera)
     .add_systems(level_switch::LevelStartup, setup)
-    .add_systems(Update, report_fps);
+    .add_systems(Update, (report_fps, input_map::log_connections));
     // RC_RENDER_DIAG=1: Bevy's per-pass render timings (CPU only on Metal) and the views rendered, logged every 5 s.
     if std::env::var("RC_RENDER_DIAG").is_ok_and(|v| v.trim() == "1") {
         app.add_plugins((

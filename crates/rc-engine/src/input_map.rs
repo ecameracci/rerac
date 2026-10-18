@@ -50,6 +50,21 @@ pub fn install_sdl_mappings() {
     std::env::set_var("SDL_GAMECONTROLLERCONFIG", format!("{EXTRA_SDL_MAPPINGS}\n{existing}"));
 }
 
+/// Logs each gamepad (dis)connection with the OS's name and USB ids, so a session log shows which device the game
+/// reads: under Steam Input a Valve controller shows up as Steam's virtual pad, not as itself.
+pub fn log_connections(mut events: MessageReader<bevy::input::gamepad::GamepadConnectionEvent>) {
+    use bevy::input::gamepad::GamepadConnection;
+    let id = |v: Option<u16>| v.map_or("?".to_string(), |v| format!("{v:04x}"));
+    for e in events.read() {
+        match &e.connection {
+            GamepadConnection::Connected { name, vendor_id, product_id } => {
+                println!("gamepad: {} connected: {name:?} (vendor {}, product {})", e.gamepad, id(*vendor_id), id(*product_id));
+            }
+            GamepadConnection::Disconnected => println!("gamepad: {} disconnected", e.gamepad),
+        }
+    }
+}
+
 /// This frame's pad read (sampled in `PreUpdate`, used by every tick of the frame).
 #[derive(Resource, Clone, Copy, Debug, Default)]
 pub struct PadFrame(pub PadInput);
