@@ -1449,9 +1449,10 @@ fn front_end_frame(
     if out.logos && std::env::var("RC_SKIP_LOGOS").is_ok_and(|v| v.trim() == "1") {
         println!("menus: frame {frame}: front end: the logos skipped (RC_SKIP_LOGOS=1)");
     } else if out.logos {
-        // startlevel: the logos PSS `mpegs[0]` (NTSC), language 0, never skipped, back to the front end.
+        // startlevel: the logos PSS `mpegs[0]` (NTSC), language 0, back to the front end. The disc's are unskippable
+        // (replay −1); port-only, Start skips them (replay 1: `readMpeg`'s Start-alone rule).
         use crate::movie_render::{MovieExit, MovieRequest};
-        crate::movie_render::request(MovieRequest { file: 0, movie: 0, language: Some(0), replay: Some(-1), exit: MovieExit::FrontEnd, ..MovieRequest::in_level(0, None) });
+        crate::movie_render::request(MovieRequest { file: 0, movie: 0, language: Some(0), replay: Some(1), exit: MovieExit::FrontEnd, ..MovieRequest::in_level(0, None) });
         println!("menus: frame {frame}: front end: the logos (mpegs[0])");
     }
     if let Some(i) = out.attract {
