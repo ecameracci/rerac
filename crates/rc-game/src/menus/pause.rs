@@ -550,6 +550,8 @@ pub struct PageMenu {
     pub media: media::MediaMenu,
     /// The memory-card pages and the card ([`saves`]).
     pub saves: saves::SaveMenu,
+    /// Port-only: the Options picture of the port's own entries ([`port::PICTURE`]), raw GS alpha, from the engine.
+    pub port_picture: Option<std::sync::Arc<rc_formats::texture::Texture>>,
 }
 
 fn stub(m: &mut BTreeMap<&'static str, u64>, name: &'static str) { *m.entry(name).or_default() += 1; }
@@ -601,6 +603,7 @@ impl PageMenu {
             map: map_page::MapPage::new(ov),
             media: media::MediaMenu::default(),
             saves: saves::SaveMenu::read(ov),
+            port_picture: None,
         };
         let a = &m.addrs;
         // The kinds 0x21 / 0x23 / 0x2d roots (the end-of-game page, the front end) and the end page's save page.

@@ -70,6 +70,7 @@ fn menu() -> PageMenu {
         map: Default::default(),
         media: Default::default(),
         saves: Default::default(),
+        port_picture: None,
     };
     let labels = [20194, 20195, 20196, 20197, 20198, 20199, 20418];
     for (i, &a) in ROOT_W.iter().enumerate() {

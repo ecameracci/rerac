@@ -517,7 +517,9 @@ sub-pages (`crates/rc-game/src/menus/pause/port.rs`, `PageMenu::install_port_pag
   Game** (index 6 of 8), so Quit Game stays the last entry (and, with the list's wrap flag 0x1000, the one Up-from-top reaches)
   as on the disc; the list draws 8 rows with the game's own `h/(n+1)` spacing. The description label W1 (0x1b4fe8, flags 0x90,
   id table 0x1b4fc8 indexed by the list cursor) gets a patched copy of its table (`Label::table`) with the port description at
-  the same index, so the table read never runs past the disc's 7 ids.
+  the same index, so the table read never runs past the disc's 7 ids. The picture widget (`options_ss`, 7 pictures by the
+  list cursor) skips the inserted entry the same way (`port::picture_index`): Quit Game keeps Quark, and Port Options shows
+  the port's own picture (`crates/rc-engine/assets/menus/port_options.png`, a PC in the item pictures' style on a dim lit-from-above gradient like theirs).
 * **Page**: a page record (kind 0x7f, parent Options, focus the list) whose 14 frame-moby seqs, filler widgets W1/W2
   (0x1b2878) and hint list W4 (0x1b2920, "✕ Toggle / △ Exit") are those of Subtitles 0x1b5788 (≤ 2 rows; Camera 0x1b5ee0's
   for 3+). Only an Options sub-page's frames work: a page's frame animations start from its parent's layout and △ plays

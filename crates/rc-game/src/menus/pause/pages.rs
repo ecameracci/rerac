@@ -283,11 +283,13 @@ pub fn image_update(m: &mut PageMenu, w: u32, gs: &GameState) -> i32 {
         idx = super::media::pager_page(m, img.ptr) + m.media.lang_offsets.get(m.lang as usize).copied().unwrap_or(0);
     } else {
         let l = focused_list(m);
-        idx = l.map_or(0, |l| l.cursor).max(0);
-        if f & 0x4000 != 0 && l.and_then(|l| l.items.get(idx as usize)).is_some_and(|it| it.action == 2) { idx = 9; }
+        let cursor = l.map_or(0, |l| l.cursor).max(0);
+        idx = l.map_or(cursor, |l| super::port::picture_index(&l.items, cursor));
+        if f & 0x4000 != 0 && l.and_then(|l| l.items.get(cursor as usize)).is_some_and(|it| it.action == 2) { idx = 9; }
     }
     if f & 0x2000 != 0 && gs.global.skill_points.get(idx.max(0) as usize).is_none_or(|&b| b == 0) { idx = 0x1e; }
-    let available = |i: i32| 0 <= i && (i as u32) < field_entries(img.field);
+    let port_picture = m.port_picture.is_some();
+    let available = |i: i32| (i == super::port::PICTURE && port_picture) || (0 <= i && (i as u32) < field_entries(img.field));
     match img.state {
         0 => {
             if available(idx) {
@@ -339,6 +341,12 @@ pub fn image_draw(m: &mut PageMenu, w: u32, gs: &GameState, out: &mut Vec<MenuDr
         let Some(c) = cells.get(shown.max(0) as usize) else { return 1 };
         let set = if c.kind == 0 { owned(gs, c.item as i32) } else { gs.global.flags.get(c.item.max(0) as usize).is_some_and(|&b| b != 0) };
         if !set { return 1; }
+    }
+    if shown == super::port::PICTURE {
+        let Some(tex) = m.port_picture.clone() else { return 1 };
+        let (tw, th) = (tex.width as i32, tex.height as i32);
+        out.push(MenuDraw::Image { src: ImageSrc::Pixels { key: super::port::PICTURE_KEY, tex }, x: 0, y: 0, w: ww, h: wh, u: 0, v: 0, tw, th, rgba: 0x8080_8080 });
+        return 0x10;
     }
     out.push(MenuDraw::Image { src: ImageSrc::Lump { field: img.field, index: shown as u32 }, x: 0, y: 0, w: ww, h: wh, u: 0, v: 0, tw: img.tw, th: img.th, rgba: 0x8080_8080 });
     0x10

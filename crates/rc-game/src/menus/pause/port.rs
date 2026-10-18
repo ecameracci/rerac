@@ -16,7 +16,9 @@
 //! Quit Game, so Quit Game stays the last (and, with the list's wrap, the Up-from-top) entry as on the disc;
 //! the description label W1 (flags 0x90, table 0x1b4fc8) gets a patched copy of its id table with the port
 //! description at the same index ([`Label::table`]). [`PageMenu::install_port_page`] does all of it; without
-//! the call every record is exactly as read from the overlay.
+//! the call every record is exactly as read from the overlay. The Options picture (`options_ss` by the list cursor)
+//! skips the inserted entry ([`picture_index`]): Quit Game keeps Quark, and Port Options shows the engine's own
+//! picture ([`PageMenu::port_picture`]).
 //!
 //! The main menu (the front end's Options 0x1b8d08) gets the same page as [`FRONT_PAGE`]: the entry is appended to
 //! both of the front end's Options lists (NTSC Language / Sound, PAL + Video; `saves::front_options_enter` installs
@@ -291,6 +293,22 @@ fn list_mut(m: &mut PageMenu, w: u32) -> Option<&mut PortList> {
 
 /// The row of a setting in [`ENTRIES`].
 pub fn row_of(s: Setting) -> Option<usize> { ENTRIES.iter().position(|e| e.setting == s) }
+
+/// The Options picture index of the port's own entries ([`PageMenu::port_picture`]); past every `options_ss` entry.
+pub const PICTURE: i32 = 0x7f00;
+/// [`ImageSrc::Pixels`](super::super::ImageSrc::Pixels) key of [`PICTURE`].
+pub const PICTURE_KEY: u64 = 0x7f00_0000_0000_0001;
+
+/// An Options entry the port inserted (Port Options, Mods): not in the disc list, so it has no `options_ss` picture.
+pub fn is_port_item(it: &Item) -> bool { it.label == text::ENTRY as i16 || it.label == text::MODS as i16 }
+
+/// The picture an Options list shows for its cursor: [`PICTURE`] on a port entry, else the disc entry's own (the
+/// cursor less the port entries above it, so Quit Game keeps its picture below Port Options).
+pub fn picture_index(items: &[Item], cursor: i32) -> i32 {
+    let at = cursor.max(0) as usize;
+    if items.get(at).is_some_and(is_port_item) { return PICTURE; }
+    cursor - items.iter().take(at).filter(|it| is_port_item(it)).count() as i32
+}
 
 impl PageMenu {
     /// Adds the pages, their widgets and the Options entries of the pause menu and of the main menu (module docs).
