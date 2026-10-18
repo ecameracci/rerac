@@ -1028,7 +1028,9 @@ impl Camera {
         // State 0x81 with L2 / R2 held (0x13cae0 & 3): the leash off, the look from the smoothed target, the spring
         // 0.04 / 0.2 (and D+0x12..0x16 = 0: read only by the yaw-stabiliser branch below). The yaw stabiliser (gp
         // 0x16220c ≠ 0: D+0x12..0x16, 0x15ef40 from the yaw history 0x167340) is never on: its switch has no writer.
-        if h.state == 0x81 && inp.pad.held & 3 != 0 {
+        // Port-only, Strafing = Modern: the same hold while Ratchet strafes on foot (the hover's own strafe camera),
+        // so his motion does not swing the view round him (crate::hero::strafe); it ends with the strafe.
+        if (h.state == 0x81 && inp.pad.held & 3 != 0) || crate::hero::strafe::active(h) {
             self.set_leash(0);
             self.look_from_smoothed();
             self.set_h_spring(f32::from_bits(0x3d23_d70a), f32::from_bits(0x3e4c_cccd));

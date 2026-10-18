@@ -1771,10 +1771,14 @@ fn noclip_step(p: &mut Play, pad: &PadInput) {
     h.write_back(&mut p.game.mobys.mobys[hm]);
 }
 
+/// Ratchet's animation state as drawn: the strafe's backpedal shows the run reversed (port-only,
+/// `rc_game::hero::strafe::display_state`; the game's state itself steps on forward).
+fn hero_display_state(p: &Play) -> rc_formats::moby_anim::AnimState { rc_game::hero::strafe::display_state(&p.game.hero.strafe.legs, p.ratchet.state) }
+
 /// Ratchet's animation into his `MobyAnim` instance (never advanced there: `skip_advance`).
 fn publish_anim(p: &mut Play, anim: Option<&mut MobyAnim>) {
     let (Some(a), Some(k)) = (anim, p.hero_k) else { return };
-    let mut s = p.ratchet.state;
+    let mut s = hero_display_state(p);
     s.skip_advance = true;
     a.instances[k].state = s;
     a.snapshots[k] = p.ratchet.snapshot.clone();
@@ -2365,6 +2369,8 @@ fn tick(
         let mut o = gs.0.options().game_options();
         o.cheats = rc_game::cheats::Cheats(g.cheats_active);
         o.cheat_entry = g.game_beaten != 0 || g.completes != 0;
+        // The port's Strafing (crate::strafing), not in the saved game.
+        o.strafing = p.game.options.strafing;
         p.game.options = o;
         p.game.camera.opts = o.camera;
         svc_cell.borrow_mut().cheats = o.cheats;
@@ -2642,7 +2648,9 @@ fn upload(
     // modifiers (head look, lean, eyelids: the moby +0x64 list, rc_game::hero::idle) over it.
     let hm = &p.game.mobys.mobys[p.hero_id];
     let layers = rc_game::hero::anim::pose_layers_with(&p.game.hero.weapons.layers, &p.layer_joints, &p.ratchet.hold);
-    let f = moby_anim::evaluate_posed(class, &p.ratchet.state, p.ratchet.snapshot.as_ref(), &layers, &hm.joint_mods);
+    let mut f = moby_anim::evaluate_posed(class, &hero_display_state(&p), p.ratchet.snapshot.as_ref(), &layers, &hm.joint_mods);
+    // Port-only: the strafe's legs turned toward the motion (rc_game::hero::strafe::twist_rows).
+    rc_game::hero::strafe::twist_rows(&mut f, p.game.hero.strafe.legs.twist);
     for (k, b) in f.iter().take(p.slots as usize).flat_map(|r| r.iter().flatten().flat_map(|v| v.to_le_bytes())).enumerate() { palette[k] = b; }
     let rows = rows_bits(&hm.rows);
     // His light words +0x38 / +0x3c as `HeroEnvLighting` left them (the fog zone's light sets, the static light's ambient).

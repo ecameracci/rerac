@@ -151,6 +151,99 @@ fn novalis_idle_run_jump_and_camera() {
     assert!(coll_line(&n.mesh, pivot, cam, QueryFlags(0xb4)).is_none(), "camera inside the collision mesh");
 }
 
+/// `a − b` wrapped into [−π, π).
+fn wrap(a: f32, b: f32) -> f32 { (a - b + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI }
+
+/// Port-only Strafing (rc_game::hero::strafe, docs/plan/modern_strafing.md): with Modern, R2 held and the stick
+/// right, Ratchet moves to the camera's right while his yaw stays on the camera's (the legs turned toward the motion),
+/// the view holds its heading, and ✕ is the strafe flip; ✕ running forward is a plain jump 7. With Classic the same
+/// pad is the game's crouch (R2) and the run is the game's; Modern without L2 / R2 is Classic tick for tick.
+#[test]
+fn novalis_modern_strafe() {
+    use rc_game::hero::strafe::Strafing;
+    let Some(n) = novalis() else { eprintln!("skipped: no extracted/"); return; };
+    let start = |s: Strafing| {
+        let (mut g, _) = game(&n);
+        g.options.strafing = s;
+        let mut d = Driver::new(&n.ratchet);
+        d.run(&mut g, &n.ratchet, &n.mesh, PadInput::neutral(), 120);
+        (g, d)
+    };
+    let right = PadInput::neutral().stick(1.0, 0.0);
+
+    // Modern, R2 + stick right for 90 ticks.
+    let (mut g, mut d) = start(Strafing::Modern);
+    let (p0, cam0) = (g.hero.position(), g.camera.out.yaw().to_f32());
+    let mut worst = 0.0f32;
+    let mut twist = 0.0f32;
+    for t in 0..90 {
+        d.run(&mut g, &n.ratchet, &n.mesh, right.press(button::R2), 1);
+        let cam = g.camera.out.yaw().to_f32();
+        if t >= 10 { worst = worst.max(wrap(g.hero.rot[2].to_f32(), cam).abs()); }
+        twist = twist.min(g.hero.strafe.legs.twist);
+    }
+    let p1 = g.hero.position();
+    let (dx, dy) = (p1[0] - p0[0], p1[1] - p0[1]);
+    let dist = (dx * dx + dy * dy).sqrt();
+    let cam1 = g.camera.out.yaw().to_f32();
+    let side = wrap(dy.atan2(dx), cam0);
+    eprintln!("modern strafe: {dist} units at {side} from the camera's heading, yaw off the camera by at most {worst}, camera {cam0} -> {cam1}, twist {twist}, states {:x?}", dedup(&d.states[120..]));
+    assert!(d.states[120..].iter().all(|s| matches!(s, 0 | 2 | 3)), "no crouch while strafing: {:x?}", dedup(&d.states[120..]));
+    assert!(dist > 4.0, "strafed {dist}");
+    assert!((side + std::f32::consts::FRAC_PI_2).abs() < 0.2, "motion {side} rad from the camera's heading, not to its right");
+    assert!(worst < 0.02, "yaw left the camera's by {worst}");
+    assert!(wrap(cam1, cam0).abs() < 0.1, "the camera swung {cam0} -> {cam1}");
+    assert!(twist < -1.0, "legs not turned: {twist}");
+
+    // ✕ still strafing right: the strafe flip 0xb along the stick, the facing still on the camera.
+    let before = d.states.len();
+    let q0 = g.hero.position();
+    d.run(&mut g, &n.ratchet, &n.mesh, right.press(button::R2 | button::CROSS), 1);
+    d.run(&mut g, &n.ratchet, &n.mesh, right.press(button::R2), 60);
+    let q1 = g.hero.position();
+    let flip = dedup(&d.states[before..]);
+    let fside = wrap((q1[1] - q0[1]).atan2(q1[0] - q0[0]), g.camera.out.yaw().to_f32());
+    eprintln!("strafe flip: states {flip:x?}, {fside} rad from the camera's heading");
+    assert_eq!(flip.first(), Some(&0xb), "{flip:x?}");
+    assert!((fside + std::f32::consts::FRAC_PI_2).abs() < 0.3, "flip direction {fside}");
+
+    // Running forward with R2: ✕ is a jump 7, never the running long jump 9.
+    let (mut g, mut d) = start(Strafing::Modern);
+    d.run(&mut g, &n.ratchet, &n.mesh, PadInput::neutral().stick(0.0, -1.0).press(button::R2), 90);
+    let before = d.states.len();
+    d.run(&mut g, &n.ratchet, &n.mesh, PadInput::neutral().stick(0.0, -1.0).press(button::R2 | button::CROSS), 1);
+    d.run(&mut g, &n.ratchet, &n.mesh, PadInput::neutral().stick(0.0, -1.0).press(button::R2), 30);
+    let jump = dedup(&d.states[before..]);
+    eprintln!("strafe run jump: {jump:x?}");
+    assert_eq!(jump.first(), Some(&7));
+    // The same with Classic: the game's running long jump (R2 off: R2 is its crouch).
+    let (mut g, mut d) = start(Strafing::Classic);
+    d.run(&mut g, &n.ratchet, &n.mesh, PadInput::neutral().stick(0.0, -1.0), 90);
+    let before = d.states.len();
+    d.run(&mut g, &n.ratchet, &n.mesh, PadInput::neutral().stick(0.0, -1.0).press(button::CROSS), 1);
+    assert_eq!(d.states[before], 9, "Classic's running long jump");
+
+    // Classic, the same pad: R2 is the game's crouch 4.
+    let (mut g, mut d) = start(Strafing::Classic);
+    d.run(&mut g, &n.ratchet, &n.mesh, right.press(button::R2), 90);
+    eprintln!("classic R2 + right: states {:x?}", dedup(&d.states[120..]));
+    assert!(d.states[120..].contains(&4), "Classic R2 crouches");
+    assert!(!g.hero.strafe.held && g.hero.strafe.legs == Default::default(), "no strafe with Classic");
+
+    // Modern without L2 / R2 is Classic: the same run, tick for tick.
+    let script = |t: u32| if t < 60 { right } else if t < 61 { right.press(button::CROSS) } else { PadInput::neutral().stick(0.0, -1.0) };
+    let trace = |s: Strafing| {
+        let (mut g, mut d) = start(s);
+        let mut out = Vec::new();
+        for t in 0..150 {
+            d.run(&mut g, &n.ratchet, &n.mesh, script(t), 1);
+            out.push((g.hero.state, g.hero.position(), g.hero.rot[2], g.camera.out.yaw()));
+        }
+        out
+    };
+    assert!(trace(Strafing::Modern) == trace(Strafing::Classic), "Modern without the button differs from Classic");
+}
+
 /// Class `o_class` of level 1 (core block `moby_class/NNNN`) as an anim class.
 fn level_class(o_class: u32) -> Option<MobyAnimClass> {
     let blob = rc_formats::test_data::core_block(1, &format!("moby_class/{o_class:04}"))?;

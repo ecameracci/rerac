@@ -88,6 +88,7 @@ mod screen_canvas;
 mod session;
 mod shadow_render;
 mod standalone;
+mod strafing;
 mod pre_shadow;
 mod frame_log;
 mod shrub_billboard;
@@ -202,6 +203,8 @@ fn main() -> anyhow::Result<()> {
     .add_plugins(render_settings::RenderSettingsPlugin)
     // The mods folder beside the executable and the enabled set (crate::mods; the HUD reads the replacements).
     .add_plugins(mods::ModsPlugin)
+    // The Strafing option (crate::strafing).
+    .add_plugins(strafing::StrafingPlugin)
     .add_plugins((MaterialPlugin::<TfragMaterial>::default(), FlyCamPlugin, game_camera::GameCameraPlugin { fog: level.fog }))
     .add_plugins(occlusion::OcclusionPlugin)
     .add_plugins(tfrag_lod::TfragLodPlugin)
