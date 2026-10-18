@@ -238,7 +238,7 @@ fn value(s: u32, m: u32) -> Vtx {
 #ifdef PREPASS_PIPELINE
 // The sun's shadow map (crate::sun_shadow): the strip list this frame's mode draws at the slots' own positions (the
 // morphs follow the view's depth, which here is the light's), and only the alpha test's passing half
-// (gs_state::specialize_shadow).
+// (gs_state::specialize_shadow). A tfrag the camera's cull dropped (mode 0) casts its LOD-2 list (mode 6's).
 struct TfragShadowOutput {
     @builtin(position) position: vec4<f32>,
     @location(0) uv: vec2<f32>,
@@ -254,11 +254,11 @@ fn vertex(v: TfragVertex) -> TfragShadowOutput {
     let tf = v.tref.y & 0xffffu;
     let list = (v.tref.y >> 16u) & 3u;
     let m = modes[tf];
-    let mlist = select(select(0u, 1u, m == 8u || m == 10u), 2u, m == 6u);
+    let mlist = select(select(0u, 1u, m == 8u || m == 10u), 2u, m == 6u || m == 0u);
 #ifdef SHADOW_SKIP
     let skip = true;
 #else
-    let skip = m == 0u || mlist != list;
+    let skip = mlist != list;
 #endif
     if (skip) {
         out.position = vec4<f32>(2.0, 2.0, 2.0, 1.0);

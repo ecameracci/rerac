@@ -4,7 +4,7 @@
 // `occlusion`: for a pixel at view position C with normal N, taps S_i on a per-pixel rotated spiral of the radius's
 // screen size; each occludes by max(0, (S_i − C)·N − ε) / (|S_i − C|² + δ), faded by its distance over the radius.
 // ao = 1 − 2·Σ/taps (clamped), written to an R8 target. `apply`: a 4×4 depth-aware blur of that target, returned as
-// the factor mix(1, ao, strength) that the pass multiplies into the frame.
+// the factor mix(1, ao, strength) that the pass multiplies into the frame, except on the mobys (`moby_mask`).
 
 #import bevy_core_pipeline::fullscreen_vertex_shader::FullscreenVertexOutput
 #import rerac::fx_view::{view, fx_view_pos, fx_normal, fx_noise}
@@ -15,6 +15,26 @@
 @group(0) @binding(1) var depth: texture_depth_2d;
 #endif
 @group(0) @binding(2) var ao_tex: texture_2d<f32>;
+
+// crate::ao_render::AoMobys.
+struct AoMobys {
+    spheres: array<vec4<f32>, 32>,
+    feet: array<vec4<f32>, 8>,
+    count: u32,
+}
+@group(0) @binding(3) var<uniform> mobys: AoMobys;
+
+// 1 on a moby: inside one of the spheres and above its feet (0 over the sphere's outer fifth / at the feet).
+fn moby_mask(w: vec3<f32>) -> f32 {
+    var k = 0.0;
+    for (var i = 0u; i < mobys.count; i += 1u) {
+        let s = mobys.spheres[i];
+        let inside = 1.0 - smoothstep(0.8 * s.w, s.w, distance(w, s.xyz));
+        let above = smoothstep(0.0, 0.15, w.y - mobys.feet[i / 4u][i % 4u]);
+        k = max(k, inside * above);
+    }
+    return k;
+}
 
 fn depth_at(p: vec2<i32>) -> f32 {
     let lo = vec2<i32>(view.viewport.xy);
@@ -64,7 +84,8 @@ fn apply(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     let p = vec2<i32>(floor(in.position.xy));
     let d = depth_at(p);
     if (d <= 0.0) { return vec4<f32>(1.0); }
-    let z = -fx_view_pos(in.position.xy, d).z;
+    let c = fx_view_pos(in.position.xy, d);
+    let z = -c.z;
     let size = vec2<i32>(textureDimensions(ao_tex));
     var sum = 0.0;
     var weight = 0.0;
@@ -78,7 +99,8 @@ fn apply(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
             weight += w;
         }
     }
-    let ao = select(1.0, sum / weight, weight > 0.0);
+    var ao = select(1.0, sum / weight, weight > 0.0);
+    ao = mix(ao, 1.0, moby_mask((view.world_from_view * vec4<f32>(c, 1.0)).xyz));
     let k = mix(1.0, ao, view.params.z);
     return vec4<f32>(k, k, k, 1.0);
 }

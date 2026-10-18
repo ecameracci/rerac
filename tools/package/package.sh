@@ -72,6 +72,13 @@ cat > "$out/rerac-manifest.json" <<EOF
 {"schema":1,"name":"rerac","version":"$version","game":"rac1","runtime":"rerac$exe","extractor":"rerac-extract$exe","supported_discs":["SCUS_971.99"],"data_format":1}
 EOF
 
+# The settings folder (crates/rc-engine/src/render_settings.rs settings_path): the sessions and crash.log live there.
+case "$os" in
+  macos) settings='~/Library/Application Support/rerac/' ;;
+  windows) settings='%APPDATA%\rerac\' ;;
+  linux) settings='~/.config/rerac/' ;;
+esac
+
 cat > "$out/README.txt" <<EOF
 ReRAC $version ($os-$arch)
 A reimplementation of Ratchet & Clank (PS2). It contains no game data: it runs from data
@@ -90,10 +97,23 @@ By hand:
 Files: rerac (the game), rerac-extract (the extractor), assets/ (shaders, must stay next
 to rerac), rerac-manifest.json (the launcher's version manifest), data/ (your game data,
 made on the first start), memcard/ (your saves; on its first start a copy of the
-saves earlier builds kept in your user folder), logs/ (one log per session, the 10 newest; attach the
-latest to a bug report).
+saves earlier builds kept in your user folder), logs/ (one log per session, the 10 newest).
 Exit codes of rerac: 2 bad arguments, 3 data folder missing or incomplete, 4 data made for
 another version (re-extract).
+
+Reporting a bug:
+  1. While playing, press F8 at the moment something is wrong (once per bug). Each press
+     saves a picture of the game and where Ratchet is into the session's recording.
+  2. Quit the game. Every start of rerac records a session folder, named by its start
+     date and time, in ${settings}sessions
+     Zip the folder of the session with the bug and send it, with one line per F8 press
+     saying what is wrong. It holds the log, your inputs, and the settings and memory
+     card the game started from, so the bug can be replayed exactly as you played it.
+     Sessions with an F8 press are kept until you delete them; of the others, only the
+     10 newest are kept.
+  3. If the game crashed, the session folder also holds crash.txt; every crash is also
+     added to ${settings}crash.log
+  Say which version you played (ReRAC $version, $os-$arch).
 EOF
 if [ "$os" = windows ]; then
   sed -i 's#\./rerac#rerac#g; s/$/\r/' "$out/README.txt"
