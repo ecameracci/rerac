@@ -1,9 +1,25 @@
 # Changelog
 
-## Unreleased
+## v0.4.0-alpha
 
 - Mods: texture mods in a `mods` folder next to the game, turned on and off from Options → Mods. They can replace the HUD, fonts and icons, and the world, character, enemy and sky textures.
 - Port Options has three new graphics options: Ambient occlusion, Water (Enhanced: clear water with rippling reflections, light patterns on the riverbed and foam at the shore) and Particles (Soft: smoke no longer cuts into walls and floors). The Enhanced preset turns them all on. Shadows has a new Dynamic setting: everything (the level, plants, characters and objects) casts shadows from the sun, and the sun shines rays through the scenery. Original still looks like the PS2 game.
+- Aspect ratio has a new Fill setting: the picture takes the window's own shape, so ultrawide monitors have no black bars. 16:10, 16:9 and Fill show more of the world at the sides instead of stretching it.
+- Portable builds: the game keeps its data in a `data` folder next to it and asks for the .iso on the first start. Saves go in a `memcard` folder next to it, starting from a copy of the saves from earlier versions.
+- Started on its own, the game writes a log for each run to a `logs` folder next to it, shows errors and crashes in a dialog, and on Windows no console window stays open while playing. `rerac.exe` has the ReRAC icon.
+- Bug reports: every run records its input and starting state so it can be replayed. Press F8 the moment something goes wrong to mark it.
+- Steam Controller on Windows: presses no longer get lost and buttons no longer stick under Steam Input.
+- Start skips the logos at startup, and the pop between the logos and the title screen is gone.
+- Veldin Orbit keeps its music after the fleet ship mission.
+- Options: Quit Game shows Qwark's picture again, and Port Options has its own picture.
+- The pause menu no longer shows leftover boxes behind it after watching a movie or scene from Goodies.
+- Goodies: the Sketchbook, Epilogue, Making Of and Commercials descriptions show on every planet, instead of "Paradox! This message does not exist".
+- The save confirm highlights the slot being overwritten.
+- Cutscenes: Clank's antenna glow sits on his antenna instead of the ground beside him, and Ratchet wears his helmet and O2 mask where he should.
+- Ratchet wears the Persuader, Map-o-Matic and Bolt Grabber once he has them.
+- Jumping off ice keeps the slide's speed.
+- Mine Glove: the mine shows in the glove, and a mine's explosion has its full cloud of smoke.
+- Clank's rotor hums while he glides.
 
 ## v0.3.5-alpha
 
