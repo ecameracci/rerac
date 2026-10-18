@@ -1,6 +1,7 @@
 //! **Port-only** (not in the game): the "Port Options" page, for settings the PS2 never had (the graphics options and
 //! their preset, anti-aliasing, ambient occlusion, water, particles, sun rays, the moby shadows off or as sun shadows,
-//! the gameplay and cutscene aspects, the render resolution, fullscreen and the FPS limit).
+//! the gameplay and cutscene aspects, the render resolution, fullscreen, the FPS limit and the quick-select ring's
+//! hold of the world).
 //! Spec: docs/plan/menus.md "Port-only settings"; the graphics rows: docs/plan/graphics_options.md (every row's first
 //! value is the game's own look).
 //!
@@ -131,6 +132,9 @@ pub mod text {
     pub const WATER: i32 = -0x1b1;
     pub const PARTICLES: i32 = -0x1b2;
     pub const SOFT: i32 = -0x1b3;
+    pub const QUICK_SELECT: i32 = -0x1c0;
+    pub const CLASSIC: i32 = -0x1c1;
+    pub const MODERN: i32 = -0x1c2;
     /// The main menu's Mods page (super::super::mods).
     pub const MODS: i32 = -0x200;
     pub const MODS_NONE: i32 = -0x201;
@@ -186,6 +190,9 @@ pub mod text {
             WATER => b"Water",
             PARTICLES => b"Particles",
             SOFT => b"Soft",
+            QUICK_SELECT => b"Quick Select",
+            CLASSIC => b"Classic",
+            MODERN => b"Modern",
             MODS => b"Mods",
             MODS_NONE => b"No mods found",
             MODS_WHERE => b"Put mods in the mods folder beside the game",
@@ -233,6 +240,9 @@ pub enum Setting {
     /// The most frames drawn a second: value 0 30, 1 60 (the default, the game's tick rate), 2 120, 3 144, 4 unlimited
     /// (no vsync). The game still ticks at 60 Hz.
     FrameLimit,
+    /// The quick-select ring (docs/plan/quick_select_pause.md): value 0 Classic (the game's: the world runs under the
+    /// ring), 1 Modern (the world holds while △ keeps the ring open: `crate::tick::quick_select_hold`).
+    QuickSelect,
 }
 
 /// One row: the setting, its label and the ids of its values (✕ cycles through them).
@@ -259,6 +269,7 @@ pub const ENTRIES: &[Entry] = &[
     Entry { setting: Setting::Resolution, label: text::RESOLUTION, values: &[text::RES_WINDOW, text::RES_416, text::RES_720, text::RES_1080, text::RES_1440, text::RES_2160] },
     Entry { setting: Setting::Fullscreen, label: text::FULLSCREEN, values: &[text::OFF, text::ON] },
     Entry { setting: Setting::FrameLimit, label: text::FPS_LIMIT, values: &[text::FPS_30, text::FPS_60, text::FPS_120, text::FPS_144, text::UNLIMITED] },
+    Entry { setting: Setting::QuickSelect, label: text::QUICK_SELECT, values: &[text::CLASSIC, text::MODERN] },
 ];
 
 /// The list's run-time state: cursor, each row's value index and each row's selectable values (bit k = value k;

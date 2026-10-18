@@ -562,6 +562,10 @@ sub-pages (`crates/rc-game/src/menus/pause/port.rs`, `PageMenu::install_port_pag
   the frame's centred 4:3 box, the HUD layer is 51 / 85 game px wider on each side at 16:10 / 16:9 (the frame's own margin at Fill; its left/right-anchored slots move out,
   primitives spanning the screen stretch) and the menu pages stay clipped to the box (`Prim::boxed`). The world is not re-rendered under the menu (the snapshot is shown), so the new
   setting is visible from the first gameplay frame after the close.
+  Quick Select (last row): Classic (default: the game's, the world runs under the ring) / Modern (the world holds while
+  △ keeps the quick-select ring or Clank's command page open; the ring, its selection and the hand swap are the
+  game's) → `gameplay::QuickSelectMode` (key `quick_select`, `RC_QUICK_SELECT=classic|modern` at start);
+  docs/plan/quick_select_pause.md.
 * **Device support**: the row offers only the sample counts the GPU can use for every multisampled world attachment
   (`render_settings::SupportedMsaa`, detected at start from `RenderAdapter::get_texture_format_features` for
   `Rgba8UnormSrgb` and `Depth32Float` — the WebGPU guarantee {1, 4} when the device lacks
