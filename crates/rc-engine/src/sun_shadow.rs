@@ -6,17 +6,19 @@
 //!   `ShadowGame::sun_light`, fixed for the level; a fixed high sun where there is no game), raised to at least
 //!   [`MIN_ELEVATION`] on the same bearing. Bevy renders its
 //!   cascades from the materials' shadow halves (the shaders' `PREPASS_PIPELINE` branch,
-//!   gs_state::specialize_shadow): tfrags (a tfrag the game culls for the camera casts with its LOD-2 list, so the
-//!   shadows do not change with the view), ties, shrubs (cut out by their texture's alpha) and mobys. The metal pass
-//!   and every blended or effect draw cast nothing. crate::sun_rays shows the same sun's rays.
+//!   gs_state::specialize_shadow): tfrags and ties at their full detail whatever the camera's LOD and cull (tfrags
+//!   their LOD-0 list, ties LOD 0 unmorphed and never hidden from Bevy while the sun casts: crate::tie_lod), so the
+//!   world's shadows do not change with the view; shrubs (cut out by their texture's alpha) and mobys as drawn. The
+//!   metal pass and every blended or effect draw cast nothing. crate::sun_rays shows the same sun's rays.
 //! - **Receiver:** the port's shaders compute no Bevy lighting, so after the opaque world a full-screen pass
 //!   (`assets/shaders/sun_shadow.wgsl`) rebuilds each pixel's world position and normal from the depth buffer,
 //!   looks it up in its cascade (normal-offset bias, 3×3 PCF on a comparison sampler) and multiplies the frame by
 //!   `1 − STRENGTH` where shadowed. Only surfaces turned toward the light are darkened (the game's baked lighting
 //!   already shades the others), and the shadows fade out toward [`MAX_DISTANCE`].
 //!
-//! Limits: the game culls ties and mobys outside the camera's view (and those its occlusion data hides) before they
-//! are drawn, so such a caster casts nothing; the blended draws (water, particles, effects) are not shadowed.
+//! Limits: the game culls mobys outside the camera's view (and those its occlusion data hides) before they are
+//! drawn, so such a moby casts nothing, and a shrub casts only within its draw distance of the camera; the blended
+//! draws (water, particles, effects) are not shadowed.
 //!
 //! Dev switches: `RC_SUN_DIR=x,y,z` (the light's travel direction, world), `RC_SUN_CASTERS` ([`casts`]),
 //! `RC_SUN_DEBUG=1` (the receiver replaces the frame: cascade 0/1/2/3 red/green/blue/yellow, dark where shadowed;

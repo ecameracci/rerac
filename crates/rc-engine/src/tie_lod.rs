@@ -15,7 +15,9 @@
 //! its part entities, written only when its state changes, so Bevy does not queue it and the GPU does not
 //! run its vertices (all three LODs) just to drop them. The vertex shader's `LOD_CULLED` test stays as the
 //! backstop; the per-instance rules are unchanged. The written state takes effect the same frame (the system
-//! runs before `VisibilitySystems::VisibilityPropagate`).
+//! runs before `VisibilitySystems::VisibilityPropagate`). While Shadows is Dynamic (crate::sun_shadow `KeyLight`)
+//! nothing is hidden: the sun's cascades cull with their own frusta and every tie casts at LOD 0 (tie.wgsl), so its
+//! shadow does not appear and vanish with the camera's cull; the camera's view keeps Bevy's frustum culling.
 //!
 //! Environment: `RC_TIE_LOD=0` forces every drawn instance to LOD 0 with k = 0 (culling unchanged);
 //! `RC_TIE_LOD_TINT=1` tints LOD 1 red and LOD 2 blue; `RC_TIE_CPU_CULL=0` leaves culled instances visible
@@ -246,10 +248,11 @@ pub fn update_tie_lods(
     occl: Option<ResMut<crate::occlusion::OcclusionFrame>>,
     mut buffers: ResMut<Assets<ShaderBuffer>>,
     cams: Query<(&Transform, Option<&Projection>), With<Camera3d>>,
-    (time, gfx): (Res<Time>, Res<crate::graphics::GraphicsSettings>),
+    (time, gfx, sun): (Res<Time>, Res<crate::graphics::GraphicsSettings>, Option<Res<crate::sun_shadow::KeyLight>>),
     mut last_print: Local<f32>,
     mut vis: Query<&mut Visibility>,
 ) {
+    let hide = sun.is_none_or(|s| !s.dynamic);
     let scale = gfx.detail.lod_scale();
     let (Some(mut state), Some((cam, proj))) = (state, cams.iter().next()) else { return };
     let tans = game_camera::projection_tans(proj);
@@ -274,7 +277,7 @@ pub fn update_tie_lods(
     if state.cpu_cull {
         let st = &mut *state;
         for (ii, rec) in words.as_chunks::<4>().0.iter().enumerate() {
-            let drawn = rec[0] & 0xff != LOD_CULLED;
+            let drawn = !hide || rec[0] & 0xff != LOD_CULLED;
             if drawn == st.shown[ii] || st.entities[ii].is_empty() { continue; }
             st.shown[ii] = drawn;
             let want = if drawn { Visibility::Inherited } else { Visibility::Hidden };
