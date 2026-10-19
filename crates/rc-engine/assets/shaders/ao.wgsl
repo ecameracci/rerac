@@ -24,9 +24,10 @@ struct AoMobys {
 }
 @group(0) @binding(3) var<uniform> mobys: AoMobys;
 
-// 1 on a moby: inside one of the spheres, above its feet and no deeper than its centre (0 over the sphere's outer
-// fifth, at the feet, and from 0.2 units behind the centre: the wall or floor a character stands against is behind
-// the body the camera sees, and keeps its occlusion). `c` is the pixel's view position.
+// 1 on a moby: inside one of the spheres, above its feet and in front of its centre (0 over the sphere's outer
+// fifth, at the feet, and from the centre back, fading over the 0.1 units in front of it: the wall or floor a
+// character stands or hangs against is behind the body the camera sees, and keeps its occlusion). `c` is the pixel's
+// view position.
 fn moby_mask(c: vec3<f32>) -> f32 {
     let w = (view.world_from_view * vec4<f32>(c, 1.0)).xyz;
     var k = 0.0;
@@ -35,7 +36,7 @@ fn moby_mask(c: vec3<f32>) -> f32 {
         let inside = 1.0 - smoothstep(0.8 * s.w, s.w, distance(w, s.xyz));
         let above = smoothstep(0.0, 0.15, w.y - mobys.feet[i / 4u][i % 4u]);
         let behind = (view.view_from_world * vec4<f32>(s.xyz, 1.0)).z - c.z;
-        let front = 1.0 - smoothstep(0.0, 0.2, behind);
+        let front = 1.0 - smoothstep(-0.1, 0.0, behind);
         k = max(k, inside * above * front);
     }
     return k;
