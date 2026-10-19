@@ -214,6 +214,7 @@ impl Plugin for MobyAttachPlugin {
             .add_systems(PreUpdate, setup)
             // After moby_anim's FixedUpdate tick (Ratchet's advance) within the same fixed step.
             .add_systems(FixedPostUpdate, update)
+            .add_plugins(MaterialPlugin::<RopeMaterial>::default())
             .add_systems(PostUpdate, (upload, rope_draw))
             // After the vendor / scene show-again passes (they re-show every item entity), before visibility.
             .add_systems(
@@ -741,13 +742,36 @@ fn upload(
 // ---------------------------------------------------------------------------------------------------------------
 // The Swingshot's rope (`0x2dba30`, registered for the frame by the hand item's update through `0x21afe0`).
 
-/// The rope's entity and mesh (created on the first frame the level has the effect texture).
+/// The rope's entity, persistent mesh and quad buffer (created on the first frame the level has the effect texture).
 #[derive(Default)]
 struct RopeGfx {
     entity: Option<Entity>,
     mesh: Option<Handle<Mesh>>,
-    shown: bool,
+    buffer: Option<Handle<ShaderBuffer>>,
+    /// Quads the mesh holds; grown (the mesh replaced) only when a rope needs more.
+    capacity: usize,
+    bytes: Vec<u8>,
 }
+
+/// Quads of the first rope mesh: 51 units at 0.2 per quad, past the swing range's default 30.
+const ROPE_QUADS: usize = 256;
+
+/// The rope's corners for `rope.wgsl` (binding 100): `count: vec4<u32>` (x), then per quad its four corners
+/// `vec4<f32>` (Bevy world xyz). Nothing is re-inserted into `Assets<Mesh>` while the rope moves, so the mesh allocator
+/// and every material's specialisation check (`AssetChanged<Mesh3d>`, over all mesh entities) see no change.
+#[derive(Asset, TypePath, bevy::render::render_resource::AsBindGroup, Debug, Clone)]
+pub struct RopeQuads {
+    #[storage(100, read_only, visibility(vertex))]
+    pub quads: Handle<ShaderBuffer>,
+}
+
+impl bevy::pbr::MaterialExtension for RopeQuads {
+    fn vertex_shader() -> bevy::shader::ShaderRef { "shaders/rope.wgsl".into() }
+    fn enable_prepass() -> bool { false }
+    fn enable_shadows() -> bool { false }
+}
+
+pub type RopeMaterial = bevy::pbr::ExtendedMaterial<StandardMaterial, RopeQuads>;
 
 /// `0x2dba30`'s strip in game coordinates: quads `(v0, e0, v1, e1)` with the UVs (0,0), (1,0), (0,1), (1,1). From
 /// the hook toward the hand's joint 0 in steps of at most 0.2; the first edge is the hook ± 0.05 in z, each next
@@ -786,15 +810,17 @@ pub fn rope_quads(r: &rc_game::hero::swingshot::Rope, camera: [f32; 3]) -> Vec<[
     out
 }
 
-fn rope_mesh(quads: &[[[f32; 3]; 4]]) -> Mesh {
+/// `capacity` quads for `rope.wgsl`: vertex `4q + k` has position.x = `q << 2 | k` and corner k's UV; quad q is
+/// the triangles (0, 1, 2), (1, 3, 2).
+fn rope_mesh(capacity: usize) -> Mesh {
     use bevy::mesh::{Indices, PrimitiveTopology};
-    let mut pos = Vec::with_capacity(quads.len() * 4);
-    let mut uv = Vec::with_capacity(quads.len() * 4);
-    let mut idx = Vec::with_capacity(quads.len() * 6);
-    for (k, q) in quads.iter().enumerate() {
+    let mut pos = Vec::with_capacity(capacity * 4);
+    let mut uv = Vec::with_capacity(capacity * 4);
+    let mut idx = Vec::with_capacity(capacity * 6);
+    for k in 0..capacity {
         let b = (4 * k) as u32;
-        for (v, t) in q.iter().zip([[0.0f32, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]]) {
-            pos.push(crate::tfrag_render::game_to_bevy(*v).to_array());
+        for (c, t) in [[0.0f32, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]].into_iter().enumerate() {
+            pos.push([(b + c as u32) as f32, 0.0, 0.0]);
             uv.push(t);
         }
         idx.extend_from_slice(&[b, b + 1, b + 2, b + 1, b + 3, b + 2]);
@@ -805,7 +831,19 @@ fn rope_mesh(quads: &[[[f32; 3]; 4]]) -> Mesh {
         .with_inserted_indices(Indices::U32(idx))
 }
 
-/// Draws the rope of this tick (none: hidden). Effect texture 0xf (`GetEffectTex(0xf)`, bilinear, repeat), vertex
+/// [`RopeQuads`]'s buffer for `quads` into `bytes` (sized for `capacity` quads; the corners in Bevy world).
+fn rope_bytes(bytes: &mut Vec<u8>, quads: &[[[f32; 3]; 4]], capacity: usize) {
+    bytes.resize(16 + capacity * 64, 0);
+    bytes[0..4].copy_from_slice(&(quads.len() as u32).to_le_bytes());
+    for (q, dst) in quads.iter().zip(bytes[16..].as_chunks_mut::<16>().0.as_chunks_mut::<4>().0) {
+        for (v, c) in q.iter().zip(dst) {
+            for (x, d) in crate::tfrag_render::game_to_bevy(*v).to_array().into_iter().zip(c.as_chunks_mut::<4>().0) { *d = x.to_le_bytes(); }
+        }
+    }
+}
+
+/// Draws the rope of this tick (none: zero quads). The entity is spawned with the level and stays visible, so its
+/// pipeline and buffer are ready before the first swing (spawned at first sight it missed its first 3 frames). Effect texture 0xf (`GetEffectTex(0xf)`, bilinear, repeat), vertex
 /// colour 0x80808080 (the texture as it is), GS alpha 0x80 = 1.0 (the texture's alpha doubled), alpha blended.
 #[allow(clippy::too_many_arguments)]
 fn rope_draw(
@@ -816,7 +854,8 @@ fn rope_draw(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut images: ResMut<Assets<Image>>,
-    mut mats: ResMut<Assets<StandardMaterial>>,
+    mut mats: ResMut<Assets<RopeMaterial>>,
+    mut buffers: ResMut<Assets<ShaderBuffer>>,
 ) {
     // A runtime level change (crate::level_switch): the rope's entity is gone.
     if generation.is_changed() { *st = RopeGfx::default(); }
@@ -824,7 +863,6 @@ fn rope_draw(
     let item = &play.game.hero.swing.item;
     let rope = item.rope.filter(|_| item.alive);
     if st.entity.is_none() {
-        if rope.is_none() { return; }
         let Some(t) = level.0.particles.textures.as_ref().and_then(|t| t.fx_textures.get(0xf)).and_then(|t| t.as_ref()) else { return };
         use bevy::image::{ImageAddressMode, ImageFilterMode, ImageSampler, ImageSamplerDescriptor};
         use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
@@ -838,26 +876,25 @@ fn rope_draw(
             ..default()
         });
         let image = images.add(img);
-        let mat = mats.add(StandardMaterial { base_color_texture: Some(image), unlit: true, alpha_mode: AlphaMode::Blend, cull_mode: None, double_sided: true, fog_enabled: false, ..default() });
-        let mesh = meshes.add(rope_mesh(&[]));
+        rope_bytes(&mut st.bytes, &[], ROPE_QUADS);
+        let buffer = buffers.add(ShaderBuffer::new(&st.bytes, bevy::asset::RenderAssetUsages::default()));
+        let base = StandardMaterial { base_color_texture: Some(image), unlit: true, alpha_mode: AlphaMode::Blend, cull_mode: None, double_sided: true, fog_enabled: false, ..default() };
+        let mat = mats.add(RopeMaterial { base, extension: RopeQuads { quads: buffer.clone() } });
+        let mesh = meshes.add(rope_mesh(ROPE_QUADS));
         let e = commands
-            .spawn((Name::new("Swingshot rope"), Mesh3d(mesh.clone()), MeshMaterial3d(mat), Transform::IDENTITY, Visibility::Hidden, bevy::camera::visibility::NoFrustumCulling))
+            .spawn((Name::new("Swingshot rope"), Mesh3d(mesh.clone()), MeshMaterial3d(mat), Transform::IDENTITY, Visibility::Inherited, bevy::camera::visibility::NoFrustumCulling))
             .id();
-        (st.entity, st.mesh) = (Some(e), Some(mesh));
+        (st.entity, st.mesh, st.buffer, st.capacity) = (Some(e), Some(mesh), Some(buffer), ROPE_QUADS);
     }
-    let (Some(e), Some(h)) = (st.entity, st.mesh.clone()) else { return };
-    match rope {
-        Some(r) => {
-            let cam = play.game.camera.out.pos_f32();
-            if let Some(mut m) = meshes.get_mut(&h) { *m = rope_mesh(&rope_quads(&r, cam)); }
-            if !st.shown { commands.entity(e).insert(Visibility::Inherited); }
-            st.shown = true;
-        }
-        None => {
-            if st.shown { commands.entity(e).insert(Visibility::Hidden); }
-            st.shown = false;
-        }
+    let (Some(h), Some(b)) = (st.mesh.clone(), st.buffer.clone()) else { return };
+    let quads = rope.map_or_else(Vec::new, |r| rope_quads(&r, play.game.camera.out.pos_f32()));
+    if quads.len() > st.capacity {
+        st.capacity = quads.len().next_power_of_two();
+        let _ = meshes.insert(&h, rope_mesh(st.capacity));
     }
+    let capacity = st.capacity;
+    rope_bytes(&mut st.bytes, &quads, capacity);
+    crate::asset_write::set_buffer(&mut buffers, &b, &st.bytes);
 }
 
 #[cfg(test)]
@@ -909,6 +946,31 @@ mod tests {
             let want: std::collections::HashSet<Entity> = classes.iter().zip(&ents).filter(|(c, _)| Some(**c) == step).flat_map(|(_, e)| e.iter().copied()).collect();
             assert_eq!(shown, want, "held {step:?}");
         }
+    }
+
+    /// The rope buffer: the count, then each quad's four corners in Bevy world at 16-byte strides; the mesh's vertex
+    /// 4q + k carries q << 2 | k and corner k's UV, in the strip's triangle order.
+    #[test]
+    fn rope_buffer_and_mesh_layout() {
+        use bevy::mesh::{Indices, VertexAttributeValues as V};
+        let q = [[[1.0f32, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0], [10.0, 11.0, 12.0]]; 2];
+        let mut bytes = Vec::new();
+        rope_bytes(&mut bytes, &q, 4);
+        assert_eq!(bytes.len(), 16 + 4 * 64);
+        assert_eq!(u32::from_le_bytes(bytes[0..4].try_into().unwrap()), 2);
+        let f = |at: usize| f32::from_le_bytes(bytes[at..at + 4].try_into().unwrap());
+        for (k, v) in q[1].iter().enumerate() {
+            let want = crate::tfrag_render::game_to_bevy(*v).to_array();
+            let at = 16 + 64 + 16 * k;
+            assert_eq!([f(at), f(at + 4), f(at + 8)], want);
+        }
+        let m = rope_mesh(2);
+        let Some(V::Float32x3(pos)) = m.attribute(Mesh::ATTRIBUTE_POSITION) else { panic!("positions") };
+        assert_eq!(pos.iter().map(|p| p[0] as u32).collect::<Vec<_>>(), (0..8).collect::<Vec<_>>());
+        let Some(V::Float32x2(uv)) = m.attribute(Mesh::ATTRIBUTE_UV_0) else { panic!("uvs") };
+        assert_eq!(uv[4..8], [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]]);
+        let Some(Indices::U32(idx)) = m.indices() else { panic!("indices") };
+        assert_eq!(idx[6..12], [4, 5, 6, 5, 7, 6]);
     }
 
     /// The extras' attach words (7 / 8) index [`HERO_LISTS`] to Ratchet's lists 29 / 30, the ones the item
