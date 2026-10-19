@@ -113,6 +113,15 @@ saves earlier builds kept in your user folder), logs/ (one log per session, the 
 Exit codes of rerac: 2 bad arguments, 3 data folder missing or incomplete, 4 data made for
 another version (re-extract).
 
+Settings: the Port Options page saves its options in ${settings}settings.toml
+(plain "key = value" lines). A settings.toml you put in this folder, next to rerac,
+overrides the options it lists and only those: use it to give this folder its own
+settings, or to try a setting for a while without changing your usual ones. Changing
+one of those options in the game writes the change to this folder's file; delete its
+line to go back to your usual value. To keep the saves in another folder, add
+  memcard_dir = <folder>
+(a relative folder is taken from the folder of the settings.toml that sets it).
+
 Reporting a bug:
   1. While playing, press F8 at the moment something is wrong (once per bug). Each press
      saves a picture of the game and where Ratchet is into the session's recording.
