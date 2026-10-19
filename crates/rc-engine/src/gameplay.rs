@@ -240,6 +240,9 @@ impl Plugin for GameplayPlugin {
         if let Some((gs, sess)) = self.boot.lock().unwrap_or_else(|e| e.into_inner()).take() {
             app.insert_resource(Persistent(gs)).insert_resource(Session(sess));
         }
+        let qs = QuickSelectMode::startup();
+        if qs != QuickSelectMode::default() { println!("gameplay: Quick Select {} (the world holds while △ keeps the ring open)", qs.key()); }
+        app.insert_resource(qs);
         if !enabled() {
             println!("gameplay: RC_PLAY=0: fly camera only, no game tick");
             return;
@@ -564,6 +567,45 @@ fn load_game_state(root: &std::path::Path, index: u32) -> anyhow::Result<(GameSt
 #[derive(Resource, Default)]
 pub(crate) struct TickBudget(pub(crate) u32);
 
+/// Port-only: the Port Options' "Quick Select" row (`rc_game::menus::pause::port::Setting::QuickSelect`;
+/// docs/plan/quick_select_pause.md). Modern: [`tick`] runs `Game::hold_tick` while `rc_game::tick::quick_select_hold`.
+#[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum QuickSelectMode {
+    #[default]
+    Classic,
+    Modern,
+}
+
+impl QuickSelectMode {
+    /// In the row's value order.
+    pub const ALL: [QuickSelectMode; 2] = [QuickSelectMode::Classic, QuickSelectMode::Modern];
+    const KEY: &str = "quick_select";
+
+    pub fn index(self) -> u8 { self as u8 }
+    pub fn from_index(v: u8) -> Self { Self::ALL.get(v as usize).copied().unwrap_or_default() }
+    pub fn modern(self) -> bool { self == QuickSelectMode::Modern }
+
+    pub fn key(self) -> &'static str {
+        match self {
+            QuickSelectMode::Classic => "classic",
+            QuickSelectMode::Modern => "modern",
+        }
+    }
+
+    fn parse(s: &str) -> Option<Self> { Self::ALL.into_iter().find(|m| m.key().eq_ignore_ascii_case(s.trim())) }
+
+    /// The start value: `RC_QUICK_SELECT` (classic | modern; the scripted and capture runs, which read no settings
+    /// file), else the port settings file's, else Classic.
+    pub fn startup() -> Self {
+        std::env::var("RC_QUICK_SELECT").ok().as_deref().and_then(Self::parse)
+            .or_else(|| crate::render_settings::load_key(Self::KEY).as_deref().and_then(Self::parse))
+            .unwrap_or_default()
+    }
+
+    /// Writes the setting into the port settings file.
+    pub fn save(self) { crate::render_settings::save_key(Self::KEY, self.key()); }
+}
+
 /// The black frames between the death fade and the respawn: the PS2's `LoadLevelCoreData(0, 1)` re-reads the level
 /// from the disc with the screen black (measured on the original: 0.70 s after the 16-frame fade; the port's reload
 /// takes a frame, so the black is held for this many frames).
@@ -653,6 +695,11 @@ pub struct Play {
     /// Port-only: where Ratchet met the water since the last water draw, (game x, game y, strength), for Water
     /// Enhanced's rings (crate::water_render, which drains it; [`water_contacts`]).
     pub water_contacts: Vec<[f32; 3]>,
+    /// Port-only Quick Select: Modern ([`QuickSelectMode`]): this fixed step's tick was the held world's
+    /// (`Game::hold_tick`; the sky stars, the moby animation and the water's tick skip their step), and the held ticks so far
+    /// (crate::menu_render: the ring's frame test and its cursor pulse, as 0x15f5cc stays).
+    pub qs_hold: bool,
+    pub qs_held: u64,
 }
 
 impl Play {
@@ -688,11 +735,11 @@ pub fn level_ports() -> &'static rc_game::moby_update::classes::LevelPorts {
 /// `Help_Update` with `force_help_message(5, 0)` (`InLevelFrameUpdate` only: the scene / vendor frames run just the
 /// dialogue player's step), its opening sound and the voice line (`help_audio[lang·150 + n]`), and the records and
 /// log back into the saved game.
-fn help_frame(p: &mut Play, report: &rc_game::tick::TickReport, other_frame: bool, gs: Option<&mut GameState>, audio: Option<&mut crate::audio_out::AudioOut>) {
+fn help_frame(p: &mut Play, hero_ran: bool, other_frame: bool, gs: Option<&mut GameState>, audio: Option<&mut crate::audio_out::AudioOut>) {
     use rc_game::help::{self, HelpInputs, VoiceCmd};
     help::apply_hero(&mut p.svc.help, &mut p.game.hero.help);
     let h = &p.game.hero;
-    if !other_frame && h.mode == 0 && matches!(report.hero, HeroTick::Ran) {
+    if !other_frame && h.mode == 0 && hero_ran {
         let types: Vec<i32> = p.item_data.as_ref().map_or_else(Vec::new, |d| d.defs.iter().map(|d| d.slot).collect());
         let counter = p.game.counter as i32 - 1;
         for (msg, rec) in help::hero_hints(h.state, h.group, &h.owned.0, &types, counter, &p.svc.help.records) { p.svc.help.request(msg, rec); }
@@ -1576,6 +1623,8 @@ fn setup(
         help_vag: None,
         help_debug: std::env::var("RC_HUD_HELP").ok().and_then(|v| v.trim().parse().ok()),
         water_contacts: Vec::new(),
+        qs_hold: false,
+        qs_held: 0,
         debug_hits: std::env::var("RC_DEBUG_HIT").ok().map(|v| {
             v.split(',').filter_map(|h| {
                 let (a, b) = h.trim().split_once('@')?;
@@ -2183,7 +2232,7 @@ fn tick(
     play: Option<ResMut<Play>>,
     level: Res<crate::Level>,
     pad: Res<PadFrame>,
-    script: Res<PlayScript>,
+    (script, qs_mode): (Res<PlayScript>, Res<QuickSelectMode>),
     source: Res<CameraSource>,
     mut budget: ResMut<TickBudget>,
     mut anim: Option<ResMut<MobyAnim>>,
@@ -2198,6 +2247,7 @@ fn tick(
     (mut held, ammo, mut audio, mut hud_feed): HudAudio,
 ) {
     let Some(mut play) = play else { return };
+    play.qs_hold = false;
     // Mode 5's world frames (crate::interact_render: substates 0 / 2) run one tick in the scene form.
     let world_frame = mode.as_ref().is_some_and(|m| !m.state.mode.advances_tick() && m.world_tick);
     if mode.as_ref().is_some_and(|m| !m.state.mode.advances_tick()) && !world_frame { return; }
@@ -2259,6 +2309,18 @@ fn tick(
     // Dev builds: the noclip takes the pad (the tick sees it neutral; noclip_step moves the hero after it).
     let noclip_pad = p.noclip.map(|_| input);
     let input = if noclip_pad.is_some() { PadInput::neutral() } else { input };
+    // Port-only Quick Select: Modern (docs/plan/quick_select_pause.md): △ held with the ring open (as crate::menu_render
+    // left it) holds the world: the pad only (the ring and the pause tests read it), and the help's dialogue step (the
+    // scene / vendor frames' form); no counter 0x15f5cc, no play time 0x15eea4, as `FUN_002ab960` does not run.
+    let ring_open = mode.as_ref().is_some_and(|m| m.ring_open);
+    if !world_frame && rc_game::tick::quick_select_hold(qs_mode.modern(), ring_open, Some(&input.bytes())) {
+        p.game.hold_tick(Some(&input.bytes()));
+        p.qs_hold = true;
+        p.qs_held += 1;
+        if let Some(gs) = state.as_deref() { p.svc.help.sync_in(&gs.0); }
+        help_frame(p, false, true, state.as_deref_mut().map(|s| &mut s.0), audio.as_deref_mut());
+        return;
+    }
     // The view of the last rendered frame (0x16d140, `FastBSphereCheck`): the main camera as last drawn.
     let tans = particles.as_deref().map_or_else(|| crate::particle_render::view_tans(None), |s| s.view_tan);
     let view_cull = cams.iter().next().map(|t| crate::particle_render::bsphere_view(t, tans));
@@ -2489,7 +2551,7 @@ fn tick(
         println!("cheats: tick {}: cheat {} {} (the move entry 0x2285a0)", p.game.counter, t.slot, if t.on { "enabled" } else { "disabled" });
     }
     // The help system (rc_game::help), then the play time 0x15eea4 (`FUN_002ab960` at the tick's end).
-    help_frame(p, &report, scene_frame || world_frame, state.as_deref_mut().map(|s| &mut s.0), audio_cell.borrow_mut().as_deref_mut());
+    help_frame(p, matches!(report.hero, HeroTick::Ran), scene_frame || world_frame, state.as_deref_mut().map(|s| &mut s.0), audio_cell.borrow_mut().as_deref_mut());
     map_tick(p, &report, state.as_deref().map(|s| &s.0));
     if let Some(gs) = state.as_mut() { gs.0.global.play_time += 1; }
     // Moby sounds: queued and counted (no moby-sound entry in rc_game::audio yet).

@@ -22,6 +22,9 @@
 //! **Sound** ([`Game::tick_with_sound`]): the sound step runs after the camera and before the counter
 //! increment on the same stream (the occlusion origin's 3 draws every tick, the pitch bends of new plays);
 //! the moby loop's class sounds reach the audio layer through its `SoundSink` during the moby hook.
+//!
+//! **Port-only: the held world** (Port Options' Quick Select: Modern; docs/plan/quick_select_pause.md): while
+//! [`quick_select_hold`] is true the caller runs [`Game::hold_tick`] instead of the tick: the pad only.
 #![allow(clippy::neg_cmp_op_on_partial_ord, clippy::assign_op_pattern)] // FPU compare semantics and op order are spelled out on purpose.
 
 use crate::follow_camera::{CamInput, Camera, CameraOptions, CameraView};
@@ -41,6 +44,15 @@ pub const FIELD_RCNT1: u32 = 0x2580;
 
 /// The main loop's rule: 2 ticks when the frame took longer than one field (RCNT1 > 0x2580), else 1.
 pub fn ticks_for_frame(rcnt1_elapsed: u32) -> u32 { if rcnt1_elapsed > FIELD_RCNT1 { 2 } else { 1 } }
+
+/// Port-only (Quick Select: Modern; after rac1-native-game's `advanced_world_paused`, MIT): the world holds still this
+/// tick when `modern` is on, △ is held in this tick's pad block `pad_data` (PAD+0x1c0's bit 0x10: the mirror swaps only
+/// ←/→ and the lock modes leave +0x1c0 alone, so it is the block's own bit) and `ring_open`: HUD slot 3 holds the
+/// quick select `QuickSelectUpdate` 0x24d238 or Clank's command menu (L00 `0x238b80`) as the last HUD update left it.
+pub fn quick_select_hold(modern: bool, ring_open: bool, pad_data: Option<&[u8]>) -> bool {
+    let held = pad_data.filter(|d| d.len() >= 2).map_or(0, |d| ((((d[0] as u32) << 8) | d[1] as u32) ^ 0xffff) & crate::pad::button::TRIANGLE);
+    modern && ring_open && held != 0
+}
 
 /// Game-wide options the tick reads.
 #[derive(Clone, Copy, Debug, Default)]
@@ -209,6 +221,14 @@ impl Game {
     /// `MobyLoadTimeUpdatePass`, so the load pass runs at counter 0 and the first gameplay tick sees 1. Call it
     /// once, after the caller's `Scheduler::load_pass`.
     pub fn finish_load(&mut self) { self.counter += 1; }
+
+    /// Port-only: a tick of the held world ([`quick_select_hold`]): `UpdatePad` with `pad_data` (the ring and the pause
+    /// tests read it) and nothing else: no free-slot pass, moby loop, hero, particles, camera or sound step, no draw from
+    /// [`Game::rng`], and the counter 0x15f5cc stays (`FUN_002ab960` does not run), so the world resumes where it held.
+    pub fn hold_tick(&mut self, pad_data: Option<&[u8]>) {
+        self.pad.update(pad_data, self.options.mirror);
+        self.cheat_toggled = None;
+    }
 
     /// One gameplay tick: `UpdatePad` with `pad_data` (None = disconnected), then the tick body. The hero's
     /// attacks hit nothing ([`Game::tick_with_hits`] takes a sink).
@@ -684,5 +704,42 @@ fn hero_hit(table: &MobyTable, r: &HitRecord) -> crate::hero::damage::HeroHit {
         damage: r.damage.to_f32(),
         w30: r.w30,
         dir: [r.dir[0].to_f32(), r.dir[1].to_f32(), r.dir[2].to_f32(), r.dir[3].to_f32()],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::quick_select_hold;
+    use crate::pad::{button, PadInput, PadState};
+
+    #[test]
+    fn the_world_holds_only_with_modern_the_ring_open_and_triangle_held() {
+        let tri = PadInput::neutral().press(button::TRIANGLE).bytes();
+        let none = PadInput::neutral().bytes();
+        assert!(quick_select_hold(true, true, Some(&tri)));
+        assert!(!quick_select_hold(false, true, Some(&tri)), "Classic never holds");
+        assert!(!quick_select_hold(true, false, Some(&tri)), "△ without the ring (the press that opens it)");
+        assert!(!quick_select_hold(true, true, Some(&none)), "the ring fading out after the release");
+        assert!(!quick_select_hold(true, true, None), "pad lost");
+        assert!(!quick_select_hold(true, true, Some(&tri[..1])), "a short block");
+        // Other buttons and the stick do not matter; △ with them still holds.
+        let busy = PadInput::neutral().press(button::TRIANGLE | button::CROSS | button::LEFT).stick(0.0, -1.0).bytes();
+        assert!(quick_select_hold(true, true, Some(&busy)));
+        assert!(!quick_select_hold(true, true, Some(&PadInput::neutral().press(button::CROSS).stick(0.0, -1.0).bytes())));
+    }
+
+    /// The predicate's △ is the pad's +0x1c0 after `UpdatePad`, whatever the mirror option and the ring's lock (PAD+0x1cc = 2
+    /// keeps only Start / Select in +0x1a0, not in +0x1c0).
+    #[test]
+    fn the_triangle_bit_is_the_pads_unmirrored_held() {
+        for mirror in [false, true] {
+            for lock in [0, 1, 2] {
+                for p in [PadInput::neutral(), PadInput::neutral().press(button::TRIANGLE), PadInput::neutral().press(button::TRIANGLE | button::RIGHT).stick(1.0, 0.0)] {
+                    let mut pad = PadState { lock, ..PadState::default() };
+                    pad.update(Some(&p.bytes()), mirror);
+                    assert_eq!(quick_select_hold(true, true, Some(&p.bytes())), pad.held_unmirrored & button::TRIANGLE != 0, "mirror {mirror} lock {lock}");
+                }
+            }
+        }
     }
 }

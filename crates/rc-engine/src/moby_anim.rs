@@ -185,16 +185,17 @@ pub struct MobyAnimPlugin;
 impl Plugin for MobyAnimPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(Time::<Fixed>::from_hz(60.0))
-            .add_systems(FixedUpdate, tick)
+            .add_systems(FixedUpdate, tick.after(crate::gameplay::GameTick))
             .add_systems(PostUpdate, upload_palette.after(crate::moby_render::update_moby_occlusion));
     }
 }
 
 /// `MobyAnimAdvance` for every instance (the update loops skip mode-0x40 mobys), then the pending
-/// first-update sequence changes of the instances that are active this tick.
-fn tick(anim: Option<ResMut<MobyAnim>>, level: Res<crate::Level>, cams: Query<&Transform, With<Camera3d>>) {
+/// first-update sequence changes of the instances that are active this tick. None on a tick of the held world
+/// (`Play::qs_hold`: Quick Select: Modern, docs/plan/quick_select_pause.md).
+fn tick(anim: Option<ResMut<MobyAnim>>, level: Res<crate::Level>, cams: Query<&Transform, With<Camera3d>>, play: Option<Res<crate::gameplay::Play>>) {
     let Some(mut anim) = anim else { return };
-    if !anim.enabled { return; }
+    if !anim.enabled || play.is_some_and(|p| p.qs_hold) { return; }
     let classes = &level.0.mobys.anim;
     let camera = cams.iter().next().map(crate::game_camera::game_eye);
     let a = &mut *anim;

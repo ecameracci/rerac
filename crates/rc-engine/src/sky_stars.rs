@@ -255,13 +255,15 @@ pub(crate) fn spawn_stars(
     Some(StarSim { stars: SkyStars::new(ls.level, tables, initial), fallback_rng, frames: 0, groups, drawn: 0, stats })
 }
 
-/// One star frame per game tick, after the particle tick (same `rand` stream).
+/// One star frame per game tick, after the particle tick (same `rand` stream); none on a tick of the held world
+/// (`Play::qs_hold`: Quick Select: Modern, docs/plan/quick_select_pause.md).
 fn star_frame(
     sim: Option<ResMut<StarSim>>,
     play: Option<ResMut<crate::gameplay::Play>>,
     part: Option<ResMut<crate::particle_render::ParticleSim>>,
 ) {
     let Some(mut sim) = sim else { return };
+    if play.as_ref().is_some_and(|p| p.qs_hold) { return; }
     let sim = &mut *sim;
     let rng = match (play, part) {
         (Some(p), _) => &mut p.into_inner().game.rng,

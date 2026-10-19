@@ -1,7 +1,7 @@
 //! **Port-only** (not in the game): the "Port Options" page, for settings the PS2 never had (the graphics options and
 //! their preset, anti-aliasing, ambient occlusion, water, particles, sun rays, the moby shadows off or as sun shadows,
-//! the gameplay and cutscene aspects, the render resolution, fullscreen, the FPS limit and, last, the gameplay row
-//! Strafing).
+//! the gameplay and cutscene aspects, the render resolution, fullscreen, the FPS limit and, last, the gameplay rows
+//! Strafing and Quick Select, the ring's hold of the world).
 //! Spec: docs/plan/menus.md "Port-only settings"; the graphics rows: docs/plan/graphics_options.md (every row's first
 //! value is the game's own look).
 //!
@@ -135,6 +135,7 @@ pub mod text {
     pub const STRAFING: i32 = -0x1c0;
     pub const CLASSIC: i32 = -0x1c1;
     pub const MODERN: i32 = -0x1c2;
+    pub const QUICK_SELECT: i32 = -0x1c3;
     /// The main menu's Mods page (super::super::mods).
     pub const MODS: i32 = -0x200;
     pub const MODS_NONE: i32 = -0x201;
@@ -191,6 +192,7 @@ pub mod text {
             PARTICLES => b"Particles",
             SOFT => b"Soft",
             STRAFING => b"Strafing",
+            QUICK_SELECT => b"Quick Select",
             CLASSIC => b"Classic",
             MODERN => b"Modern",
             MODS => b"Mods",
@@ -243,6 +245,9 @@ pub enum Setting {
     /// L2 / R2 on foot: value 0 Classic (the game's look stance and crouch), 1 Modern (Ratchet & Clank 3's strafe,
     /// `crate::hero::strafe::Strafing`).
     Strafing,
+    /// The quick-select ring (docs/plan/quick_select_pause.md): value 0 Classic (the game's: the world runs under the
+    /// ring), 1 Modern (the world holds while △ keeps the ring open: `crate::tick::quick_select_hold`).
+    QuickSelect,
 }
 
 /// One row: the setting, its label and the ids of its values (✕ cycles through them).
@@ -270,6 +275,7 @@ pub const ENTRIES: &[Entry] = &[
     Entry { setting: Setting::Fullscreen, label: text::FULLSCREEN, values: &[text::OFF, text::ON] },
     Entry { setting: Setting::FrameLimit, label: text::FPS_LIMIT, values: &[text::FPS_30, text::FPS_60, text::FPS_120, text::FPS_144, text::UNLIMITED] },
     Entry { setting: Setting::Strafing, label: text::STRAFING, values: &[text::CLASSIC, text::MODERN] },
+    Entry { setting: Setting::QuickSelect, label: text::QUICK_SELECT, values: &[text::CLASSIC, text::MODERN] },
 ];
 
 /// The list's run-time state: cursor, each row's value index and each row's selectable values (bit k = value k;

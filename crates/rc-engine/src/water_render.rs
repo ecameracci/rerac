@@ -383,7 +383,7 @@ impl Plugin for WaterPlugin {
         app.add_plugins(MaterialPlugin::<WaterMaterial>::default())
             .add_systems(crate::level_switch::LevelStartup, (setup, fire_field_setup))
             .add_systems(crate::level_switch::LevelUnload, (crate::level_switch::remove::<WaterState>, crate::level_switch::remove::<FireFieldDraw>))
-            .add_systems(FixedUpdate, tick)
+            .add_systems(FixedUpdate, tick.after(crate::gameplay::GameTick))
             .add_systems(PostUpdate, ((draw, follow_look).chain(), draw_fire_fields).before(bevy::asset::AssetEventSystems));
     }
 }
@@ -626,9 +626,11 @@ fn setup(
     });
 }
 
-/// One 60 Hz tick: the 761 z pulse, and without the game tick (`RC_PLAY=0`) Novalis's 751 on the plugin's stream.
+/// One 60 Hz tick: the 761 z pulse, and without the game tick (`RC_PLAY=0`) Novalis's 751 on the plugin's stream. None
+/// on a tick of the held world (`Play::qs_hold`: Quick Select: Modern, docs/plan/quick_select_pause.md).
 fn tick(state: Option<ResMut<WaterState>>, play: Option<Res<crate::gameplay::Play>>, cams: MainCamera) {
     let Some(mut st) = state else { return };
+    if play.as_ref().is_some_and(|p| p.qs_hold) { return; }
     let st = &mut *st;
     st.counter = st.counter.wrapping_add(1);
     let t = st.counter;

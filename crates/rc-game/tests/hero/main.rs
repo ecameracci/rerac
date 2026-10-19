@@ -12,6 +12,7 @@ mod hero_pack_swap_novalis;
 mod hero_packs_novalis;
 mod hero_platform_novalis;
 mod hero_pose;
+mod hero_quick_select_pause;
 mod hero_scripted_novalis;
 mod hero_surfaces;
 mod hero_swingshot_levels;
