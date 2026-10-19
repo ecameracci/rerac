@@ -1169,13 +1169,15 @@ fn force_hidden(
 type MainCams<'w, 's> = Query<'w, 's, (Entity, &'static mut Camera, Option<&'static RenderLayers>), (With<FlyCam>, Without<crate::sky_render::SkyCamera>)>;
 
 /// The world view replaced by the transition's ([`TRAVEL_LAYER`], cleared to black; the sky camera off), and back.
+/// A level change's pipeline hold (crate::pipeline_warm) gives the world view back under the black screen.
 pub(crate) fn view_layers(
     mut t: ResMut<Travel>,
     mut commands: Commands,
     mut main: MainCams,
     mut sky: Query<(&mut Camera, &mut RenderLayers), With<crate::sky_render::SkyCamera>>,
+    warm: Option<Res<crate::pipeline_warm::PipelineWarm>>,
 ) {
-    let want = t.blank;
+    let want = t.blank && !warm.is_some_and(|w| w.active());
     if want == t.blanked_now { return; }
     t.blanked_now = want;
     for (e, mut cam, _) in &mut main {

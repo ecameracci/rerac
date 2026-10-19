@@ -116,10 +116,14 @@ impl Plugin for FramePacePlugin {
         app.insert_resource(fps)
             .insert_resource(Pace { limit, last: None, acc: 0.0, next: None, period: None })
             .insert_resource(TimeUpdateStrategy::FixedTimesteps(1))
-            .add_systems(First, steps.before(bevy::time::TimeSystems));
+            .add_systems(First, steps.in_set(PaceSteps).before(bevy::time::TimeSystems));
         if limit { app.add_systems(Last, (present_mode, wait)); }
     }
 }
+
+/// Sets this update's ticks ([`steps`]); crate::pipeline_warm's hold overrides them after it.
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct PaceSteps;
 
 /// This frame's ticks (module docs).
 fn steps(mut pace: ResMut<Pace>, mut strategy: ResMut<TimeUpdateStrategy>, fps: Res<FrameLimit>) {

@@ -71,6 +71,7 @@ mod movie_render;
 mod no_clusters;
 mod occlusion;
 mod particle_render;
+mod pipeline_warm;
 mod play_camera;
 mod render_settings;
 mod reticle_render;
@@ -262,6 +263,7 @@ fn main() -> anyhow::Result<()> {
     // The runtime level change and the level start's schedules (crate::level_switch), planet travel (crate::travel_render).
     .add_plugins(level_switch::LevelSwitchPlugin)
     .add_plugins(travel_render::TravelPlugin)
+    .add_plugins(pipeline_warm::PipelineWarmPlugin)
     .add_plugins(flight_render::FlightRenderPlugin)
     .add_plugins(title_world::TitleWorldPlugin)
     .add_systems(Startup, setup_camera)
