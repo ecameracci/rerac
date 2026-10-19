@@ -139,14 +139,17 @@ pub mod text {
     pub const MODS: i32 = -0x200;
     pub const MODS_NONE: i32 = -0x201;
     pub const MODS_WHERE: i32 = -0x202;
-    /// The game's own "on" / "off" (20314 / 20315, the Subtitles / HelpDesk toggle values).
-    pub const ON: i32 = 20314;
-    pub const OFF: i32 = 20315;
+    /// "On" / "Off", capitalised like the page's other values (the game's own 20314 / 20315, the Subtitles /
+    /// HelpDesk toggle values, are lower case).
+    pub const ON: i32 = -0x103;
+    pub const OFF: i32 = -0x104;
 
     pub fn get(id: i32) -> Option<&'static [u8]> {
         Some(match id {
             ENTRY | TITLE => b"Port Options",
             DESCRIPTION => b"Settings of this port that the original game does not have",
+            ON => b"On",
+            OFF => b"Off",
             ANTI_ALIASING => b"Anti-aliasing",
             X2 => b"2x",
             X4 => b"4x",
