@@ -578,7 +578,9 @@ sub-pages (`crates/rc-game/src/menus/pause/port.rs`, `PageMenu::install_port_pag
 * **Persistence** (`render_settings.rs`): plain `key = value` text, `~/Library/Application Support/rerac/settings.toml` on
   macOS (`$XDG_CONFIG_HOME`/`~/.config` elsewhere, `%APPDATA%` on Windows), read at start, rewritten on change (unknown
   keys / comments kept). `RC_MSAA` / `RC_GFX_*` override the file at start; `RC_SETTINGS_FILE=<path>` picks another file, `=0` disables
-  it; frame-exact runs (`RC_SCREENSHOT_FRAME` / `RC_DETERMINISTIC=1`) ignore the default file.
+  it; frame-exact runs (`RC_SCREENSHOT_FRAME` / `RC_DETERMINISTIC=1`) ignore the default file. A `settings.toml` beside
+  the executable overrides the keys it sets (changes to those keys are written there); not read with
+  `RC_SETTINGS_FILE` or in frame-exact runs.
 * `RC_SETTINGS_PAGE=0`: no entries, no pages: every record is as read from the overlay (Options frames byte-identical to the
   game's layout). Without the variable, frames of every page but Options (8 rows instead of 7) are unchanged.
 

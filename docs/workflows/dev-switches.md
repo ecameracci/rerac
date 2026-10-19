@@ -20,6 +20,21 @@ picks another file; `RC_SETTINGS_FILE=0` (or empty) disables it. Frame-exact run
 `RC_SCREENSHOT_FRAME`, `RC_DUMP_FRAMES`) neither read nor write the default file; an explicit `RC_SETTINGS_FILE` still
 applies to them (`crates/rc-engine/src/render_settings.rs`).
 
+A `settings.toml` beside the executable (`rerac.exe` / `rerac`; under `cargo dev`, `target/<profile>/`) overrides
+the keys it sets, so a build can ship with its own settings and a run can temporarily change a few without editing
+the default file. Only the keys it lists are taken from it; every other key still comes from the default file. A
+change on the Port Options page to a key it sets is written there, any other change to the default file. A relative
+`memcard_dir` in it is taken from the executable's folder. It is not read when `RC_SETTINGS_FILE` is set or in
+frame-exact runs. Example, saves beside the build:
+
+```toml
+memcard_dir = memcard
+```
+
+Where the memory card goes, first match wins: `RC_SAVE_DIR` (`0`: no card), `memcard_dir` (the file beside the
+executable, else the default file), a packaged build's `memcard/` beside its `data/` folder (or a `memcard/` that
+already exists beside the executable), else `memcard/` in the default settings folder (`crates/rc-engine/src/saves.rs`).
+
 ## Environment switches
 
 Boolean switches are on with `1` (or off with `0` where the default is on).

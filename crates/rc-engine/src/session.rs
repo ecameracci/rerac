@@ -8,7 +8,8 @@
 //!   * `input.tsv`: per update (Bevy frame, 1-based): the 60 Hz steps it ran (crate::frame_pace), the gameplay tick
 //!     budget, the 18 pad bytes (crate::input_map::PadFrame) and the keyboard keys held; a line whenever one of them
 //!     changes and at least every [`HEARTBEAT`] updates, so a crash loses at most that many;
-//!   * `start/settings.toml`, `start/memcard/`: the settings file and the memory card as the run found them;
+//!   * `start/settings.toml`, `start/memcard/`: the settings (the file beside the executable merged over the port
+//!     settings file, `render_settings::effective_text`) and the memory card as the run found them;
 //!   * `markers.tsv`, `marker_NN.png`: **F8** bug markers (update, tick, level, Ratchet's place and yaw as an
 //!     `RC_HERO_AT` value; the F9 moby dump goes to the log), each with a picture of the game frame;
 //!   * `crash.txt`: a panic's message and backtrace (crate::crash_log).
@@ -157,8 +158,9 @@ pub fn start() {
         eprintln!("session: cannot create {}: {e}; not recording", dir.display());
         return;
     }
-    if let Some(s) = crate::render_settings::settings_path().filter(|p| p.is_file()) {
-        if let Err(e) = std::fs::copy(&s, dir.join("start").join("settings.toml")) { eprintln!("session: cannot copy {}: {e}", s.display()); }
+    if let Some(text) = crate::render_settings::effective_text() {
+        let to = dir.join("start").join("settings.toml");
+        if let Err(e) = std::fs::write(&to, text) { eprintln!("session: cannot write {}: {e}", to.display()); }
     }
     // No card stays no card in the replay; a card folder not made yet is an empty card.
     if let Some(card) = crate::saves::card_root() {

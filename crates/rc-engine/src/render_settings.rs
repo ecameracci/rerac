@@ -26,6 +26,9 @@
 //! file and `RC_SETTINGS_FILE=0` (or empty) disables it. Frame-exact / deterministic runs neither read nor write the
 //! default file (their output must be a function of the environment only); an explicit `RC_SETTINGS_FILE`
 //! still applies to them. Unknown keys and comments are kept when the file is rewritten.
+//! A `settings.toml` beside the executable ([`local_settings_path`]) overrides the keys it sets (e.g. a build shipped
+//! with its own `memcard_dir`); a change to one of those keys is written there, every other key to the default file.
+//! It is not read with `RC_SETTINGS_FILE` set or in deterministic runs.
 //!
 //! Cameras that render elsewhere keep their own setting: the HUD camera (offscreen 512×416, `Msaa::Off`) and
 //! the menu layer's 3D camera (its own image, `Msaa::Off`). The consumers of the main target's output
@@ -202,16 +205,61 @@ fn write_key(text: &str, key: &str, value: &str) -> String {
     out.join("\n") + "\n"
 }
 
-/// The value of `key` in the port settings file (None: no file, or no such key).
-pub fn load_key(key: &str) -> Option<String> {
-    let text = std::fs::read_to_string(settings_path()?).ok()?;
-    read_key(&text, key).map(str::to_string)
+/// The local settings file: `settings.toml` beside the executable (Windows keeps the plain path, as
+/// crate::disc_source `portable_data_dir`), when it exists. Its keys override the default file's. None when
+/// `RC_SETTINGS_FILE` is set (that file alone is used) and in deterministic runs.
+pub fn local_settings_path() -> Option<std::path::PathBuf> {
+    static LOCAL: std::sync::OnceLock<Option<std::path::PathBuf>> = std::sync::OnceLock::new();
+    LOCAL
+        .get_or_init(|| {
+            if std::env::var_os("RC_SETTINGS_FILE").is_some() || crate::determinism::deterministic() { return None; }
+            let exe = std::env::current_exe().ok()?;
+            let exe = if cfg!(windows) { exe } else { std::fs::canonicalize(exe).ok()? };
+            let p = exe.parent()?.join(SETTINGS_FILE);
+            p.is_file().then(|| {
+                println!("render settings: {} overrides the keys it sets", p.display());
+                p
+            })
+        })
+        .clone()
 }
 
-/// Writes `key = value` into the port settings file (other lines kept; a no-op when the file is disabled); errors
-/// are reported, not fatal.
+/// The value of `key` with the file it came from: the local file ([`local_settings_path`]) when it sets the key,
+/// else the port settings file (None: no file, or no such key).
+pub fn load_key_from(key: &str) -> Option<(String, std::path::PathBuf)> {
+    [local_settings_path(), settings_path()].into_iter().flatten().find_map(|p| {
+        let text = std::fs::read_to_string(&p).ok()?;
+        read_key(&text, key).map(|v| (v.to_string(), p))
+    })
+}
+
+/// The value of `key` (the local file's, else the port settings file's; [`load_key_from`]).
+pub fn load_key(key: &str) -> Option<String> { load_key_from(key).map(|(v, _)| v) }
+
+/// The settings a run starts with in one text: the port settings file with the local file's keys set over it (None:
+/// neither file exists). What a play session records (crate::session).
+pub fn effective_text() -> Option<String> {
+    let read = |p: Option<std::path::PathBuf>| p.and_then(|p| std::fs::read_to_string(p).ok());
+    let (base, local) = (read(settings_path()), read(local_settings_path()));
+    let Some(local) = local else { return base };
+    Some(merge(&base.unwrap_or_default(), &local))
+}
+
+/// `base` with every key of `over` set to `over`'s value.
+fn merge(base: &str, over: &str) -> String {
+    let mut text = base.to_string();
+    for k in over.lines().filter(|l| !l.trim_start().starts_with('#')).filter_map(|l| Some(l.split_once('=')?.0.trim())) {
+        if let Some(v) = read_key(over, k) { text = write_key(&text, k, v); }
+    }
+    text
+}
+
+/// Writes `key = value` into the file that sets it: the local file when it has the key, else the port settings file
+/// (other lines kept; a no-op when the file is disabled); errors are reported, not fatal.
 pub fn save_key(key: &str, value: &str) {
-    let Some(path) = settings_path() else { return };
+    let local = local_settings_path()
+        .filter(|p| std::fs::read_to_string(p).is_ok_and(|t| read_key(&t, key).is_some()));
+    let Some(path) = local.or_else(settings_path) else { return };
     let old = std::fs::read_to_string(&path).unwrap_or_default();
     let new = write_key(&old, key, value);
     let res = path.parent().map_or(Ok(()), std::fs::create_dir_all).and_then(|_| std::fs::write(&path, new));
@@ -347,5 +395,15 @@ mod tests {
         let fresh = write_key("", "msaa", "8");
         assert!(fresh.starts_with('#') && fresh.ends_with("msaa = 8\n"));
         assert_eq!(read_key(&fresh, "msaa"), Some("8"));
+    }
+
+    #[test]
+    fn local_keys_override() {
+        let merged = merge("# c\nmsaa = 2\nhud = sharp\n", "# local\nmsaa = 8\nmemcard_dir = saves\n");
+        assert_eq!(read_key(&merged, "msaa"), Some("8"));
+        assert_eq!(read_key(&merged, "hud"), Some("sharp"));
+        assert_eq!(read_key(&merged, "memcard_dir"), Some("saves"));
+        assert!(merged.starts_with("# c\n") && !merged.contains("# local"));
+        assert_eq!(merge("", "msaa = 4\n"), write_key("", "msaa", "4"));
     }
 }

@@ -3,7 +3,8 @@
 //!
 //! * **The card** ([`with_card`]): one `MemCard` for the process (a static, as the game's 0x13d290 block), on the native
 //!   card folder `rc_game::memcard::save_root`: `RC_SAVE_DIR=<path>` (`0` or empty: no card), else the
-//!   `memcard_dir` key of the port settings file, else a `memcard/` folder beside the executable if it exists (or
+//!   `memcard_dir` key of the settings (a `settings.toml` beside the executable over the port settings file), else a
+//!   `memcard/` folder beside the executable if it exists (or
 //!   always, in a packaged build on its portable data folder: [`configured_root`]), else
 //!   `<config base>/rerac/memcard/` (macOS `~/Library/Application Support/rerac/memcard`, beside the port settings);
 //!   deterministic runs have no card unless `RC_SAVE_DIR` is set. The directory name comes from the disc's SYSTEM.CNF
@@ -118,18 +119,20 @@ fn config_base() -> Option<std::path::PathBuf> {
     }
 }
 
-/// The card folder set outside the environment, with where it came from: the `memcard_dir` key of the port settings
-/// file (a relative path is taken from the settings file's folder), else, in a packaged build on its portable data
+/// The card folder set outside the environment, with where it came from: the `memcard_dir` key of the settings
+/// (`render_settings::load_key_from`: the file beside the executable, else the port settings file; a relative path is
+/// taken from the folder of the file that sets it), else, in a packaged build on its portable data
 /// folder (crate::disc_source::portable_dir), the `memcard/` folder beside it (created on first use; [`adopt_saves`]
 /// copies the default card in once), else a `memcard/` folder beside the executable when it exists (a build copied
 /// to another machine with its saves). Deterministic runs use none.
 fn configured_root() -> Option<(std::path::PathBuf, &'static str)> {
     use std::path::PathBuf;
     if crate::determinism::deterministic() { return None; }
-    if let Some(v) = crate::render_settings::load_key("memcard_dir").filter(|v| !v.is_empty()) {
+    if let Some((v, file)) = crate::render_settings::load_key_from("memcard_dir").filter(|(v, _)| !v.is_empty()) {
         let p = PathBuf::from(v);
-        let dir = crate::render_settings::settings_path().and_then(|s| s.parent().map(PathBuf::from));
-        return Some((if p.is_relative() { dir.map_or(p.clone(), |d| d.join(&p)) } else { p }, "memcard_dir in the settings file"));
+        let local = crate::render_settings::local_settings_path().as_ref() == Some(&file);
+        let p = if p.is_relative() { file.parent().map_or(p.clone(), |d| d.join(&p)) } else { p };
+        return Some((p, if local { "memcard_dir in the settings file beside the executable" } else { "memcard_dir in the settings file" }));
     }
     if let Some(dir) = crate::disc_source::portable_dir() {
         let beside = dir.join("memcard");
