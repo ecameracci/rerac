@@ -8,6 +8,7 @@ Dev only, never ships itself. Workflow: `docs/workflows/release.md`.
   `target/release`.
 * **Inputs:** `target/release/rerac` and `rerac-extract`, `crates/rc-engine/assets/shaders/*.wgsl`, the workspace version
   (`version` under `[workspace.package]` in `Cargo.toml`).
-* **Outputs:** `dist/rerac-<version>-<os>-<arch>/` and its `.zip` (git-ignored). The folder is checked against an
+* **Outputs:** `dist/rerac-<version>-<hash>-<os>-<arch>/` and its `.zip` (git-ignored); a release (GitHub Actions,
+  or HEAD on a `v*` tag) drops the hash: `dist/rerac-<version>-<os>-<arch>/`. The folder is checked against an
   exact allow-list (the two binaries, `assets/shaders/*.wgsl`, `rerac-manifest.json`, `README.txt`), so nothing
   from `tools/`, `extracted/` or `work/` can be packaged.

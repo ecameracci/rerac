@@ -354,6 +354,8 @@ impl Hero {
     /// `TurnTo(k, d, max)` (0x232490) in gravity mode 0: the angular spring on yaw toward the target yaw;
     /// the residual goes to 0x13f4d8.
     pub fn turn_to(&mut self, k: Pf, d: Pf, max: Pf) {
+        // Port-only, Strafing = Modern: toward the camera's heading instead (super::strafe).
+        if super::strafe::active(self) { return super::strafe::turn(self); }
         // Gravity modes 1 / 2: the turn in the hero's own frame (0x2323d8, super::boots).
         if self.gravity_mode != 0 { return super::boots::frame_turn(self, k, d, max); }
         let (mut yaw, mut v) = (self.rot[2], self.yaw_vel);
@@ -390,7 +392,8 @@ impl Hero {
     pub fn set_planar_vel(&mut self, yaw: Pf) {
         // Gravity modes ≠ 0: along the moby's (tilted) facing (super::boots).
         if self.gravity_mode != 0 { return super::boots::frame_planar_vel(self); }
-        let y = if PI < yaw { self.rot[2] } else { yaw };
+        // Port-only, Strafing = Modern: along the stick, not the facing (super::strafe).
+        let y = if super::strafe::active(self) { super::strafe::heading(self) } else if PI < yaw { self.rot[2] } else { yaw };
         let s = self.speed;
         let cp = fast_cos(self.pitch);
         self.vel[0] = (fast_cos(y) * s) * cp;
@@ -459,7 +462,11 @@ impl Hero {
         self.turn_to(SCALE64 * Pf::b(0x3d23_d70a), SCALE64 * Pf::b(0x3e4c_cccd), DT * Pf::b(0x40df_66f3));
         self.speed = if self.jump.kind7a0 == 3 { Pf::ZERO } else { self.jump.side_speed };
         let mut f = self.jump.fwd_speed;
-        if self.jump.descending == 0 || ticks(12) <= self.jump.land_eta {
+        if self.strafe.flip {
+            // Port-only: the strafe flip's speed (super::strafe::flip_speed).
+            let (t, step) = super::strafe::flip_speed(self.stick.map(Pf::to_f32));
+            approach(Pf::f(t), Pf::f(step), &mut f);
+        } else if self.jump.descending == 0 || ticks(12) <= self.jump.land_eta {
             approach(DT * Pf::b(0x4086_6666), DT2 * Pf::b(0x4100_0000), &mut f);
         } else {
             approach(Pf::ZERO, DT2 * Pf::b(0x4100_0000), &mut f);
@@ -494,7 +501,10 @@ impl Hero {
         let substate0 = self.substate;
         let seq0 = anim.view().seq_b;
         if super::registry::implemented(self.state) { super::swim::effects::physics_prologue(self, &*anim, rng); }
+        self.strafe.cam_yaw = env.cam_yaw;
+        super::strafe::before_physics(self);
         if !self.dispatch_physics(env, anim, rng) { return false; }
+        super::strafe::after_physics(self);
         // 0x23c3f4: the substate / sequence timers restart when those changed during the tick.
         if substate0 != self.substate { self.substate_timer = 0; }
         if seq0 != anim.view().seq_b { self.seq_timer = 0; }

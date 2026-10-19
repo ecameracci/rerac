@@ -87,9 +87,11 @@ impl Hero {
         true
     }
 
-    /// `JumpOrRunningJump()` (0x246690): 9 when running straight and fast, else 7.
+    /// `JumpOrRunningJump()` (0x246690): 9 when running straight and fast, else 7 (always 7 while strafing:
+    /// super::strafe).
     pub(super) fn jump_or_running_jump(&mut self, c: &mut Ctx) {
-        let run = SPEED_TABLE[0][3] < self.target_speed
+        let run = !super::strafe::active(self)
+            && SPEED_TABLE[0][3] < self.target_speed
             && fast_diff_rots(self.target_yaw, self.rot[2]) < Pf::b(0x3f86_0a92)
             && (SPEED_TABLE[1][2] * DT) * Pf::b(0x3f59_999a) < self.eff_len_xy;
         self.set_state(c, if run { 9 } else { 7 }, true);

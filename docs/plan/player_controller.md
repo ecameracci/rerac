@@ -1118,3 +1118,13 @@ engine now differs from it there. Loading the records into the digest is a human
 0x13f8b0 / 0x13f8c0, the pad's right stick and held buttons, the level number, the trigger shapes
 (`moby_update::triggers`). Written: the follow camera's data (one tick; the spring-back 0x311010 undoes it). Readers
 of the lock words: `0x3111d8` (D+0x230, D+0x220 for Clank's distance, not ported: G-HERO-005).
+
+## 16. Strafing = Modern (port-only) — 2026-10-18
+
+Not in the game. The Port Options row **Strafing** (Classic default; Modern) gives L2 / R2 Ratchet & Clank 3's strafe on
+foot: the pad remap in gameplay, the facing held on the camera's heading (`TurnTo`), the motion along the stick
+(`SetPlanarVel`), the strafe flip 0xb, no running long jump, the camera's leash off as for the Thruster-Pack hover's
+strafe (0x81), and the legs turned toward the motion or a backpedal (display only). Rules, numbers, hooks, deviations and
+checks: docs/plan/modern_strafing.md (after rac1-native-game by Daino Selvatico, MIT, docs/advanced.md and
+src/game/enhance/advanced.cpp, whose numbers come from a study of UYA's hero code). Code: `rc-game/src/hero/strafe.rs`.
+Classic leaves every path of §1–§15 unchanged.

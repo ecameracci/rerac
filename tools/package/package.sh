@@ -4,7 +4,8 @@
 #   tools/package/package.sh              release build of `rerac` + `rerac-extract`, then package
 #   tools/package/package.sh --no-build   package the binaries already in target/release
 #
-# Output: dist/rerac-<version>-<os>-<arch>/ and dist/rerac-<version>-<os>-<arch>.zip, holding
+# Output: dist/rerac-<version>-<hash>-<os>-<arch>/ and its .zip (a release: GitHub Actions or HEAD on a v* tag:
+# dist/rerac-<version>-<os>-<arch>/ and its .zip), holding
 #   rerac[.exe]              the runtime (crate rc-engine; plain release build, never `--features dev`)
 #   rerac-extract[.exe]      the extractor (crate rc-extract)
 #   assets/shaders/*.wgsl    the runtime's shaders (found next to the executable; rc-engine main.rs `asset_dir`)
@@ -23,7 +24,7 @@ build=1
 for a in "$@"; do
   case "$a" in
     --no-build) build=0 ;;
-    -h|--help) sed -n '2,17p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,18p' "$0"; exit 0 ;;
     *) echo "unknown argument: $a" >&2; exit 2 ;;
   esac
 done
@@ -52,7 +53,13 @@ esac
 # The build version, as crates/rc-extract/build.rs makes it: <version>-<hash>-<platform>.
 hash="${commit:0:8}"
 build_version="$version-${hash:-unknown}-$os-$arch"
-name="rerac-$version-$os-$arch"
+# Release packages (GitHub Actions, or HEAD on a v* tag) keep the plain name the release assets and the launcher's zip
+# choice use; local builds carry the build version, so two builds of one version never share a folder.
+if [ -n "${GITHUB_ACTIONS:-}" ] || git describe --exact-match --tags --match 'v*' HEAD >/dev/null 2>&1; then
+  name="rerac-$version-$os-$arch"
+else
+  name="rerac-$build_version"
+fi
 target="${CARGO_TARGET_DIR:-$repo/target}/release"
 dist="$repo/dist"
 out="$dist/$name"

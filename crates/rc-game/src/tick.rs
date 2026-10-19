@@ -29,6 +29,7 @@
 
 use crate::follow_camera::{CamInput, Camera, CameraOptions, CameraView};
 use crate::hero::items::{items_update, HitSink, ItemData, ItemEnv, ItemGlobals, NoHits};
+use crate::hero::strafe::{self, Strafing};
 use crate::hero::{hero_update_with_sounds, AnimCtl, Env, Hero, HeroSounds, HeroTick, NoHeroSounds};
 use crate::collision_query::OwnedScene;
 use crate::moby_runtime::{MobyId, MobyTable};
@@ -63,6 +64,8 @@ pub struct GameOptions {
     pub cheats: crate::cheats::Cheats,
     /// 0x15eea0 ‖ 0x15ee20: the game beaten or completed (the cheat entry `0x2285a0` runs).
     pub cheat_entry: bool,
+    /// Port-only: the Port Options' Strafing (Classic: the game's L2 / R2; Modern: crate::hero::strafe).
+    pub strafing: Strafing,
 }
 
 /// The gameplay state one tick advances.
@@ -267,7 +270,14 @@ impl Game {
         sound: Option<&mut SoundHook>,
         hero_sounds: &mut dyn HeroSounds,
     ) -> TickReport {
-        self.pad.update(pad_data, self.options.mirror);
+        // Port-only, Strafing = Modern: L2 / R2 taken from the game's pad in gameplay (game mode 0, not the scene
+        // frame) for the strafe; out of gameplay or off foot the strafe is dropped at once (crate::hero::strafe).
+        let gameplay = !self.camera_paused && hooks.world.as_deref().map_or(0, |w| w.game_mode()) == 0;
+        let on_foot = gameplay && strafe::remaps(&self.hero);
+        let remapped = pad_data.filter(|_| on_foot && self.options.strafing == Strafing::Modern).map(strafe::remap);
+        self.hero.strafe.held = remapped.as_ref().is_some_and(|r| r.1);
+        if !on_foot { strafe::drop_pose(&mut self.hero); }
+        self.pad.update(remapped.as_ref().map_or(pad_data, |r| Some(&r.0[..])), self.options.mirror);
         self.hero.cheats = self.options.cheats;
         self.cheat_toggled = None;
         if !self.camera_paused { self.mobys.free_slot_pass(self.counter); }

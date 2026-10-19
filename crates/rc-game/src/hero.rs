@@ -76,6 +76,7 @@ pub mod scripted;
 pub mod worn;
 pub mod bodies;
 pub mod hoverboard;
+pub mod strafe;
 
 use crate::ps2v::Pf;
 pub use ledge::LedgeBlock;
@@ -490,6 +491,8 @@ pub struct Hero {
     pub cheats: crate::cheats::Cheats,
     /// The move ring 0x141514[16] / 0x141524 of the cheat entry `0x2285a0` (`crate::cheats::MoveEntry`).
     pub cheat_moves: crate::cheats::MoveEntry,
+    /// Port-only: the Strafing = Modern state ([`strafe`]; idle with Classic).
+    pub strafe: strafe::Strafe,
 }
 
 /// Item ownership as the hero code reads it: the game state's owned table `0x13d4c0 + id` (37 items,
@@ -558,6 +561,7 @@ impl Hero {
             f13f5: 0, f13ff: 0, weapons: weapons::Weapons::default(), comet: comet::Comet::default(), loop_in: Default::default(),
             joint_targets: Default::default(), help: Default::default(), walloper: Default::default(), bodies: bodies::Bodies::default(), glow: glow::HeroGlow::default(), env_base: None,
             cheats: Default::default(), cheat_moves: Default::default(), board: hoverboard::Board::default(),
+            strafe: strafe::Strafe::default(),
         }
     }
 
@@ -870,7 +874,10 @@ pub fn hero_update_with_sounds(
     damage::flush(hero, moby, sounds, rng);
     // The swim voices and the delayed-voice queue `0x236860` (mode 0, right after the transitions).
     fx::flush(hero, moby, sounds, rng);
-    if hero.mode == 0 { hero.idle_updates(env, &*anim, counter, rng); }
+    if hero.mode == 0 {
+        hero.idle_updates(env, &*anim, counter, rng);
+        strafe::legs_update(hero, &anim.view());
+    }
     hero.write_back(moby);
     // HeroItemsUpdate's slots 1 (feet) and 2 (head), then 3 (the back).
     hero.worn_items_update(rng);
