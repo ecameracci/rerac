@@ -583,9 +583,10 @@ fn port_page_from_the_disc() {
     assert_eq!(m.port_value(Setting::Shadows), Some(2), "dynamic");
     m.tick(&press(button::CROSS), &mut g, &env);
     assert_eq!(m.port_value(Setting::Shadows), Some(0), "on / off / dynamic wrap");
-    // Its values are the game's own on / off strings (the Subtitles toggle's).
+    // Its values are the port's capitalised On / Off, not the game's lower-case ones (the Subtitles toggle's).
     let Data::Toggle(sub_t) = &m.widgets[&0x1b5160].data else { panic!() };
-    assert_eq!((sub_t.entries[0].on, sub_t.entries[0].off), (port::text::ON as u32, port::text::OFF as u32));
+    assert_eq!((sub_t.entries[0].on, sub_t.entries[0].off), (20314, 20315));
+    assert_eq!((port::text::get(port::text::ON), port::text::get(port::text::OFF)), (Some(&b"On"[..]), Some(&b"Off"[..])));
     m.tick(&press(button::TRIANGLE), &mut g, &env);
     assert_eq!(m.target, port::OPTIONS);
 }
