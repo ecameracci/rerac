@@ -1071,10 +1071,7 @@ fn open_menu(rt: &mut MenuRt, mm: &mut MenuMode, play: &mut Play, gs: &rc_game::
     menu.map.hero = rc_game::menus::pause::map_page::HeroMark { pos: [h.pos[0].to_f32(), h.pos[1].to_f32(), h.pos[2].to_f32()], yaw: h.rot[2].to_f32(), group: h.group };
     menu.map.mirror = gs.global.cheats_active[rc_game::cheats::slot::MIRROR] != 0;
     // The hook table 0x179638 (the map markers' mobys on this level): slot → position and angle.
-    menu.map.hooks = play.svc.interact.talk_slots.iter().filter_map(|(&id, &k)| {
-        let m = play.game.mobys.mobys.get(id)?;
-        Some((k, (m.position[0], m.position[1], m.rotation[2])))
-    }).collect();
+    menu.map.hooks = crate::saves::landmark_hooks(play).into_iter().collect();
     // EnterMenuMode 0x28bf50: snd_PauseAllSoundsInGroup(0x1d), music_Pause(0).
     if let Some(a) = audio { a.system().menu_open(); }
     mm.state.set(Mode::Menu);
