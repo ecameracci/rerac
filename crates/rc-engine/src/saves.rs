@@ -207,19 +207,23 @@ pub fn card_frame(gs: Option<bevy::prelude::ResMut<crate::gameplay::Persistent>>
     });
 }
 
+/// The landmark hooks of the running level (0x179638: the level's slot k → its moby's x, y, angle), sorted by k: the
+/// talk slots (`Interact::talk_slots`), and slot 0 the player's ship (`ShipGlobals::moby`). [L] No placed instance
+/// has +0x74 = 0 on any level, and every level's star marker (icon 0xe99a frame 0) names its slot 0: the ship, which
+/// the loader creates itself; the game's write of that slot is not pinned.
+pub fn landmark_hooks(play: &crate::gameplay::Play) -> Vec<(i32, (f32, f32, f32))> {
+    let at = |id: usize| play.game.mobys.mobys.get(id).map(|m| (m.position[0], m.position[1], m.rotation[2]));
+    let mut hooks: Vec<(i32, (f32, f32, f32))> = play.svc.interact.talk_slots.iter().filter_map(|(&id, &k)| Some((k, at(id)?))).collect();
+    if !hooks.iter().any(|h| h.0 == 0) {
+        if let Some(p) = play.svc.travel.moby.and_then(at) { hooks.push((0, p)); }
+    }
+    hooks.sort_by_key(|h| h.0);
+    hooks
+}
+
 /// The capture `memcard_Save` / the Save page make from the running level.
 pub fn capture(play: &mut crate::gameplay::Play) -> SaveCapture {
-    let mut hooks: Vec<(i32, (f32, f32, f32))> = play
-        .svc
-        .interact
-        .talk_slots
-        .iter()
-        .filter_map(|(&id, &k)| {
-            let m = play.game.mobys.mobys.get(id)?;
-            Some((k, (m.position[0], m.position[1], m.rotation[2])))
-        })
-        .collect();
-    hooks.sort_by_key(|h| h.0);
+    let hooks = landmark_hooks(play);
     SaveCapture { clock: clock_now(), hooks, base: play.svc.interact.tables.base.clone(), map_mask: Some(play.svc.map.pack()) }
 }
 
