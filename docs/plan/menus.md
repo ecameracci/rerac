@@ -554,7 +554,7 @@ sub-pages (`crates/rc-game/src/menus/pause/port.rs`, `PageMenu::install_port_pag
   narrower than 4:3: a window narrower than the TV's is letterboxed (top / bottom bars), so the UI is never squashed. The frame takes the wider aspect; while
   the view shown is narrower (a cutscene — a scene, the letterbox 0x15f404 set, mode 6's take-off / landing / fly-away —
   or gameplay), black bars cover the margin it does not show (`display::pillar_bars`, drawn last in the HUD layer).
-  FPS limit: 30 / 60 (default) / 120 / 144 / Unlimited → `frame_pace::FrameLimit` (key `fps_limit`; the game still
+  FPS limit: 30 / 60 (default) / 120 / Unlimited → `frame_pace::FrameLimit` (key `fps_limit`; the game still
   ticks at 60 Hz, so above 60 the frames between two ticks repeat the picture; Unlimited also presents without vsync).
   The movies (crate::movie_render, 4:3 on the disc) are stretched to the cutscene aspect's box (`display::CutsceneBoxed`).
   Strafing (the second-last row, the first of the page's two gameplay options): Classic (default, the game's L2 / R2) / Modern (Ratchet & Clank
