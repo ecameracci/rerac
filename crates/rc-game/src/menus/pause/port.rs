@@ -125,7 +125,6 @@ pub mod text {
     pub const FPS_30: i32 = -0x1a1;
     pub const FPS_60: i32 = -0x1a2;
     pub const FPS_120: i32 = -0x1a3;
-    pub const FPS_144: i32 = -0x1a4;
     pub const UNLIMITED: i32 = -0x1a5;
     pub const DYNAMIC: i32 = -0x121;
     pub const AMBIENT_OCCLUSION: i32 = -0x1b0;
@@ -184,7 +183,6 @@ pub mod text {
             FPS_30 => b"30",
             FPS_60 => b"60",
             FPS_120 => b"120",
-            FPS_144 => b"144",
             UNLIMITED => b"Unlimited",
             DYNAMIC => b"Dynamic",
             AMBIENT_OCCLUSION => b"Ambient occlusion",
@@ -239,7 +237,7 @@ pub enum Setting {
     /// How far away models keep their full detail: value 0 Original (the game's distances), 1 Far (×2), 2 Farther (×4),
     /// 3 Maximum (always).
     Detail,
-    /// The most frames drawn a second: value 0 30, 1 60 (the default, the game's tick rate), 2 120, 3 144, 4 unlimited
+    /// The most frames drawn a second: value 0 30, 1 60 (the default, the game's tick rate), 2 120, 3 unlimited
     /// (no vsync). The game still ticks at 60 Hz.
     FrameLimit,
     /// L2 / R2 on foot: value 0 Classic (the game's look stance and crouch), 1 Modern (Ratchet & Clank 3's strafe,
@@ -273,7 +271,7 @@ pub const ENTRIES: &[Entry] = &[
     Entry { setting: Setting::CutsceneAspect, label: text::CUTSCENE_ASPECT, values: &[text::ASPECT_4_3, text::ASPECT_16_10, text::ASPECT_16_9, text::ASPECT_FILL] },
     Entry { setting: Setting::Resolution, label: text::RESOLUTION, values: &[text::RES_WINDOW, text::RES_416, text::RES_720, text::RES_1080, text::RES_1440, text::RES_2160] },
     Entry { setting: Setting::Fullscreen, label: text::FULLSCREEN, values: &[text::OFF, text::ON] },
-    Entry { setting: Setting::FrameLimit, label: text::FPS_LIMIT, values: &[text::FPS_30, text::FPS_60, text::FPS_120, text::FPS_144, text::UNLIMITED] },
+    Entry { setting: Setting::FrameLimit, label: text::FPS_LIMIT, values: &[text::FPS_30, text::FPS_60, text::FPS_120, text::UNLIMITED] },
     Entry { setting: Setting::Strafing, label: text::STRAFING, values: &[text::CLASSIC, text::MODERN] },
     Entry { setting: Setting::QuickSelect, label: text::QUICK_SELECT, values: &[text::CLASSIC, text::MODERN] },
 ];

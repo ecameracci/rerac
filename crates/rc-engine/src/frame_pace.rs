@@ -18,7 +18,7 @@
 //!   The wait sleeps to 0.3 ms before the deadline, then yields until it (the yield loop costs CPU: keep it short).
 //! * **Unlimited**: no limiter, and the window presents without vsync.
 //!
-//! The limit is kept in the port settings file (`fps_limit = 30|60|120|144|unlimited`, crate::render_settings).
+//! The limit is kept in the port settings file (`fps_limit = 30|60|120|unlimited`, crate::render_settings).
 //! `RC_FRAME_CAP=0` (or `RC_NOVSYNC=1`, which measures headroom) turns the limiter off whatever the limit; frame-exact
 //! runs (`crate::determinism`) keep their own one tick per update, without the limiter unless `RC_FRAME_CAP=1`
 //! (then at 60).
@@ -41,13 +41,12 @@ pub enum FrameLimit {
     #[default]
     Fps60,
     Fps120,
-    Fps144,
     Unlimited,
 }
 
 impl FrameLimit {
     /// In the row's value order.
-    pub const ALL: [FrameLimit; 5] = [FrameLimit::Fps30, FrameLimit::Fps60, FrameLimit::Fps120, FrameLimit::Fps144, FrameLimit::Unlimited];
+    pub const ALL: [FrameLimit; 4] = [FrameLimit::Fps30, FrameLimit::Fps60, FrameLimit::Fps120, FrameLimit::Unlimited];
     const KEY: &str = "fps_limit";
 
     pub fn index(self) -> u8 { Self::ALL.iter().position(|&l| l == self).unwrap_or(1) as u8 }
@@ -59,7 +58,6 @@ impl FrameLimit {
             FrameLimit::Fps30 => Some(30.0),
             FrameLimit::Fps60 => Some(60.0),
             FrameLimit::Fps120 => Some(120.0),
-            FrameLimit::Fps144 => Some(144.0),
             FrameLimit::Unlimited => None,
         }
     }
@@ -69,12 +67,15 @@ impl FrameLimit {
             FrameLimit::Fps30 => "30",
             FrameLimit::Fps60 => "60",
             FrameLimit::Fps120 => "120",
-            FrameLimit::Fps144 => "144",
             FrameLimit::Unlimited => "unlimited",
         }
     }
 
-    fn parse(s: &str) -> Option<Self> { Self::ALL.into_iter().find(|l| l.key().eq_ignore_ascii_case(s.trim())) }
+    /// A file's value; the removed `144` reads as 120.
+    fn parse(s: &str) -> Option<Self> {
+        if s.trim() == "144" { return Some(FrameLimit::Fps120); }
+        Self::ALL.into_iter().find(|l| l.key().eq_ignore_ascii_case(s.trim()))
+    }
 
     /// The start value: the port settings file's, else 60.
     pub fn startup() -> Self { crate::render_settings::load_key(Self::KEY).as_deref().and_then(Self::parse).unwrap_or_default() }
@@ -223,6 +224,7 @@ mod tests {
         }
         assert_eq!(FrameLimit::parse(" Unlimited "), Some(FrameLimit::Unlimited));
         assert_eq!(FrameLimit::parse("90"), None);
+        assert_eq!(FrameLimit::parse("144"), Some(FrameLimit::Fps120));
         assert_eq!(FrameLimit::from_index(9), FrameLimit::Fps60);
         assert_eq!(FrameLimit::Unlimited.hz(), None);
     }
