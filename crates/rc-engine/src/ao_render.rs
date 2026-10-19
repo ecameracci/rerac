@@ -13,8 +13,10 @@
 //! **Mobys are not occluded** ([`AoMobys`]): the radius is about a character's head, so the occlusion would shade
 //! their bodies with their own heads and arms over the game's baked lighting. The apply pass leaves a pixel alone
 //! inside the bounding sphere of one of the [`MOBYS`] nearest drawn mobys (+0x31; spheres up to [`MOBY_MAX_RADIUS`],
-//! so props as large as a building keep the occlusion) and above that moby's feet, fading over the sphere's outer
-//! fifth and the first 0.15 units over the feet. Their depth still occludes the world around them.
+//! so props as large as a building keep the occlusion), above that moby's feet and no deeper (view z) than the sphere's
+//! centre, fading over the sphere's outer fifth, the first 0.15 units over the feet and 0.2 units behind the centre:
+//! the camera sees a moby's near half, so the wall or floor it stands against (behind the centre) keeps its occlusion
+//! instead of showing a bright disc around it. Their depth still occludes the world around them.
 
 use crate::fly_cam::FlyCam;
 use crate::fx_view::{self, depth_defs, depth_entry, Fullscreen, FxView, Pipelines};

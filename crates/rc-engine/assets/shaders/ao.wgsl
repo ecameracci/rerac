@@ -24,14 +24,19 @@ struct AoMobys {
 }
 @group(0) @binding(3) var<uniform> mobys: AoMobys;
 
-// 1 on a moby: inside one of the spheres and above its feet (0 over the sphere's outer fifth / at the feet).
-fn moby_mask(w: vec3<f32>) -> f32 {
+// 1 on a moby: inside one of the spheres, above its feet and no deeper than its centre (0 over the sphere's outer
+// fifth, at the feet, and from 0.2 units behind the centre: the wall or floor a character stands against is behind
+// the body the camera sees, and keeps its occlusion). `c` is the pixel's view position.
+fn moby_mask(c: vec3<f32>) -> f32 {
+    let w = (view.world_from_view * vec4<f32>(c, 1.0)).xyz;
     var k = 0.0;
     for (var i = 0u; i < mobys.count; i += 1u) {
         let s = mobys.spheres[i];
         let inside = 1.0 - smoothstep(0.8 * s.w, s.w, distance(w, s.xyz));
         let above = smoothstep(0.0, 0.15, w.y - mobys.feet[i / 4u][i % 4u]);
-        k = max(k, inside * above);
+        let behind = (view.view_from_world * vec4<f32>(s.xyz, 1.0)).z - c.z;
+        let front = 1.0 - smoothstep(0.0, 0.2, behind);
+        k = max(k, inside * above * front);
     }
     return k;
 }
@@ -100,7 +105,7 @@ fn apply(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
         }
     }
     var ao = select(1.0, sum / weight, weight > 0.0);
-    ao = mix(ao, 1.0, moby_mask((view.world_from_view * vec4<f32>(c, 1.0)).xyz));
+    ao = mix(ao, 1.0, moby_mask(c));
     let k = mix(1.0, ao, view.params.z);
     return vec4<f32>(k, k, k, 1.0);
 }
