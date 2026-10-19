@@ -862,7 +862,7 @@ fn pose_actors(rt: &mut SceneRuntime, player: &ScenePlayer, out: &SceneTick, lev
         let mods = tm.map(|m| m.joint_mods.as_slice()).unwrap_or(&[]);
         let f = moby_anim::evaluate_posed(&a.anim, &s, None, &[], mods);
         let at = a.base as usize * 64;
-        for (k, b) in f.iter().take(a.slots as usize).flat_map(|r| r.iter().flatten().flat_map(|v| v.to_le_bytes())).enumerate() { palette[at + k] = b; }
+        crate::moby_anim::write_palette(&mut palette[at..], &f[..f.len().min(a.slots as usize)]);
         // Its moby's +0x2c (`FUN_0024a1d0` scales some actors) and +0x38..+0x3f (the hero's, copied at its creation).
         if let Some(m) = tm { a.scale = m.scale; }
         let (light_word, ambient) = tm.map_or((0, [0x38; 3]), |m| (m.light, [m.ambient[0], m.ambient[1], m.ambient[2]]));

@@ -2713,7 +2713,7 @@ fn upload(
     let mut f = moby_anim::evaluate_posed(class, &hero_display_state(&p), p.ratchet.snapshot.as_ref(), &layers, &hm.joint_mods);
     // Port-only: the strafe's legs turned toward the motion (rc_game::hero::strafe::twist_rows).
     rc_game::hero::strafe::twist_rows(&mut f, p.game.hero.strafe.legs.twist);
-    for (k, b) in f.iter().take(p.slots as usize).flat_map(|r| r.iter().flatten().flat_map(|v| v.to_le_bytes())).enumerate() { palette[k] = b; }
+    crate::moby_anim::write_palette(&mut palette, &f[..f.len().min(p.slots as usize)]);
     let rows = rows_bits(&hm.rows);
     // His light words +0x38 / +0x3c as `HeroEnvLighting` left them (the fog zone's light sets, the static light's ambient).
     let lights = lv.mobys.lighting.as_ref().map(|l| light::moby_lights(&rows, &l.bank, hm.light, [hm.ambient[0], hm.ambient[1], hm.ambient[2]], 0x80));
@@ -2843,12 +2843,8 @@ fn upload_dynamic(
         }
         let snap = p.svc.snapshots.get(id).and_then(|s| s.as_ref());
         let f = moby_anim::evaluate_posed(&m.anim[ci], &mo.anim, snap, &[], &mo.joint_mods);
-        let bytes: Vec<u8> = f.iter().take(d.pal_slots as usize).flat_map(|r| r.iter().flatten().flat_map(|v| v.to_le_bytes())).collect();
         let at = slot * pal_bytes;
-        if d.palette[at..at + bytes.len()] != bytes[..] {
-            d.palette[at..at + bytes.len()].copy_from_slice(&bytes);
-            pal_changed = true;
-        }
+        pal_changed |= crate::moby_anim::write_palette(&mut d.palette[at..at + pal_bytes], &f[..f.len().min(d.pal_slots as usize)]);
     }
     (d.live, d.drawn) = (live, drawn);
     if rec_changed {

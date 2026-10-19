@@ -177,6 +177,20 @@ fn matrix_bytes(r: &Rows) -> [u8; MATRIX_BYTES] {
     out
 }
 
+/// Writes `rows` over the first matrices of `dst` ([`matrix_bytes`] each, in place: no per-byte iterators at the dev
+/// profile's opt-level 1); true when a byte changed.
+pub fn write_palette(dst: &mut [u8], rows: &[Rows]) -> bool {
+    let mut changed = false;
+    for (d, r) in dst.as_chunks_mut::<MATRIX_BYTES>().0.iter_mut().zip(rows) {
+        let m = matrix_bytes(r);
+        if *d != m {
+            *d = m;
+            changed = true;
+        }
+    }
+    changed
+}
+
 /// `RC_ANIM` (default on).
 pub fn anim_enabled() -> bool { !std::env::var("RC_ANIM").is_ok_and(|v| v.trim() == "0") }
 
@@ -293,4 +307,22 @@ fn evaluate_all(anim: &mut MobyAnim, level: &LoadedLevel) -> (bool, usize) {
         written[k] = true;
     }
     (changed, memo.len())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// [`write_palette`] writes the bytes the per-byte form wrote (16 LE f32 per matrix, row by row), only over the
+    /// matrices it is given, and reports a change only when a byte differs.
+    #[test]
+    fn write_palette_matches_the_byte_form() {
+        let rows: Vec<Rows> = (0..3).map(|m| std::array::from_fn(|r| std::array::from_fn(|c| (m * 16 + r * 4 + c) as f32 * 0.5 - 3.0))).collect();
+        let want: Vec<u8> = rows.iter().flat_map(|r| r.iter().flatten().flat_map(|v| v.to_le_bytes())).collect();
+        let mut dst = identity_palette(4);
+        assert!(write_palette(&mut dst, &rows));
+        assert_eq!(dst[..want.len()], want[..]);
+        assert_eq!(dst[want.len()..], identity_palette(1)[..], "the matrix past the rows is untouched");
+        assert!(!write_palette(&mut dst, &rows), "same bytes: no change");
+    }
 }

@@ -1753,8 +1753,7 @@ fn menu_layer(
             if let Some(r) = chain.last().and_then(|&j| m.get_mut(j as usize)) { r[3][2] += lift * 1024.0 / f.class.scale; }
         }
         let base = i * fr.slots as usize;
-        let bytes: Vec<u8> = m.iter().take(fr.slots as usize).flat_map(|r| r.iter().flatten().flat_map(|v| v.to_le_bytes())).collect();
-        if let Some(dst) = pal.get_mut(base * 64..base * 64 + bytes.len()) { dst.copy_from_slice(&bytes); }
+        if let Some(dst) = pal.get_mut(base * 64..) { crate::moby_anim::write_palette(dst, &m[..m.len().min(fr.slots as usize)]); }
         let r = moby_render::extra_record(&fold, fr.lights.as_ref(), base as u32);
         let at = i * moby_render::EXTRA_RECORD_SIZE;
         if let Some(dst) = rec.get_mut(at..at + r.len()) { dst.copy_from_slice(&r); }

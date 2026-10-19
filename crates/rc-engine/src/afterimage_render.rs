@@ -135,12 +135,8 @@ fn draw(
             }
             let snap = if pose.seq_a == moby_anim::SNAPSHOT_SEQ { snaps[k] } else { None };
             let f = moby_anim::evaluate_posed(&owner.anim, &state_of(&pose), snap, &[], &[]);
-            let bytes: Vec<u8> = f.iter().take(g.pal as usize).flat_map(|r| r.iter().flatten().flat_map(|v| v.to_le_bytes())).collect();
             let at = slot * pal_bytes;
-            if g.palette[at..at + bytes.len()] != bytes[..] {
-                g.palette[at..at + bytes.len()].copy_from_slice(&bytes);
-                pal_changed = true;
-            }
+            pal_changed |= crate::moby_anim::write_palette(&mut g.palette[at..at + pal_bytes], &f[..f.len().min(g.pal as usize)]);
         }
     }
     if rec_changed {
