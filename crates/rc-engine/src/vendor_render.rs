@@ -364,9 +364,7 @@ fn draw(
         }
         let base = slot * JOINTS;
         let at = base as usize * 64;
-        for (i, b) in s.pose.iter().take(JOINTS as usize).flat_map(|r| r.iter().flatten().flat_map(|v| v.to_le_bytes())).enumerate() {
-            if let Some(x) = palette.get_mut(at + i) { *x = b; }
-        }
+        if let Some(dst) = palette.get_mut(at..) { crate::moby_anim::write_palette(dst, &s.pose[..s.pose.len().min(JOINTS as usize)]); }
         let lights = bank.as_ref().map(|bank| moby_light::moby_lights(&rows_bits(&s.rows), bank, s.light, s.ambient, 0x80));
         let model = moby_render::extra_model(s.rows, s.scale, s.pos);
         let r = moby_render::extra_record(&model, lights.as_ref(), base);

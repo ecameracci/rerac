@@ -998,9 +998,7 @@ pub(crate) fn upload_gfx(
             }
         };
         let at = a.base as usize * 64;
-        for (i, b) in f.iter().take(a.slots as usize).flat_map(|r| r.iter().flatten().flat_map(|v| v.to_le_bytes())).enumerate() {
-            if let Some(x) = palette.get_mut(at + i) { *x = b; }
-        }
+        if let Some(dst) = palette.get_mut(at..) { crate::moby_anim::write_palette(dst, &f[..f.len().min(a.slots as usize)]); }
         // MobyBuildMatrix from (0, 0, yaw): the ship-local actors turn with the ship.
         let (c, sn) = (pose.yaw.cos(), pose.yaw.sin());
         let rows = [[c, sn, 0.0], [-sn, c, 0.0], [0.0, 0.0, 1.0]];

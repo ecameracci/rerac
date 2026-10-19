@@ -730,9 +730,7 @@ fn update(
         }
         let Some(pl) = pl else { continue };
         let at = p.base as usize * 64;
-        for (i, b) in pl.pose.iter().take(p.slots as usize).flat_map(|r| r.iter().flatten().flat_map(|v| v.to_le_bytes())).enumerate() {
-            if let Some(d) = palette.get_mut(at + i) { *d = b; }
-        }
+        if let Some(dst) = palette.get_mut(at..) { crate::moby_anim::write_palette(dst, &pl.pose[..pl.pose.len().min(p.slots as usize)]); }
         let lights = rt.bank.as_ref().map(|bank| moby_light::moby_lights(&pl.rows, bank, frame::LIGHT_WORD, frame::AMBIENT, 0x80));
         let model = fold * moby_render::extra_model(rows_f32(&pl.rows), p.scale, pl.pos);
         let r = moby_render::extra_record(&model, lights.as_ref(), p.base);

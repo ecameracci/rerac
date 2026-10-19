@@ -719,7 +719,7 @@ fn upload(
             a.extra.set_gold(&mut commands, slot as u32, item.o_class as i32, item.gold);
         }
         let at = item.base as usize * 64;
-        for (k, b) in f.iter().take(item.slots as usize).flat_map(|r| r.iter().flatten().flat_map(|v| v.to_le_bytes())).enumerate() { palette[at + k] = b; }
+        crate::moby_anim::write_palette(&mut palette[at..], &f[..f.len().min(item.slots as usize)]);
         let lights: Option<light::MobyLights> = lighting.map(|l| light::moby_lights(&item.rows, &l.bank, a.host_light, a.host_ambient, 0x80));
         let model = model_of(item);
         let mut rec = moby_render::extra_record(&model, lights.as_ref(), item.base);
