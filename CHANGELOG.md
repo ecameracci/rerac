@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.4.1-alpha
+
+- Port Options has two new rows. Strafing: Modern gives L2 / R2 Ratchet & Clank 3's strafe on foot, with a strafe flip on Cross. Quick Select: Modern holds the world still, dimmed, while Triangle keeps the quick-select ring open. Classic keeps both as in the original.
+- Water on Enhanced: Ratchet makes ripples where he dives, swims and wades.
+- Dynamic shadows no longer flicker going into the Novalis cave, and ambient occlusion no longer darkens Ratchet's face.
+- The Swingshot's rope shows during the hook's whole flight, from the first swing.
+- Smoother frames while swinging on the Swingshot.
+- The README explains how to report a bug: F8 to mark it, and which files to send.
+
 ## v0.4.0-alpha
 
 - Mods: texture mods in a `mods` folder next to the game, turned on and off from Options → Mods. They can replace the HUD, fonts and icons, and the world, character, enemy and sky textures.
