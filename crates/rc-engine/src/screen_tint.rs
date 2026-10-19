@@ -7,6 +7,9 @@
 //! [L] The game draws them inside the world pass (the list-2 callbacks after the ties, the beam's sprite after the
 //! shrubs), so the mobys, particles and effects drawn later are not tinted; the pass runs after the 3-D passes and before
 //! the HUD, so they are.
+//!
+//! Port-only, Quick Select: Modern (docs/plan/quick_select_pause.md): while the world is held (`Play::qs_hold`) one more
+//! tint, black with ALPHA_1 0x44, dims the world to half under the HUD's ring, eased in and out over [`DIM_SECONDS`].
 
 use bevy::core_pipeline::fullscreen_material::FullscreenMaterial;
 use bevy::ecs::schedule::ScheduleConfigs;
@@ -43,16 +46,34 @@ impl Plugin for ScreenTintPlugin {
     }
 }
 
-fn update(mut commands: Commands, play: Option<Res<crate::gameplay::Play>>, cams: Query<(Entity, Option<&ScreenTint>), With<FlyCam>>) {
+/// The held world's dim: the tint's As at full dim (0x40 = half), and the seconds its ease in or out takes.
+pub const DIM_ALPHA: f32 = 64.0;
+pub const DIM_SECONDS: f32 = 0.1;
+
+fn update(
+    mut commands: Commands,
+    play: Option<Res<crate::gameplay::Play>>,
+    cams: Query<(Entity, Option<&ScreenTint>), With<FlyCam>>,
+    time: Res<Time>,
+    mut dim: Local<f32>,
+) {
     let Some((entity, have)) = cams.iter().next() else { return };
+    let held = play.as_deref().is_some_and(|p| p.qs_hold);
+    let step = time.delta_secs() / DIM_SECONDS;
+    *dim = if held { (*dim + step).min(1.0) } else { (*dim - step).max(0.0) };
     let tints = play.as_deref().map(|p| rc_game::moby_update::classes::draw_callbacks::screen_tints(&p.game.mobys, &p.svc, p.game.counter)).unwrap_or_default();
-    let want = (!tints.is_empty()).then(|| {
+    let mut list: Vec<(UVec4, u32)> = tints.iter().map(|s| (UVec4::new(s.rgba & 0xff, (s.rgba >> 8) & 0xff, (s.rgba >> 16) & 0xff, s.rgba >> 24), s.alpha as u32)).collect();
+    let dim_a = (*dim * DIM_ALPHA).round() as u32;
+    if dim_a != 0 { list.push((UVec4::new(0, 0, 0, dim_a), 0x44)); }
+    let want = (!list.is_empty()).then(|| {
         let mut t = ScreenTint::default();
-        for (k, s) in tints.iter().take(4).enumerate() {
-            t.rgba[k] = UVec4::new(s.rgba & 0xff, (s.rgba >> 8) & 0xff, (s.rgba >> 16) & 0xff, s.rgba >> 24);
-            t.alpha[k] = s.alpha as u32;
+        // The dim is last, so it stays when four class tints fill the pass.
+        let from = list.len().saturating_sub(4);
+        for (k, (rgba, alpha)) in list[from..].iter().enumerate() {
+            t.rgba[k] = *rgba;
+            t.alpha[k] = *alpha;
         }
-        t.count.x = tints.len().min(4) as u32;
+        t.count.x = list.len().min(4) as u32;
         t
     });
     match (want, have) {

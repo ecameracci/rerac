@@ -36,6 +36,7 @@ in the gameplay tick, and the ring only opens in mode 0.
 | `rc-engine/src/sky_stars.rs` `star_frame` | no star frame on a held tick: its `rand` draws stay off the game's stream |
 | `rc-engine/src/moby_anim.rs` `tick` | no `MobyAnimAdvance` of the unported classes' instances on a held tick (now ordered after `GameTick`, which writes the flag; the order does not change Classic: the undriven instances read nothing the tick writes and the driven ones skip the advance) |
 | `rc-engine/src/water_render.rs` `tick` | no 761 bob step on a held tick (ordered after `GameTick` likewise) |
+| `rc-engine/src/screen_tint.rs` `update` | the held world dimmed: while `Play::qs_hold`, one more full-screen tint after the class tints (black, ALPHA_1 0x44, As up to 0x40: the world at half in display bytes), after the 3-D passes and before the HUD, so the ring and the HUD stay bright; eased in and out over 0.1 s (`DIM_SECONDS`). Port-only (the game has no dim); Classic never holds, so never dims |
 
 The hero's `GameOptions` is rebuilt from the save every tick (`gameplay::tick`); the setting is not one of them (a
 resource of its own), so the rebuild cannot lose it.
@@ -79,6 +80,8 @@ does not run (theirs runs `sound_frame`; here its `rand` draws would move the wo
   `work/captures/qs_pause/{modern,classic}/`): under Modern Ratchet keeps his frame-62 pose and the sky's ship its
   place through frame 100 with the ring open on the Bomb Glove; under Classic he turns and walks; both open the ring
   on frame 60 and close it on 108 with the request 10; frame 116 shows the glove in his hand.
+* The dim (`work/captures/qs_dim/`, Modern, the same run, frames 58..112): frame 90 shows the world at half under the
+  ring and the HUD at full brightness; frame 112, after the release, the world at full brightness again.
 
 ## 5. Left
 
