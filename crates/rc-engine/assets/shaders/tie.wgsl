@@ -168,8 +168,9 @@ fn vu_fat_lane(c0: u32, c1: u32, c2: u32, w: u32, z: u32) -> u32 {
 }
 
 #ifdef PREPASS_PIPELINE
-// The sun's shadow map (crate::sun_shadow): this frame's LOD and morph, and only the alpha test's passing half
-// (gs_state::specialize_shadow).
+// The sun's shadow map (crate::sun_shadow): LOD 0 unmorphed (k = 0) whatever this frame's record says, culled
+// instances too (tie_lod keeps them visible to Bevy while the sun casts), so a tie's shadow does not change with the
+// camera; only the alpha test's passing half (gs_state::specialize_shadow).
 struct TieShadowOutput {
     @builtin(position) position: vec4<f32>,
     @location(0) uv: vec2<f32>,
@@ -183,18 +184,16 @@ struct TieShadowOutput {
 fn vertex(v: TieVertex) -> TieShadowOutput {
     var out: TieShadowOutput;
     let tag = mesh_functions::get_tag(v.instance_index);
-    let lod = lods[tag];
 #ifdef SHADOW_SKIP
     let skip = true;
 #else
-    let skip = (lod.x & 3u) != ((v.morph >> 13u) & 3u);
+    let skip = ((v.morph >> 13u) & 3u) != 0u;
 #endif
     if (skip) {
         out.position = vec4<f32>(2.0, 2.0, 2.0, 1.0);
         return out;
     }
-    let k = bitcast<f32>(lod.y);
-    out.position = position_world_to_clip((insts[tag].model * vec4<f32>(v.position + k * v.delta, 1.0)).xyz);
+    out.position = position_world_to_clip((insts[tag].model * vec4<f32>(v.position, 1.0)).xyz);
     out.uv = v.uv;
     out.alpha = unpack4x8unorm(insts[tag].colors[v.info & 63u]).a * (255.0 / 128.0);
 #ifdef UNCLIPPED_DEPTH_ORTHO_EMULATION
