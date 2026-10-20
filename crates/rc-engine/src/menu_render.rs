@@ -1590,6 +1590,17 @@ fn front_end_frame(
 
 /// The frame's draws → HUD primitives; the snapshot node and its capture.
 #[allow(clippy::too_many_arguments)]
+/// What the main loop's card icon reads ([`build_prims`]).
+#[derive(bevy::ecs::system::SystemParam)]
+struct CardIconEnv<'w> {
+    time: Res<'w, Time>,
+    frame: Res<'w, crate::display::GameFrame>,
+    display: Option<Res<'w, crate::display::DisplaySettings>>,
+    cutscene: Option<Res<'w, crate::display::CutsceneView>>,
+    flight: Option<Res<'w, crate::flight_render::FlightRender>>,
+}
+
+#[allow(clippy::too_many_arguments)]
 fn build_prims(
     rt: Option<ResMut<MenuRt>>,
     level: Res<crate::Level>,
@@ -1599,6 +1610,7 @@ fn build_prims(
     primary: Query<Entity, With<PrimaryWindow>>,
     mut request: ResMut<SnapshotRequest>,
     (mut pictures, mut images): (Option<ResMut<crate::hud_images::HudImages>>, ResMut<Assets<Image>>),
+    icon_env: CardIconEnv,
 ) {
     let Some(mut rt) = rt else { return };
     let Some(lh) = level.0.hud.as_ref() else { return };
@@ -1611,6 +1623,16 @@ fn build_prims(
     let snapshot = convert(&rt.draws, &mut h, &mut statics, &mut st, &lh.glyphs, &mut resolve);
     // The pages stay clipped to the 512×416 screen in a 16:9 frame (`Prim::boxed`): their unused panels lie off it.
     for p in h.prims.iter_mut().chain(statics.iter_mut().flatten()) { p.boxed = true; }
+    // `entry` 0x25a0fc: the card icon after every mode's draw (rc_game::menus::freeze::card_busy_draw); the flight and
+    // the front end run their own loops.
+    let flying = icon_env.flight.as_ref().is_some_and(|f| f.active);
+    if !flying && !crate::saves::front_end_active() && crate::saves::card_icon_shown() {
+        let side = crate::saves::shown_side(icon_env.display.as_deref(), &icon_env.frame, icon_env.cutscene.as_ref().is_some_and(|c| c.0));
+        let vsync = (icon_env.time.elapsed_secs_f64() * 60.0) as u32;
+        let mut d = Vec::new();
+        rc_game::menus::freeze::card_busy_draw(&rt.assets, vsync, -side, &mut d);
+        convert(&d, &mut h, &mut statics, &mut st, &lh.glyphs, &mut resolve);
+    }
     hook.prims = h.prims;
     hook.statics = statics;
     hook.replace_hud = matches!(rt.render_mode, Mode::Menu | Mode::Slideshow) || menu_under_freeze(&rt);

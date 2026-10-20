@@ -4,6 +4,7 @@
 
 - Options → Quit Game has a third choice, Square: Main Menu, which goes back to the title screen without the logos; the loading picture shows while the level reloads, instead of a black screen. Circle: Yes still closes the game.
 - Quit Game in the main menu's Options closes the game.
+- The memory card icon shows at the bottom left while the game autosaves: after choosing a planet in the ship, picking up a gold bolt and the other autosaves. Before, it never appeared. In wide aspect ratios it sits in the screen's corner.
 
 ## v0.4.1-alpha
 

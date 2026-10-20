@@ -12,7 +12,7 @@
 //! | `fun_0022e420` (not the first-arrival flights) | actor 0's trail, FX 0 of the lump's bank | [`draw_fx`] (`rc_game::travel::ship::trail_quads`) |
 //! | `fun_0022ea08` 0x2a3310 (v 4, tick > 0x3c) | the caption `[19 + 19·max(lang − 1, 0) + dest]`: `DrawTexturedQuad(0x20, H − 0x58, 0x100, 0x20, 0, 0, 0x100, 0x20)`, RGBA `alpha << 24 \| 0x808080`, alpha min((tick − 0x3c)·2, 0x80), ALPHA 0x44 | [`hud_prims`] |
 //! | `ShipDrawCallback` 0x2a70a8 (not the first-arrival flights) | actor 0's canopy glass, FX 1 in sub 4 | [`draw_fx`] (crate::fx_draw's glass quads with the lump's FX 1) |
-//! | 0x2a3d08 (0x13d364 > 2 or 0x13d36c ≥ 0: the card busy) | TEST 0x3004b; `DrawTexturedQuad(0x2c, H − 0x60, 64, 64)` FX 2; FX 3 turned by −2π·(vsync % 55)/55 at (1216/16, H − 64), 272/16 square (`fun_00200600`) | [`hud_prims`] |
+//! | 0x2a3d08 (0x13d364 > 2 or 0x13d36c ≥ 0: the card busy) | TEST 0x3004b; `DrawTexturedQuad(0x2c, H − 0x60, 64, 64)` FX 2; FX 3 turned by −2π·(vsync % 55)/55 at (1216/16, H − 64), 272/16 square (`fun_00200600`) | [`hud_prims`] (busy: `crate::saves::card_icon_shown`, which holds a queued save for `saves::CARD_HOLD`; port-only: x moved out by the shown aspect's side margin, as the HUD's left slots) |
 //! | the black fade `fade·128` | 0x15f3fc | crate::travel_render (`Cinematic::fade`) |
 //! | `snd_bank_load_from_ee_cb` / `snd_play_sound_vol_pan_pmpb(bank, v, 0x400, 0, 0, 0)` | the flight's sound bank; sound v at tick 1 | [`audio_requests`] (the audio system's data swapped to the bank: `DoSpaceTransition` stopped every sound and the music before; the next level's swap replaces it) |
 //!
@@ -299,8 +299,9 @@ fn raw_alpha(t: &Texture) -> Texture {
 }
 
 /// The flight's 2D draws (module docs): the caption and the card icon, into the transition's HUD layer
-/// (crate::travel_render's `hud_layer`).
-pub(crate) fn hud_prims(f: &mut FlightRender, h: &mut crate::hud_render::Hud2d, img: &mut crate::hud_images::HudImages, assets: &mut Assets<Image>, lang: u32, card_busy: bool) {
+/// (crate::travel_render's `hud_layer`). `side`: the shown aspect's side margin (`display::side_extra`).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn hud_prims(f: &mut FlightRender, h: &mut crate::hud_render::Hud2d, img: &mut crate::hud_images::HudImages, assets: &mut Assets<Image>, lang: u32, card_busy: bool, side: i32) {
     use crate::hud_render::H;
     use rc_game::menus::ImageSrc;
     let Some(d) = f.draw.as_ref().filter(|_| f.active) else { return };
@@ -326,6 +327,7 @@ pub(crate) fn hud_prims(f: &mut FlightRender, h: &mut crate::hud_render::Hud2d, 
     }
     let Some([icon, spin]) = f.card_icons.clone() else { return };
     let [x, dy, w, hh] = space::CARD_ICON;
+    let x = x - side;
     if let Some(s) = img.resolve(&ImageSrc::Pixels { key: 0x7d00_0002, tex: icon }, assets) {
         h.prims.push(crate::hud_images::prim(s, x, H - dy, w, hh, 0, 0, w, hh, 0x8080_8080));
     }
@@ -333,7 +335,7 @@ pub(crate) fn hud_prims(f: &mut FlightRender, h: &mut crate::hud_render::Hud2d, 
         // fun_00200600: a w × h square centred at (cx, cy), turned by angle.
         let angle = (f.vsync.rem_euclid(space::CARD_SPIN_PERIOD as i64)) as f32 * -std::f32::consts::TAU / space::CARD_SPIN_PERIOD as f32;
         let (sn, c) = angle.sin_cos();
-        let (cx, cy) = (space::CARD_SPIN_CENTRE[0] as f32, (H - space::CARD_SPIN_CENTRE[1]) as f32);
+        let (cx, cy) = ((space::CARD_SPIN_CENTRE[0] - side) as f32, (H - space::CARD_SPIN_CENTRE[1]) as f32);
         let hw = space::CARD_SPIN_SIZE * 0.5;
         let corner = |x: f32, y: f32| [(cx + x * c - y * sn).round() as i32, (cy + x * sn + y * c).round() as i32];
         h.prims.push(crate::hud_render::Prim {
