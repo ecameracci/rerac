@@ -193,7 +193,7 @@ pub fn update(hero: &mut Hero, table: &mut MobyTable, _anim: &dyn super::anim::A
         let mtx = j0.map_or_else(
             || {
                 let mut f = [[0.0f32; 4]; 4];
-                for i in 0..3 { f[i] = it.rows[i].map(f32::from_bits); }
+                for (row, r) in f.iter_mut().zip(&it.rows) { *row = r.map(f32::from_bits); }
                 f[3] = [it.position[0], it.position[1], it.position[2], 1.0];
                 f
             },

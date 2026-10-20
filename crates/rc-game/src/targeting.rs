@@ -41,9 +41,9 @@
 //! docs/plan/hero_gameplay.md §13; corrects §8's "the Bomb Glove's only"): the mine 74's preview `0x2bfa78` (gravity
 //! 9.8, 120 ticks held, only faces end it: [`Prims::Ignore`]) with the draw `0x2bf420`, the decoy 203's `0x2d9760` and
 //! the Glove of Doom's canister's `0x2de0a8` (gravity 9, 300 ticks, primitives snapped without the height rule) with
-//! the draw `0x2d8e28` — the same quads and constants ([`BOMB_RETICLE`]). The decoy's and the canister's first update
-//! (state 0) takes the flying branch and marks "a new object in the glove" on itself, so in the game they never draw
-//! one (reproduced).
+//! the draws `0x2d8e28` / `0x2dda60` — the same quads and constants ([`BOMB_RETICLE`]). The decoy and the canister are
+//! created with a zero velocity (their gloves clear the vector: `0x2ed99c`, `0x2dda28`), so their first update skips
+//! the preview and the held ones draw the ring from the next tick (issue #16, 2026-10-20; was read as "never").
 //!
 //! Native `f32` throughout (`atan2` for `FastArcTan`).
 
@@ -418,8 +418,8 @@ pub struct ReticleStyle {
     pub additive: bool,
 }
 
-/// The Bomb Glove's (`0x2c23c0`; the mine's `0x2bf420` and the decoy's `0x2d8e28` are copies): FX 0x11 / 0x12, 2×2,
-/// 180 ticks a turn, 0x80808080, additive.
+/// The Bomb Glove's (`0x2c23c0`; the mine's `0x2bf420`, the decoy's `0x2d8e28` and the canister's `0x2dda60` are
+/// copies): FX 0x11 / 0x12, 2×2, 180 ticks a turn, 0x80808080, additive.
 pub const BOMB_RETICLE: ReticleStyle = ReticleStyle { fx: [0x11, 0x12], half: 1.0, spin_ticks: 180, rgba: 0x8080_8080, additive: true };
 
 /// One registered reticle: the point and normal the callback reads (the bomb's pvars +0x10 / +0x20).

@@ -1,6 +1,7 @@
 //! **The Glove of Doom's canister** (class 230 = 0xe6; one update on every level: level01 `0x2de650`), its create
 //! `0x2dde80`, release `0x2ddf58`, landing preview `0x2de0a8` (the decoy's `0x2d9760` over its own pvars, drawn with
-//! the same reticle `0x2dda60`) and its surface pop `0x2ddce0`. It lets out the bots 186
+//! `0x2dda60`, an instruction-for-instruction copy of the Bomb Glove's reticle `0x2c23c0`: the ground ring while the
+//! canister is held) and its surface pop `0x2ddce0`. It lets out the bots 186
 //! ([`super::doom_bot`]). The glove's side is the shared glove update (`crate::hero::gloves`, item 20). docs/plan/
 //! hero_gameplay.md §18.
 //!
@@ -22,7 +23,7 @@
 //! * **4 fading**: alpha −4 and scale ×0.92 a tick; deleted at alpha 0.
 //! * Out of the world box [2, 1021]³: deleted.
 //!
-//! **Pvars** (0x40): +0x00 velocity (the glove's aim writes it; the create copies the hand point into it), +0x10 /
+//! **Pvars** (0x40): +0x00 velocity (the glove's aim writes it; 0 at the create), +0x10 /
 //! +0x20 the preview's point and normal, +0x30 the owner (the glove: 1 here), +0x34 the glow timer, +0x38 s16 the slow
 //! ticks / the bot timer (and the preview's budget in flight: 0), +0x3a s16 a new canister in the glove (the preview
 //! stops), +0x3c the bots made.
@@ -75,8 +76,9 @@ pub fn set_velocity(m: &mut crate::moby_runtime::Moby, v: [f32; 3]) {
     p::set_v4f(&mut m.pvars, pv::VEL, [v[0], v[1], v[2], 0.0]);
 }
 
-/// `0x2dde80(glove, point, point)`: the new canister (the caller's `CreateMoby(0xe6)`): update / draw distances 0xff,
-/// visible, state 0 at the hand point, the velocity word = the point (the aim writes it before its next update), the
+/// `0x2dde80(glove, point, vel)`: the new canister (the caller's `CreateMoby(0xe6)`): update / draw distances 0xff,
+/// visible, state 0 at the hand point, the velocity 0 (the glove clears its vector first: `0x2dda28`; its aim writes
+/// it from the next tick, so the first update skips the landing preview and the held ones draw the reticle), the
 /// owner, the counter and the glow timer 0, a hundredth of the class scale; hidden in first person or with the hand
 /// hidden.
 pub fn init_held(table: &mut MobyTable, id: MobyId, point: [f32; 3], hidden: bool) {
@@ -88,7 +90,7 @@ pub fn init_held(table: &mut MobyTable, id: MobyId, point: [f32; 3], hidden: boo
     m.position = [point[0], point[1], point[2], m.position[3]];
     if m.pvars.len() < pv::SIZE { m.pvars.resize(pv::SIZE, 0); }
     let pvs = &mut m.pvars;
-    p::set_v4f(pvs, pv::VEL, [point[0], point[1], point[2], 0.0]);
+    p::set_v4f(pvs, pv::VEL, [0.0; 4]);
     p::set_i32(pvs, pv::OWNER, 1);
     p::set_i16(pvs, pv::COUNT, 0);
     p::set_i32(pvs, pv::PUFF_T, 0);
@@ -146,8 +148,9 @@ fn step(w: &mut World, id: MobyId) {
         let m = w.mm(id);
         if fp && m.state <= 1 { m.mode |= 0x41; } else { m.mode &= !0x41; }
     }
-    // The landing preview (the owner is the glove in hand, no new canister in it, a velocity); never draws in the game
-    // (hero_gameplay.md §13: the first update's "flying" branch marks the canister in the glove as a new one).
+    // The landing preview and its reticle (the owner is the glove in hand, no new canister in it, a velocity): held
+    // from the tick after the create (its velocity is 0 until the glove's aim writes it); a thrown one only marks the
+    // next canister as new (+0x3a; its budget +0x38 is 0).
     if glove_in_hand(w) && c::pi16(w, id, pv::NEW_HELD) == 0 && 0.0 < c::len3(c::pv4(w, id, pv::VEL)) { preview(w, id); }
     match w.m(id).state {
         0 => {
@@ -380,6 +383,43 @@ mod tests {
         assert_eq!((b.parts.live_by_type()[5], b.parts.stats.unported_kills[5]), (0, 0));
         for _ in 0..40 { b.tick(None); }
         assert!(b.table.mobys[c].is_deleted() && b.alive(doom_bot::CLASS) == 0, "gone without bots");
+    }
+
+    /// Issue #16, the ground ring: `0x2dde80` starts the canister with a zero velocity (`0x2dda28`), so its first
+    /// update (state 0) skips the preview and marks nothing; once the glove's aim writes the velocity the held
+    /// canister previews from the launch point and registers the reticle (`0x2dda60`) on the floor ahead, pulled 5 %
+    /// toward the camera, every tick. Thrown while the glove holds the next one, it marks itself (+0x3a) and draws none.
+    #[test]
+    fn held_canister_draws_the_ground_ring() {
+        let mut b = Bench::new(floor(8.0, 0x22), &[CLASS], [20.0, 20.0, 8.0]);
+        b.hero.moby_rows[0] = crate::hero::physics::v4(1.0, 0.0, 0.0);
+        let anim = rc_formats::moby_anim::AnimState { seq_a: 1, frame_a: 0, seq_b: 1, frame_b: 0, t: 0.0, speed: 1.0, rate: 1.0, flags: 0, trigger_count: 0, skip_advance: false };
+        b.hero.items.slot.item = Some(crate::hero::items::HandItem { o_class: GLOVE_CLASS, mstate: 0, anim, snapshot: None, scale: 1.0, position: [0.0; 3], rows: [[0; 4]; 3], hit_timer: 0, flight: Default::default() });
+        let c = b.create(CLASS);
+        init_held(&mut b.table, c, [20.3, 20.0, 9.0], false);
+        b.hero.weapons.glove.held = Some(c);
+        assert_eq!(p::v4f(&b.table.mobys[c].pvars, pv::VEL), [0.0; 4], "created at rest");
+        b.tick(None);
+        assert_eq!(b.table.mobys[c].state, HELD);
+        assert!(b.svc.reticles.of_tick(b.counter).is_empty(), "no ring on the first update");
+        assert_eq!(p::i16(&b.table.mobys[c].pvars, pv::NEW_HELD), 0, "not marked as replaced");
+        set_velocity(&mut b.table.mobys[c], [0.04, 0.0, 0.03]);
+        let cam = [b.camera[0].to_f32(), b.camera[1].to_f32(), b.camera[2].to_f32()];
+        for _ in 0..3 {
+            b.tick(None);
+            let r = b.svc.reticles.of_tick(b.counter);
+            assert_eq!(r.len(), 1, "one ring a tick while held");
+            assert_eq!(*r[0].style, crate::targeting::BOMB_RETICLE, "the Bomb Glove's ring");
+            let on_floor: [f32; 3] = std::array::from_fn(|k| cam[k] + (r[0].point[k] - cam[k]) / 0.95);
+            assert!((on_floor[2] - 8.0).abs() < 1e-3 && 21.0 < on_floor[0] && (on_floor[1] - 20.0).abs() < 1.0, "on the floor ahead: {on_floor:?}");
+            let n = r[0].normal;
+            assert!(n[0] == 0.0 && n[1] == 0.0 && 0.0 < n[2], "flat (the face's raw normal): {n:?}");
+            assert_eq!(p::v4f(&b.table.mobys[c].pvars, pv::POINT)[..3], r[0].point[..], "kept in +0x10");
+        }
+        release(&mut b.table.mobys[c], [20.3, 20.0, 9.0], None);
+        b.tick(None);
+        assert!(b.svc.reticles.of_tick(b.counter).is_empty(), "no ring once thrown");
+        assert_eq!(p::i16(&b.table.mobys[c].pvars, pv::NEW_HELD), 1, "marked: a new canister in the glove");
     }
 
     /// State 3 with 8 bots alive: no bot, the timer set to 15 ticks.

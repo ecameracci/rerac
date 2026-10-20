@@ -102,10 +102,11 @@ pub fn set_velocity(m: &mut crate::moby_runtime::Moby, v: [f32; 3]) {
 }
 
 /// `0x2d9228(glove, point, vel)`: the new decoy (the caller's `CreateMoby`): update / draw distances 0xff, visible,
-/// state 0 at the hand point, the velocity word = the point (the glove's aim writes it before the decoy's next update),
-/// the owner, half the class scale, health 4 (8 gold), no collision (+0x94 = 0, +0x98 = −1), a random yaw
-/// `randf(−π, π)`, Ratchet's lighting, the red flash record (0x80, 4 in, 15 out); hidden in first person or with the
-/// hand hidden.
+/// state 0 at the hand point, the velocity 0 (the glove clears its vector first: `0x2ed6b4` / `0x2ed99c` /
+/// `0x2ed9b4`; its aim writes it from the next tick, so the first update skips the landing preview and the held ones
+/// draw the reticle), the owner, half the class scale, health 4 (8 gold), no collision (+0x94 = 0, +0x98 = −1), a
+/// random yaw `randf(−π, π)`, Ratchet's lighting, the red flash record (0x80, 4 in, 15 out); hidden in first person or
+/// with the hand hidden.
 pub fn init_held(table: &mut MobyTable, id: MobyId, rng: &mut crate::rng::Rng, point: [f32; 3], gold: bool, hidden: bool) {
     let hero_light = table.hero().map(|h| (table.mobys[h].light, table.mobys[h].ambient));
     let m = &mut table.mobys[id];
@@ -116,7 +117,7 @@ pub fn init_held(table: &mut MobyTable, id: MobyId, rng: &mut crate::rng::Rng, p
     m.position = [point[0], point[1], point[2], m.position[3]];
     if m.pvars.len() < pv::SIZE { m.pvars.resize(pv::SIZE, 0); }
     let pvs = &mut m.pvars;
-    p::set_v4f(pvs, pv::VEL, [point[0], point[1], point[2], 0.0]);
+    p::set_v4f(pvs, pv::VEL, [0.0; 4]);
     p::set_i32(pvs, pv::OWNER, 1);
     p::set_i16(pvs, pv::TIMER, 0);
     p::set_i32(pvs, pv::AGE, 0);
