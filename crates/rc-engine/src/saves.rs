@@ -256,12 +256,34 @@ pub fn capture(play: &mut crate::gameplay::Play) -> SaveCapture {
     SaveCapture { clock: clock_now(), hooks, base: play.svc.interact.tables.base.clone(), map_mask: Some(play.svc.map.pack()) }
 }
 
+/// How long the card icon shows from a queued `memcard_Save` (port-only: the native card ends the write within a
+/// few frames, G-SAV-011; [L] the PS2 card's write time is not measured).
+pub const CARD_HOLD: std::time::Duration = std::time::Duration::from_secs(3);
+
+static ICON_HOLD: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+
+/// The card busy as the card icons test it (0x13d364 > 2 or 0x13d36c ≥ 0).
+fn card_busy(c: &MemCard) -> bool { c.state > 2 || c.req_state >= 0 }
+
+/// The card icons show (`entry` 0x25a0fc, the flight's 0x2a3d08): the card busy, or within [`CARD_HOLD`] of a queued
+/// `memcard_Save`. (While the page menu holds the card, only the hold.)
+pub fn card_icon_shown() -> bool {
+    let hold = ICON_HOLD.lock().unwrap_or_else(|e| e.into_inner()).is_some_and(|t| std::time::Instant::now() < t);
+    hold || with_card(|c| card_busy(c)).unwrap_or(false)
+}
+
+/// The side margin (game pixels, `display::side_extra`) of the aspect shown now: the HUD's left slots move out by it.
+pub fn shown_side(display: Option<&crate::display::DisplaySettings>, frame: &crate::display::GameFrame, cutscene: bool) -> i32 {
+    crate::display::side_extra(display.map_or(frame.ratio(), |d| d.shown_ratio(cutscene, frame)))
+}
+
 /// `memcard_Save(force, pretend)` 0x261448 from the running level (module docs). Returns the game's value.
 pub fn memcard_save(play: &mut crate::gameplay::Play, gs: &mut GameState, force: bool, pretend: i32) -> bool {
     let cap = capture(play);
-    let r = with_card(|c| c.memcard_save(gs, force, pretend, &cap));
+    let r = with_card(|c| (c.memcard_save(gs, force, pretend, &cap), card_busy(c)));
     match r {
-        Some(q) => {
+        Some((q, busy)) => {
+            if busy { *ICON_HOLD.lock().unwrap_or_else(|e| e.into_inner()) = Some(std::time::Instant::now() + CARD_HOLD); }
             println!("saves: memcard_Save({}, {pretend}): {}", force as i32, if q { "queued" } else { "no card / slot or busy" });
             q
         }

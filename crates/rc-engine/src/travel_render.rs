@@ -835,6 +835,7 @@ fn dest_items(dest: i32) -> Option<rc_formats::save_game::ItemTables> {
 }
 
 /// The HUD in mode 6 and the transition (module docs): no HUD; the black screen and the story cards.
+#[allow(clippy::too_many_arguments)]
 fn hud_layer(
     t: Res<Travel>,
     mut hook: ResMut<Hud2dHook>,
@@ -843,6 +844,7 @@ fn hud_layer(
     mut plates: Local<Option<(usize, Arc<Plates>)>>,
     mut flight: ResMut<crate::flight_render::FlightRender>,
     mut still: Local<Option<Option<Arc<rc_formats::texture::Texture>>>>,
+    (frame, display, cutscene): (Res<crate::display::GameFrame>, Option<Res<crate::display::DisplaySettings>>, Option<Res<crate::display::CutsceneView>>),
 ) {
     if !t.hud_off && !t.blank && t.card.is_none() { return; }
     hook.replace_hud = true;
@@ -891,8 +893,8 @@ fn hud_layer(
     }
     // The flight's caption and card icon (crate::flight_render).
     if let Some(img) = images.as_deref_mut() {
-        let busy = crate::saves::with_card(|c| c.state > 2 || c.req_state >= 0).unwrap_or(false);
-        crate::flight_render::hud_prims(&mut flight, &mut h, img, &mut assets, crate::hud_render::language(), busy);
+        let side = crate::saves::shown_side(display.as_deref(), &frame, cutscene.is_some_and(|c| c.0));
+        crate::flight_render::hud_prims(&mut flight, &mut h, img, &mut assets, crate::hud_render::language(), crate::saves::card_icon_shown(), side);
     }
     hook.prims.extend(h.prims);
 }

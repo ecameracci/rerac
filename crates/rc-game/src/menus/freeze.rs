@@ -42,6 +42,7 @@
 //! | 0x2237d8 kind 6 | `DrawUIFrame(100, 300, 0x60, 0x1a0, (1 − fade/30)·80)`; window 0x208ac8 (y 100..300, x 96..416, anchor 256, y 104, lines 16, centred); steps 0..2: "✕ Yes" (0x524e) at (0xca, 0x118) and "△ No" (0x524b) at (0x135, 0x118), text 0x522a (steps 0, 1) / 0x522b (step 2); step 3: "✕ Continue" 0x524a at (256, 0x118), text 0x522c; text colour `FastTweenColor(f, *0x15f4b0, *0x15f4b4)`, buttons `FastTweenColor(f, 0x20ffff, 0x8020ffff)` | [`Freeze::draw`] |
 //! | 0x1f6060 | the pulsing frame: `draw_rect_overlay(t, b, l, r, alpha \| 0x000004)` (the backing) and eight bevel bars | [`pulse_frame`] (`Draw::Rect16`) |
 //! | 0x21aac8 | 0x15f5d8 = 0 only: the world (previous mode 0) or `PageMenuDraw(1)` (previous mode 3), the black 0x40, `DrawDialogText` | the engine (`menu_render::freeze_frame`) |
+//! | `entry` 0x25a0fc (after the card's frame, every mode) | the card busy (0x13d364 > 2 or 0x13d36c ≥ 0) and 0x1ba2ac clear (the page menu's open 0x28c108 sets it, the loop clears it after): TEST 0x3004b; icon 0x755d frame 0 at (0x32, 0x12c), 64×64, alpha 0x80; frame 1 turned by −2π·(0x15f3f8 % 55)/55, centred at (1312/16, 5312/16), 272/16 (`fun_00250ea8`) | [`card_busy_draw`] (the engine: crate::menu_render; the one frame of 0x1ba2ac not modelled) |
 //! | L00 0x297f78 (mode-0 update) | the save notice: auto-save on, global flag 0x10 clear, ≥ 8 frames in mode 0, never completed, not dying, HP ≠ 0, tick > ticks(30), level ≠ 0 → kind 5, flag 0x10 = 1 | [`save_notice_due`] |
 //!
 //! Kind 3's texts by status (`fe` = the front end 0x15f5a8; ✕ = 0x10, ○ = 0x11, △ = 0x12 in the strings):
@@ -678,6 +679,16 @@ impl Freeze {
         let angle = ((vsync % 55) as f32 * -std::f32::consts::TAU) / 55.0;
         out.push(super::pause::map_page::rotated(spin, 256.0, cy as f32, 17.0, 17.0, angle, 0x40, 0x40));
     }
+}
+
+/// The main loop's card icon (`entry` 0x25a0fc, module docs) while the card is busy, moved by `dx` (port-only: the
+/// engine's side margin, so the icon keeps to the frame's left edge).
+pub fn card_busy_draw(a: &MenuAssets, vsync: u32, dx: i32, out: &mut Vec<MenuDraw>) {
+    let icon = a.frame(CARD_ICON, 0);
+    out.push(MenuDraw::Hud(Draw::Sprite { frame: icon, x: 0x32 + dx, y: 0x12c, w: 0x40, h: 0x40, alpha: 0x80, rot: Rot::None }));
+    let spin = a.frame(CARD_ICON, 1);
+    let angle = ((vsync % 55) as f32 * -std::f32::consts::TAU) / 55.0;
+    out.push(super::pause::map_page::rotated(spin, 1312.0 / 16.0 + dx as f32, 5312.0 / 16.0, 17.0, 17.0, angle, 0x40, 0x40));
 }
 
 /// The frames' pulse: `FastTweenColor(sin((vsync % *0x15f4e0) / *0x15f4e0 · 6.28318 − 3.14159)·0.5 + 0.5, *0x15f4e4,
