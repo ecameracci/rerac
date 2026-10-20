@@ -158,7 +158,7 @@ These apply to every dispatch from now on (the brief lines are in §3.2):
 - Ghidra MCP: `import_file` with a `language` param forces the raw loader; `rename_function` returns `{status:"success"}`; `set_comment` uses `type`; `delete_file` uses `filePath`; don't leave the active program switched; the GUI holds programs. Some level overlays time out on `open_program`; use identical copies in another level.
 - Lombyte names are mostly right but several are wrong (listed in `tools/ghidra/names/doc_names.csv` notes and `docs/plan/menus.md`). Never override a Lombyte name in Ghidra; add a plate comment.
 - Each level overlay is its own executable: boot-ELF addresses are not valid in-level; docs say which program an address belongs to.
-- Screenshot harness: `RC_SCREENSHOT_FRAME=N` (offscreen capture; exit 2/3 on failure). The default camera can be inside geometry on some levels; use `RC_CAM`. `RC_OCCL=0` for free-fly.
+- Screenshot harness: `RC_SCREENSHOT_FRAME=N` (offscreen capture; exit 2/3 on failure). The default camera frames Ratchet's start (`fly_cam::spawn_view`, G-TOOL-015, 2026-10-19; leftover G-TOOL-025); `RC_CAM` sets another view. `RC_OCCL=0` for free-fly.
 - Agents occasionally hit transient compile errors from another agent's mid-edit; they should wait and retry, not edit the other file.
 - The scratchpad is shared; agents have overwritten each other's helper scripts. Tell agents to use a subfolder named after their task.
 - Keep the user's machine awake for long overnight runs (`request_keep_awake` with `session_idle`).

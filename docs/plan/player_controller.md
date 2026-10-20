@@ -24,6 +24,16 @@ Confidence: **H** = read from the instructions, **M** = decompiler C, partly che
   particles (mask 4) → **camera `0x20eca8`** (mask 8) → sound, point lights, help → `0x2ab960` (tick counter
   `0x15f5cc`++). Rendering then uses Camera `0x167240` (boot 0x187080). (H for the order, M for which moby calls are
   which)
+- **The tick counter in the hero update** (H, L01): `0x2aba68` calls the mobys (0x2ac0e8..0x2ac100), the hero
+  (`jal 0x228870` @ 0x2ac144), the camera (@ 0x2ac1d4), sound / lights / help, then `0x2ab960` (@ 0x2ac288), whose
+  `lw 0x15f5cc; addiu 1; sw` (0x2ab9e4..0x2aba08) is the tick's only write (the other stores in the executable:
+  0x257c8c = 0 and the load's `++` 0x2591c0). The hero code only reads it, so it sees this tick's value: the cable's
+  sparks (L00 case 0x74 @ 0x21dbf8: `lw 0x15f5cc; andi 1` @ 0x21dc24) fire on odd counters, the Hoverboard pads' pulse
+  (L05 0x253cf4) takes the raw value.
+  *In the port (2026-10-19):* `Hero::idle.counter` is the game's value for the whole hero update;
+  `hero::hero_update_with_sounds` steps the mirror once as it returns (it stepped before the readers, which left the
+  cable sparks and the pads' pulse one ahead and made `wall_ahead_probe` / the swim probe subtract 1). Pinned by
+  `hero/boots/tests.rs` `cable_sparks_on_odd_ticks` (G-HERO-028).
 
 ## 1. Input (PAD at 0x13c940, libpad2) — H
 | Off | Meaning |
@@ -374,7 +384,8 @@ hero's line / sphere / capsule queries read `Env::mobys` (the table as the tick'
 Ratchet, their `a2`), the write-back is followed by `MobyBuildMatrix(Ratchet)` (bounding sphere, grid re-registration; the
 write-back copies only the three rotation rows, 0x30 bytes, keeping +0xf0), and the camera's queries read `CamInput::mobys`
 (follow_camera.rs module doc: the game's `a2` per query, the avoidance's switch-off of mesh-less mobys, the ±1° nudges, the
-crate hit of a blocked camera line). Not ported: Ratchet's per-tick collision cylinders (`FUN_00263cb8`), moving platforms (0x249618; 0x13f440 only from the edge nudge), the ledge-grab probes (0x22c9a0,
+crate hit of a blocked camera line). The write-back also rewrites Ratchet's two collision cylinders from the capsule
+(`FUN_00263cb8`, `Hero::sync_cylinders`; collision_queries.md "Ratchet's cylinders", 2026-10-19). Not ported: moving platforms (0x249618; 0x13f440 only from the edge nudge), the ledge-grab probes (0x22c9a0,
 0x22d090), the periodic wall/ledge probes of 0x23c458, idle fidgets (RNG-driven 0x241e00; SetState(0)'s
 `rand_range(50,100)` **is** drawn), cosmetics (lean 0x235638, side probes, squash, sounds/particles), the Euler x/y
 straightening 0x236520 (no-op on foot), the camera moby 0x3ef and the 15-unit focus query of 0x3111d8, pass-through volumes, camera switches/blends and the
@@ -691,7 +702,7 @@ Table by back item (`0x22ddd8(3)`): 2 → 0x17c070 {(0: 4, 11), (0: 3, 10), (0: 
 
 ### 13.7 In the port / not ported
 `Hero::idle` (these fields), `Hero::back` (created only once `Hero::set_back_classes(607, 601)` is called),
-`Hero::idle.counter` (0x15f5cc mirror; the tick driver should set it), `Hero::idle.level` (0x15ed84; also
+`Hero::idle.counter` (0x15f5cc mirror, the game's value during the hero update, stepped as it returns (§0); the tick driver should set it), `Hero::idle.level` (0x15ed84; also
 selects the ground probe's water footstep class 3 on levels 1 and 0x12). `Hero::set_anim` takes the RNG.
 Not ported: the edge look-down of 0x22b928 (0x13f5b0), HeroScanTargets (look targets), ~~HeroLean (walk)~~ (ported: `Hero::lean`, hero_gameplay.md §7),
 the manipulators' pose application (the angles are computed, not rendered), the sound triggers of the advances

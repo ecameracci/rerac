@@ -490,6 +490,35 @@ fn moby_joint_capsule_and_pose_cache() {
     assert_eq!(pc.get(5, 1, |_| unreachable!())[0], [5, 0, 0, 0]);
 }
 
+/// Ratchet's rewritten cylinders (`Moby::prim_writes`, `HeroSyncMoby`'s `FUN_00263cb8`): the moby pass reads records
+/// 0 / 1 with the moby's words (+0x04 height, +0x10..+0x1c base and radius) instead of the class blob's.
+#[test]
+fn moby_prim_writes_replace_the_blob_cylinders() {
+    let cyl = |mask: u16, r: f32, h: f32| prim(3, mask, [0.0, h * 1024.0, 0.0, 0.0], [0.0, 0.0, 0.0, r * 1024.0]);
+    let mut classes = HashMap::new();
+    classes.insert(0, MobyCollision { prims: vec![cyl(0x0002, 0.5, 1.0), cyl(0x8002, 0.5, 1.0)], ..Default::default() });
+    let mut table = MobyTable::new(vec![moby(0, 0, [100.0, 100.0, 10.0], 6.0)], 0);
+    let grid = MobyGrid::build(&mut table);
+    let none = Collision::default();
+    let line = |t: &MobyTable, z: f32| {
+        let src = Fixed { table: t, joints: HashMap::new() };
+        let cache = Mutex::new(PoseCache::default());
+        let sc = MobyScene { mobys: &src, grid: &grid, classes: &classes, cache: &cache };
+        coll_line_m(&none, Some(&sc), [98.0, 100.0, z], [102.0, 100.0, z], QueryFlags::NONE, None).map(|h| (h.primitive, h.point[0]))
+    };
+    // The blob's: r 0.5, z 10..11.
+    let h = line(&table, 10.5).expect("blob cylinder");
+    assert!(h.0 == Some(0) && (h.1 - 99.5).abs() < 1e-4, "{h:?}");
+    assert!(line(&table, 14.0).is_none());
+    // Record 0 rewritten: r 1, base 3 up, height 2 (z 13..15); record 1 keeps the blob's.
+    let w = |r: f32, z: f32, h: f32| [(h * 1024.0).to_bits(), 0, 0, (z * 1024.0).to_bits(), (r * 1024.0).to_bits()];
+    table.mobys[0].prim_writes[0] = Some(w(1.0, 3.0, 2.0));
+    let h = line(&table, 14.0).expect("rewritten cylinder");
+    assert!(h.0 == Some(0) && (h.1 - 99.0).abs() < 1e-4, "{h:?}");
+    let h = line(&table, 10.5).expect("record 1, the blob's");
+    assert!(h.0 == Some(1) && (h.1 - 99.5).abs() < 1e-4, "{h:?}");
+}
+
 #[test]
 fn hero_groups_sphere() {
     // One group: a floor triangle at z 10 over (8,8)-(8,12)-(12,8), bounding sphere (10,10,10) r 3.

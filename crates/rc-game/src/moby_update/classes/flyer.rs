@@ -624,8 +624,16 @@ fn fly(w: &mut World, id: MobyId, culled: bool) {
         if m.pvars[P_SPARK] == 0 { m.pvars[P_SPARK] = 7; }
         m.pvars[P_SPARK] = m.pvars[P_SPARK].wrapping_sub(1);
     }
-    if matches!(w.svc.level, 3 | 9) { w.svc.unported("flyer: level 3/9 combat block"); }
+    if matches!(w.svc.level, 3 | 9) {
+        w.svc.unported("flyer: level 3/9 combat block");
+        // Its tail, hit or not (0x2f600c; level03's copy 0x294b1c): 0x160770 = the driver (`bomb::passes_through`).
+        // Only level03's copy runs on a level 3 / 9.
+        if w.svc.level == 3 { w.svc.pass_update = DRIVER_L03; }
+    }
 }
+
+/// Level03's copy of the driver (`kerwan_train::LEAD_FN`, the update of the train's lead 845).
+const DRIVER_L03: u32 = 0x29_3c78;
 
 #[cfg(test)]
 mod tests {

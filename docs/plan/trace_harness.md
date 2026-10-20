@@ -264,8 +264,9 @@ When a comparison command gains a tolerance, give it an option to apply the boun
 
 * First real run done (2026-09-26, trace_results_novalis.md): tfrag lighting 51331/51331 vertices bit-exact
   (tfrag_lighting.md §8's float-model question: the model holds on retail data), shrubs 28992/28992, ties
-  96511/96512 (one ±1, proposed tolerance there). The tolerance rows proposed in that doc still need to go into
-  docs/plan/hardware_fidelity_layers.md "Tolerances".
+  96511/96512 (one ±1, proposed tolerance there). ~~The tolerance rows proposed in that doc still need to go into
+  docs/plan/hardware_fidelity_layers.md "Tolerances".~~ **Done 2026-10-19**: all are in hardware_fidelity_layers.md
+  "Tolerances" (copied 2026-09-27); applying them in the commands (§8) is G-TOOL-024.
 * Only level01 has known global addresses (`known_addrs`, the tie/shrub/moby globals). The tfrag check relies on
   the search for other levels; the others need their level's addresses.
 * Header bytes changed at run time on Novalis: 0x3a/0x3b only (0x2b/0x2d/0x35 unchanged at this point).

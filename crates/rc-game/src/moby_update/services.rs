@@ -854,6 +854,10 @@ pub struct Services {
     pub coll_classes: Arc<HashMap<i16, MobyCollision>>,
     /// `CollOutput +4/+8/+0xc`: the collision kernels' joint-pose cache.
     pub pose_cache: Arc<Mutex<PoseCache>>,
+    /// 0x160770 (overlay data, −1 at load): the update function its writers store as they run (level03's air traffic
+    /// 0x29dba8, the flyer driver's level-3 / 9 tail); the bomb's hit test lets a moby whose +0x74 equals it through
+    /// (`classes::bomb`).
+    pub pass_update: u32,
     /// Per class: the first byte list of each joint list (class header `joints`, `rc_formats::gadget::joint_list`),
     /// for `FUN_002645a8(moby, list, out)` ([`World::joint_point`]). Filled for the classes whose update needs
     /// it ([`crate::moby_update::classes::needs_joint_lists`]).
@@ -991,6 +995,7 @@ impl Services {
             grid: Arc::new(MobyGrid::new()),
             coll_classes: Arc::new(HashMap::new()),
             pose_cache: Arc::new(Mutex::new(PoseCache::default())),
+            pass_update: u32::MAX,
             joint_lists: HashMap::new(),
             gaits: HashMap::new(),
             joint_targets: HashMap::new(),

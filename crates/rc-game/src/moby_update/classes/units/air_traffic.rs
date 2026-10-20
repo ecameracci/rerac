@@ -45,7 +45,7 @@
 //! | | the pieces: 115 0x6a9–0x6ab, 116 0x6ac–0x6ae, 117 0x6af–0x6b1, 118 0x6b2–0x6b4, 119 0x6b5–0x6b7, 120 0x6b8–0x6ba, 132 0x6bc, 0x6be, 0x6bf: `BreakFxB(12·dt², m, class, pos, rot, ticks(90), 0, row 0·0.075 + (0, 0, 0.08), 0x15f580 (zero), 0x15f580)` (0x2520b0 = L01 0x278ad8); 75, 795 none | [`wreck`] (`fx::break_piece_with`) |
 //! | | 795: skill point 0x13d40c, `PlayLevelSoundAtMoby(1, 0, 0)`, `ShowBanner(0x53d6, −1)` | ported (`story::award_skill_point`) |
 //! | | `0x27a618(0, 0, m)`: level def 2 at the moby | [`wreck`] (`World::play_level_def`) |
-//! | tail | 0x160770 = 0x29dba8 (debug) | n/a |
+//! | tail | 0x160770 = 0x29dba8 (the bomb's hit test lets this update's mobys through, `bomb::passes_through`) | [`wreck`] (`Services::pass_update`) |
 //! | | +0xa4 = 0xff; P+0x14a ≠ 0: `FastDecTimer`; still running or seen → collision off, mode \|= 0x41, the loop released, P+0x150 = −1, untargetable; out and culled → mode &= ~0x41 \| 0x1000, collision back (class +0x10) | [`wreck`] |
 //! | state 2 | spline ≠ −1 → state 0; the loop released, P+0x150 = −1 | [`update`] |
 //! | state 3 | `FastDecTimer(P+0x12c)` out → state 1 | [`update`] |
@@ -544,6 +544,7 @@ pub fn wreck(w: &mut World, id: MobyId, culled: bool) {
         if oc == 795 { crate::moby_update::story::award_skill_point(w, crate::moby_update::story::skill_index(0x13_d40c)); }
         w.play_level_def(0, 0, id);
     }
+    w.svc.pass_update = UPDATE_FN;
     w.mm(id).hit_slot = 0xff;
     let mut t = p::i16(&w.m(id).pvars, pv::WRECK_T);
     if t == 0 { return; }

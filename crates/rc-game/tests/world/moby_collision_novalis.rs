@@ -123,6 +123,41 @@ fn novalis_line_onto_crate_344() {
     assert!(n >= 2, "{n} mobys");
 }
 
+/// Ratchet's collision cylinders: his class blob's records 0 / 1 are vertical cylinders (kind 3) that the load's
+/// `HeroSyncMoby` rewrites (`FUN_00263cb8` ×2, `Hero::write_back`); a line across him hits the rewritten radius
+/// (record 1, mask 0x8002; record 0 has mask 1, read by flag-0x4 queries only).
+#[test]
+fn novalis_line_hits_ratchets_cylinders() {
+    let Some(lv) = load() else { eprintln!("skipped: no extracted/"); return };
+    let blob = lv.blobs.iter().find(|(oc, _)| *oc == 0).map(|(_, b)| b).expect("Ratchet's blob");
+    eprintln!("class 0 prims {:?}", blob.prims.iter().map(|p| (p.kind(), p.mask(), p.word4())).collect::<Vec<_>>());
+    assert!(blob.prims.len() >= 2 && blob.prims[..2].iter().all(|p| p.kind() == 3), "records 0 / 1: cylinders");
+    let (mut game, mut svc, classes) = loaded(&lv, true, 0);
+    let hi = game.mobys.mobys.iter().position(|m| m.o_class == 0).unwrap();
+    assert!(game.mobys.mobys[hi].prim_writes.iter().all(Option::is_some), "written at load (HeroInit 0x226cc4)");
+    let hero = game.hero.clone();
+    let p = ph::to_f32x3(hero.pos);
+    let r = hero.cap_radius.to_f32();
+    // The tick's MobyBuildMatrix(Ratchet) (`tick.rs`) gives him the bounding sphere of his sequence; his animation class
+    // is the engine's (not in this level's class table), so a 2-unit sphere stands in, re-registered in the grid.
+    let m = &mut game.mobys.mobys[hi];
+    m.bsphere = [m.position[0] * 1024.0, m.position[1] * 1024.0, (m.position[2] + 1.0) * 1024.0, 2048.0];
+    std::sync::Arc::make_mut(&mut svc.grid).register(m);
+    let z = p[2] + hero.cap_bottom.to_f32() + 0.05;
+    let mut w = World::new(&mut game.mobys, &hero, &mut game.rng, &classes, &mut svc, 1);
+    w.coll = Some(&lv.mesh);
+    let (a, b) = ([Pf::f(p[0] - 1.5), Pf::f(p[1]), Pf::f(z), Pf::ZERO], [Pf::f(p[0] + 1.5), Pf::f(p[1]), Pf::f(z), Pf::ZERO]);
+    let h = w.coll_line(a, b, 0, None).expect("Ratchet");
+    eprintln!("Ratchet at {p:?}, radius {r}: line hit {:?} prim {:?}", h.point, h.primitive);
+    assert!(h.moby == Some(hi) && h.primitive == Some(1), "{:?} {:?}", h.moby, h.primitive);
+    assert!((h.point[0] - (p[0] - r)).abs() < 1e-3, "enters at his radius: {:?}", h.point);
+    // Flag 0x4 reads record 0 (base = bottom).
+    let h = w.coll_line(a, b, 4, None).expect("record 0");
+    assert!(h.moby == Some(hi) && h.primitive == Some(0) && (h.point[0] - (p[0] - r)).abs() < 1e-3, "{:?} {:?}", h.primitive, h.point);
+    // Flag 0x2 skips primitives: the line passes through him.
+    assert!(w.coll_line(a, b, 2, None).is_none_or(|h| h.moby != Some(hi)));
+}
+
 /// Drops a bolt 1.5 above crate 342 (top of the 344 stack) and runs the moby loop: with moby collision it
 /// settles on the crate; without, it falls through the stack.
 fn drop_bolt(lv: &Level, with_mobys: bool) -> (u8, [f32; 3], f32, f32) {

@@ -7,7 +7,7 @@ lists what was seen.
 ## How it was run
 
 - `RC_LEVEL=NN RC_SCREENSHOT_FRAME=120 RC_SCREENSHOT=NN_default.png cargo dev`: the default camera frames the tfrag
-  bounding spheres (main.rs `setup`).
+  bounding spheres (main.rs `setup`; since 2026-10-19 it frames the level's spawn, H3).
 - `NN_low.png`: `RC_OCCL=0`. `RC_CAM` = P + (0, −30, 15) looking at P, with P the ship spawn (level settings
   +0x2c) where the engine created one (01, 14, 15), else the tfrag sphere centroid. No log reports a class-0
   (hero) moby instance. Levels 05, 07, 08, 15 and 18 put that camera inside rock, so they
@@ -195,6 +195,13 @@ Nothing specific found. There were no missing tfrags, and every tfrag, tie and m
 - 16: the whole frame is one brown terrain texture.
 - 13: the frame is a hull close-up.
 - A spawn-based default (ship or hero start) would make first looks at new levels useful.
+- **Fixed 2026-10-19 (G-TOOL-015; `rc-engine/src/fly_cam.rs` `spawn_view`, called from main.rs `setup_camera`).**
+  Without `RC_CAM` the fly camera starts 20 units behind and 10 above Ratchet's start (the placed class-0 instance,
+  the one crate::gameplay `setup` takes) along its yaw, looking 2 units above it; a level without one falls back to
+  this sweep's ship framing (level settings +0x2c, P + (0, −30, 15) looking at P), then to the tfrag-sphere framing.
+  `RC_CAM` still overrides. Checked with `RC_PLAY=0` captures at frame 120 (`work/captures/g-tool-015/`): 16 shows
+  Ratchet on the start platform with the city behind, 01 Ratchet on the landing meadow, 13 Gemlik's landing deck
+  with Ratchet hidden behind a girder. Leftovers (no line-of-sight test; the boot level only): G-TOOL-025.
 
 ## Expected and known gaps (not counted above)
 - Star sprites: 00, 02, 05, 06, 07, 13, 15, 17 (`sky_sprite_proc`, not ported). 06 and 17 still show stars,

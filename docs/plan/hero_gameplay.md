@@ -930,6 +930,11 @@ storage (the Pyrocitor +0x4a, the Tesla Claw +0x48, the Suck Cannon / Taunter +0
 0x1617f8), so no item releases another's. The port's channels follow that: `fx::LOOP_MORPH` (5) is the Morph-o-Ray's
 alone; nothing but its own update and its `item_gone` releases it.
 
+**The range word** (gp−0x54f4, level18 gp−0x54b4 = 0x16174c; 8.0): read by the search, the lay, the beam's line and
+length and the pulses. Level 18's scene 1 (1563, `0x2f88e8`) sets it to 24 around its own call of the beam only
+(0x2f9578, put back at 0x2f9580), so the item always sees 8. In the port: `morph_ray::RANGE` for the item,
+`Beam::range` = 24 on 1563's own beam (`units::veldin_finale_fx::morph_beam_from`; 2026-10-19).
+
 **Native, not emulated**: standard `f32`; the chicken's knockback and suck records live in its own pvars (+0x80 /
 +0xe0; the game: global tables by ring slot). **Inferred [L]**: a targeted beam's end point x / y (the decompiler kept
 only z); the pulse index past the last point clamped; the search's lines ignore Ratchet (the game: the item for the

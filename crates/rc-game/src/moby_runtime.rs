@@ -115,6 +115,10 @@ pub struct Moby {
     pub has_collision: bool,
     /// +0x98: per-primitive collision disable bits.
     pub coll_disable: u32,
+    /// Primitives 0 / 1 of the blob as `HeroSyncMoby`'s `FUN_00263cb8` rewrites them each tick (words +0x04, +0x10..+0x1c:
+    /// height, base point, radius; model units; `crate::hero::Hero::write_back`). The game writes Ratchet's class blob,
+    /// which no other moby uses; None: the blob's own record.
+    pub prim_writes: [Option<[u32; 5]>; 2],
     /// +0xa0..+0xa3: 0x7f, 0x7f, 0x80, 0x80.
     pub ba0: [u8; 4],
     /// +0xa4: hit-message slot (0xff = none).
@@ -161,7 +165,7 @@ impl Moby {
             rotation: [0.0; 4],
             anim: AnimState { seq_a: 0, frame_a: 0, seq_b: 0, frame_b: 0, t: 0.0, speed: 0.0, rate: 0.0, flags: 0, trigger_count: 0, skip_advance: false },
             b71: 0, b72: 0, b73: 0, update_fn: None, pvars: Vec::new(), b7c: 0, b7d: 0, b7f: 0, shadow_lo: 0.0, shadow_hi: 0.0, glow: 0,
-            has_collision: false, coll_disable: 0, ba0: [0; 4], hit_slot: 0, o_class: 0, uid_hi: 0, index: 0,
+            has_collision: false, coll_disable: 0, prim_writes: [None; 2], ba0: [0; 4], hit_slot: 0, o_class: 0, uid_hi: 0, index: 0,
             mission: 0, spawn_flag: 0, spawn_id: 0, b4: 0, b6: 0, parent: None, cmd: 0, bbd: 0, rows: [[0.0; 4]; 4], delete_tick: 0,
             joint_mods: Vec::new(),
             joint_mod_keys: Vec::new(),

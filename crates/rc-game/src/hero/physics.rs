@@ -1068,7 +1068,7 @@ impl Hero {
     /// the edge probe ([`Hero::edge_probe`]). Native `f32`.
     pub fn wall_ahead_probe(&mut self, env: &Env) {
         self.wall_probe(env);
-        if self.idle.counter.wrapping_sub(1).rem_euclid(5) == 0 { self.edge_probe(env); }
+        if self.idle.counter.rem_euclid(5) == 0 { self.edge_probe(env); }
     }
 
     /// The edge probe of `0x23c458` (every fifth tick): 0x13f5b0 = 0, 0x13f5a8 = 0; on the ground (0x13f650 ≠ 0) a line
@@ -1103,7 +1103,7 @@ impl Hero {
     }
 
     fn wall_probe(&mut self, env: &Env) {
-        if self.idle.counter.wrapping_sub(1).rem_euclid(3) != 0 { return; }
+        if self.idle.counter.rem_euclid(3) != 0 { return; }
         self.wall_ahead[0] = 4.0;
         self.f5a4 = 0;
         self.f5a5 = 0;

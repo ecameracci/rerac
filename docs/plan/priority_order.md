@@ -80,7 +80,7 @@ One row per item. Scores are V R D F = total; E = effort; W = wave (§4). "—" 
 | **G-TOOL-013** `rc-trace` depends on `rc-game` | — | easier: G-TOOL-017 re-runs while class lanes edit `rc-game` mid-wave [L] | 0 0 1 0 = 1 | M [L] | 0 |
 | ~~**DOC-STALE**~~ gaps.md "Stale notes in other docs" (12 entries) | **done 2026-09-29** (every entry fixed in its source doc / comment) | — | — | — | ~~0~~ done |
 | ~~**G-TOOL-014**~~ review items and digest baselines | **done 2026-09-29** (NO_IDLE `596306d7…`, full `42ec9908…` recorded in gaps.md) | — | — | — | ~~0~~ done |
-| **G-TOOL-004** tolerance rows into hardware_fidelity_layers.md | — | — | 0 0 0 1 = 1 | S | 0 (not done in W0: left for the next docs pass) |
+| ~~**G-TOOL-004**~~ tolerance rows into hardware_fidelity_layers.md | **done 2026-10-19** (all already in "Tolerances"; the commands applying them → G-TOOL-024) | — | — | — | ~~0~~ done |
 | **G-TOOL-010** user steps. Move the `.mov` files out: `repo-checks` fails on them. Also: Ghidra project, the `extracted/` regenerate, Ghidra save. | The regenerate step is **easier** after G-EXT-006: the 19 `overlay.elf` references vanish on regenerate (mem:project-dev-tooling-reorg). | green commit runs | user | S | 0 (user) |
 | **M-QS2** the Quick Select page's second-run frame is missing (mem:project-next-queue 2026-09-28) | — | — | 0 0 0 0 = 0 | S | 6 |
 | **M-PINE** the user enables PINE in PCSX2 (hero_feel_pass.md §1, §5) | — | depends: G-HERO-001 [deferred]; live traces for G-TOOL-003 [L] | user | S | user |
@@ -102,11 +102,11 @@ One row per item. Scores are V R D F = total; E = effort; W = wave (§4). "—" 
 | **G-HERO-008** Hoverboard | **depends** G-HERO-029 (gaps) | depends: G-LVL-007 (gaps) | 3 1 1 0 = 5 | M | 5 |
 | **G-HERO-025** hand-item slot leftovers | **depends** G-WPN-006 (gaps) | — | 2 1 0 1 = 4 | S | 5 |
 | **G-HERO-016** hero feedback call sites | — | — | 2 2 0 1 = 5 | S | 7 |
-| **G-HERO-022** moby collision leftovers | — | — | 1 2 0 1 = 4 | M | 7 |
+| ~~**G-HERO-022**~~ moby collision leftovers | **done 2026-10-19** (gaps.md G-HERO-022; leftovers G-HERO-045) | — | — | — | ~~7~~ done |
 | **G-HERO-018** surface-reaction leftovers | — | — | 1 1 0 1 = 3 | S | 7 |
 | **G-HERO-020** rail leftovers | **depends** the arming classes (gaps → G-CLS-001) | — | 2 1 0 0 = 3 | M | 7 |
 | **G-HERO-021** look-stance aiming beams | — | — | 2 1 0 0 = 3 | S | 7 |
-| **G-HERO-028** tick-counter parity | — | — | 1 0 0 1 = 2 | S | 7 |
+| ~~**G-HERO-028**~~ tick-counter parity | **done 2026-10-19** (player_controller.md §0 "The tick counter in the hero update") | — | — | — | ~~7~~ done |
 | **G-HERO-030** after-image leftovers | — | — | 1 0 0 0 = 1 | S | 7 |
 
 ### Weapons and gadgets (WPN)
@@ -232,9 +232,9 @@ Each wave is ≤ 3 lanes; lanes are queues and don't share files. After W2, W3 a
 
 | wave | lane (file area [L]) | items, in order | why here |
 |---|---|---|---|
-| **W0** housekeeping — **done 2026-09-29** except the user steps, G-TOOL-004 and G-TOOL-013 | A: git | ~~M-COMMIT~~ (3646133); then the user's G-TOOL-010 steps (open). Hold the `extracted/` regenerate until G-EXT-006, or accept losing the ELF reference. | Nothing else should build on 12 uncommitted files. |
+| **W0** housekeeping — **done 2026-09-29** except the user steps and G-TOOL-013 (G-TOOL-004 done 2026-10-19) | A: git | ~~M-COMMIT~~ (3646133); then the user's G-TOOL-010 steps (open). Hold the `extracted/` regenerate until G-EXT-006, or accept losing the ELF reference. | Nothing else should build on 12 uncommitted files. |
 | | B: `tools/trace`, `tools/ghidra/names`, class_census.md, gaps.md | ~~G-TOOL-017 re-run with the re-tag: G-TRI-015, help, `0x2ff768`, `0x271258`~~ (done, plus the data census and 30 named functions) → G-TOOL-013 (open: M effort, not started) | Every class wave's numbers and order depend on it; freed 21 help directors, 568 and the pushables 695; found the dead hero-state branches (§1). |
-| | C: `docs/plan/*` except the two above | ~~DOC-STALE → G-TOOL-014~~ (done) → G-TOOL-004 (open) → the read-only triage checks ~~G-TRI-004 / 005 / 006 / 007 / 008 / 011~~ (closed, gaps.md) / 014 (open: 0x248920 not read) | Cheap, and it removes false leads before the ports. |
+| | C: `docs/plan/*` except the two above | ~~DOC-STALE → G-TOOL-014~~ (done) → ~~G-TOOL-004~~ (done 2026-10-19) → the read-only triage checks ~~G-TRI-004 / 005 / 006 / 007 / 008 / 011~~ (closed, gaps.md) / 014 (open: 0x248920 not read) | Cheap, and it removes false leads before the ports. |
 | **W1** the three biggest shared blockers | 1: new path module + its first consumers [L] | ~~**G-CLS-025**~~ (done 2026-09-29: `path.rs`, units 1564, 257, 1667–1671; left: `0x277260` for 947, `0x265b38`). L03's nine-class family 246 moved to **G-CLS-028** (+ G-CLS-026): its private code is an explosion and an effect moby, not paths | 1,108 instances; sole blocker of 692 (after: `path` blocks 2) |
 | | 2: `moby_update/creature/` | ~~**G-ENM-009**~~ (done 2026-09-29: the wander and the joint hit ported, 749 and 1023 ported; 340, 333, 217, 578 freed for W2 lane 1) | 539 instances; pairs with paths for 141 more |
 | | 3: `tools/ghidra`, then `hero/**` | ~~G-TOOL-008 X1 → **G-LVL-002** H2 diff + H1 branch transcription → port the differing hero functions~~ (done 2026-09-29: `rc-trace overlay-diff`; H2 found 2 per-level differences, both ported; the hero H1 branches were already in; new: G-HERO-031) | Ratchet's own code may differ on 10 levels (F2). Prerequisite of G-HERO-002. |
