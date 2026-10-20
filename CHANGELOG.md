@@ -1,10 +1,17 @@
 # Changelog
 
-## Unreleased
+## v0.4.2-alpha
 
 - Options → Quit Game has a third choice, Square: Main Menu, which goes back to the title screen without the logos; the loading picture shows while the level reloads, instead of a black screen. Circle: Yes still closes the game.
 - Quit Game in the main menu's Options closes the game.
 - The memory card icon shows at the bottom left while the game autosaves: after choosing a planet in the ship, picking up a gold bolt and the other autosaves. Before, it never appeared. In wide aspect ratios it sits in the screen's corner.
+- The Persuader, Map-o-Matic and Bolt Grabber stay on Ratchet in cutscenes and the ship's take-off and landing, and glow as in the original.
+- Umbris: bombs thrown while wading in the drained pools fly as they should instead of going off at Ratchet's feet.
+- The Glove of Doom and the Decoy Glove show their landing ring on the ground while held, like the Bomb Glove.
+- The map's star marks your ship instead of sitting in the map's corner.
+- Port Options: the rows are grouped (display, graphics, gameplay) and On / Off are capitalised. The FPS limit is 30, 60, 120 or Unlimited (a saved 144 becomes 120).
+- Dynamic shadows no longer pop as the camera moves, and ambient occlusion no longer leaves a bright disc on the wall behind a climbing Ratchet.
+- A `settings.toml` next to the game overrides the settings it lists.
 
 ## v0.4.1-alpha
 
