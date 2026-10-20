@@ -1,6 +1,7 @@
-//! The Bomb Glove's ground reticle: the draw callback `0x2c23c0` its bombs register on list 1 every tick their
-//! landing preview found a point (`rc_game::targeting`, registered in `Services::reticles` by
-//! `rc_game::moby_update::classes::bomb`). Per registration two `FastDrawQuadReal` quads
+//! The throw gloves' ground reticle: the draw callback `0x2c23c0` the Bomb Glove's bombs register on list 1 every tick
+//! their landing preview found a point (`rc_game::targeting`, registered in `Services::reticles` by
+//! `rc_game::moby_update::classes::bomb`), and its copies for the mine, the decoy and the Glove of Doom's canister
+//! (`0x2bf420`, `0x2d8e28`, `0x2dda60`; `classes::{mine, decoy}`). Per registration two `FastDrawQuadReal` quads
 //! ([`rc_game::targeting::reticle_quads`]: FX 0x11 and 0x12, 0x80808080, TEX1 bilinear, ALPHA 0x48 additive, Z tested
 //! and not written) through the shared draw-callback material of crate::fx_draw, in the list-1 band (after the
 //! mobys, before the particles). Not drawn in a cutscene (game mode 2), like the callback.

@@ -489,6 +489,9 @@ fn novalis_bots_blow_up_a_critter() {
     assert!(rows[t - 16..t].iter().all(|r| r.state == 0x23), "thrown from the throw state");
     assert!(rows[t].heard.contains(&(0, 0x1a)), "the throw voice");
     assert_eq!(rows[t].ammo + 1, rows[30].ammo, "one ammo a throw");
+    // Issue #16: the held canister's ground ring (`0x2de0a8` → `0x2dda60`) every tick; the thrown one draws none.
+    assert!(rows[10..t].iter().all(|r| r.reticles == 1), "the ring while held");
+    assert!(rows[t + 2..t + 30].iter().all(|r| r.reticles == 1), "one ring after the throw: the next canister's");
     let next = rows[t].held.expect("a new canister in the glove");
     assert_ne!(next, c);
     assert_eq!(states_of(&rows, c), [0, 1, 2, 3, 4], "held, flew, opened, faded");

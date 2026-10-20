@@ -455,6 +455,9 @@ fn novalis_decoy_lures_critters() {
     let (t, d) = thrown(&rows).expect("never threw");
     assert!(rows[t - 16..t].iter().all(|r| r.state == 0x23), "thrown from the throw state");
     assert_eq!(rows[t].ammo + 1, rows[30].ammo, "one ammo a throw");
+    // Issue #16: the held decoy's ground ring (`0x2d9760` → `0x2d8e28`) every tick; the thrown one draws none.
+    assert!(rows[10..t].iter().all(|r| r.reticles == 1), "the ring while held");
+    assert!(rows[t + 2..t + 30].iter().all(|r| r.reticles == 1), "one ring after the throw: the next decoy's");
     let st = states_of(&rows, d);
     assert_eq!(&st[..4], &[0, 1, 2, 3], "held, flew, landed: {st:?}");
     let life: Vec<(usize, [f32; 3], f32)> = rows.iter().enumerate().filter_map(|(i, r)| r.objects.iter().find(|o| o.0 == d && o.2 == 3).map(|o| (i, o.3, o.4))).collect();
