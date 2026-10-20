@@ -30,8 +30,15 @@ gliders 1564, 1584, the save before the boss 1750, Giant Clank's pad 1899, the h
 
 - Every placed class of level 18 now has a port; Kalebo III's 638, 1356 and 1443 run the same ports by code identity
   (their level checks for 18 fail there, as in the game).
-- Scene 1 sets the Morph-o-Ray's range word to 24 for the rest of the level (the hero's item would reach 24 after
-  it); the port keeps the item at 8 [L].
+- ~~Scene 1 sets the Morph-o-Ray's range word to 24 for the rest of the level (the hero's item would reach 24 after
+  it); the port keeps the item at 8 [L].~~ **Closed 2026-10-19: not a leak.** The range is gp−0x54b4 = 0x16174c
+  (8.0 in the overlay's data). 1563's update `0x2f88e8` (scene 1, ticks 446..502, actor 4) keeps it in $f20
+  (0x2f956c), stores 24 in the delay slot of `jal 0x2bf908` (0x2f9578) and stores $f20 back right after the call
+  (0x2f9580; $f20 is saved by the beam's prologue): only the scene's beam call sees 24. Readers (verified): the search
+  0x2bec80, the lay 0x2bf834, the beam's line / length 0x2bf9e0 / 0x2bfa10, the pulses 0x2c02e8, and class 804's
+  update 0x2e1da0 (unplaced on 18, no spawn of 0x324 in the overlay [L]; unported, G-WPN-021). The port was already right: the scene's
+  beam runs on 1563's own `Beam` at 24, the hero's item at `hero::morph_ray::RANGE` 8
+  (`units::veldin_finale_fx::morph_beam_from`, test `scene_one_beam_reaches_24_and_the_item_stays_at_8`).
 - The grind-path cuts of the falling platforms (G-HERO-039); the rail chooser's radius channel is the hero side
   such a cut would also need.
 - The pools' ripple patch word (`0x1db508 + n·0x1190`) has no reader on level 18: no ripple manager sets up the patch

@@ -330,6 +330,32 @@ fn cable_slide() {
     assert!(r.hero.position()[0] > 425.0);
 }
 
+/// The cable's type-25 sparks run on odd ticks of 0x15f5cc as the game reads it in the hero update (L00 0x21dc24:
+/// `lw 0x15f5cc; andi 1`, before `0x2ab960`'s `++`): the mirror is this tick's value during the update and steps
+/// once after it.
+#[test]
+fn cable_sparks_on_odd_ticks() {
+    let cable = path(&[[400.0, 410.0, 110.0], [430.0, 410.0, 104.0]], false);
+    let w = world(vec![cable]);
+    let coll = floor(60.0, 100, 112, 100, 106);
+    let x = 401.0f32;
+    let cz = 110.0 - 6.0 * (x + 0.3 - 400.0) / 30.0;
+    let mut r = Runner::new([x, 410.0, cz - 1.34 + 0.3], 0.0);
+    r.hero.idle.level = 3;
+    let mut seen = Vec::new();
+    for _ in 0..120 {
+        // The slide anim 0x66 (the data-free anim never ends the grab 0x73).
+        if r.hero.state == 0x74 { (r.anim.v.seq_a, r.anim.v.seq_b) = (0x66, 0x66); }
+        let (before, sliding) = (r.hero.idle.counter, r.hero.state == 0x74);
+        tick(&mut r, &coll, &w, n());
+        assert_eq!(r.hero.idle.counter, before + 1);
+        let sparks = r.hero.fx.parts.iter().filter(|p| matches!(p, crate::hero::fx::PartSpawn::Spark { .. })).count();
+        if sliding && r.hero.state == 0x74 { seen.push((before, sparks)); }
+    }
+    assert!(seen.len() > 20, "{seen:?}");
+    assert!(seen.iter().all(|&(c, s)| s == (c & 1) as usize), "{seen:?}");
+}
+
 // ------------------------------------------------------------------------------------------------
 // The cable caught from a jump (distilled from Kerwan's cable 0: 58.9 long, 26.74 drop; the platform under its
 // start 2.9 below it), with and without the wrench's □.

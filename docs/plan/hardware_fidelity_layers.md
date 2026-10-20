@@ -49,7 +49,10 @@ Native reproductions of PS2 effects that are noticeable in play. One row each.
 Accepted differences from PCSX2 comparisons (kind 2 in the triage). One row per compared quantity. The first
 comparison and the evidence behind each row are in `docs/plan/trace_results_novalis.md` (class H); the savestate is
 `SCUS-97199 (CE4933D0).01.p2s`, Novalis spawn after the arrival scene (kept as `~/PS2/ratchet1/savestates/novalis_spawn.p2s`; the regression test
-reads its distilled facts, `tools/trace/tests/fixtures/novalis_spawn.tsv`).
+reads its distilled facts, `tools/trace/tests/fixtures/novalis_spawn.tsv`). The first run's proposed rows
+(trace_results_novalis.md "Prioritised fix list", **H**; trace_harness.md §9) are all here: the first six rows and
+the tie row (camera tightened since); checked 2026-10-19. The commands report bit-equality only; no option applies
+these bounds yet (trace_harness.md §8, G-TOOL-024).
 
 | Item (quantity compared, command) | Tolerance | Why acceptable (not noticeable in play) | Measured (date, savestate) |
 |---|---|---|---|

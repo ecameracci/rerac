@@ -7,7 +7,8 @@
 //! longer holds the glove. **1 flying** — the glow fades from red to grey over its 30-tick timer (+0x6a), it spins
 //! (x 120°/s, y 450°/s), moves by its velocity (+0x00) under gravity 11 u/s² (1.1 under water), and tests its path
 //! (`CollLine_Fix(old, new, 0x10, bomb, tmpl)`: template flags 0x830000 (| 1 after its first 10 ticks), damage 2,
-//! so a crate on the path gets its hit): a hit explodes it — except Ratchet or the glove in its first 10 ticks;
+//! so a crate on the path gets its hit): a hit explodes it — except Ratchet or the glove in its first 10 ticks, and a
+//! moby whose update is the one 0x160770 holds ([`passes_through`]: on Kerwan the air traffic or the train's lead);
 //! water (surface 0) while falling: it sinks at 1.5 u/s until its 300-tick fuse (+0x54) runs out; the fuse ends in
 //! the air too. **The explosion** (moby +0xbc = 1): the sphere 0.5 lists the mobys (`coll_sphere_mobys`, flags
 //! 0x10) and hits them (`0x26f8f8`: damage 2, push 1 away from the bomb and 1 up, flags 0x830000) → state **2**; the fireballs (10 low ones, 4 + 1 high,
@@ -32,8 +33,7 @@
 //! Cannon's burst `0x304798` (`creature::react::burst`) and in Gemlik's tanks `0x3073c8` (`units::explosive_tank`),
 //! with other constants (size k, fireball divisor, colour tables, fireball class).
 //!
-//! Native `f32`. **Not ported** (counted in `Services::fx.unported`): the aim-preview `0x2c2be0`, the pass-through
-//! classes of the hit test (update `0x160770`). The gold glove (0x13e52a) is the blast's k = 2 (the hit sphere 1, the growing one to 5.5), its colour shift (the rings, flashes, fireballs and their smoke), class sound 1.
+//! Native `f32`. **Not ported** (counted in `Services::fx.unported`): the aim-preview `0x2c2be0`. The gold glove (0x13e52a) is the blast's k = 2 (the hit sphere 1, the growing one to 5.5), its colour shift (the rings, flashes, fireballs and their smoke), class sound 1.
 
 use crate::moby_runtime::MobyId;
 use crate::moby_update::services::{self as sv, pvar as p, HitTemplate, World};
@@ -326,7 +326,7 @@ fn fly(w: &mut World, id: MobyId) {
             } else if !(water == 0 && water_face) {
                 let young = (life as i32) >= 300 - 10;
                 let own = h.moby.is_some() && (h.moby == w.hero_moby);
-                if !(own && young) {
+                if !(own && young) && !h.moby.is_some_and(|i| passes_through(w, i)) {
                     let m = w.mm(id);
                     m.cmd = 1;
                     m.position = [h.point[0], h.point[1], h.point[2], m.position[3]];
@@ -341,6 +341,18 @@ fn fly(w: &mut World, id: MobyId) {
     }
     if w.m(id).cmd != 0 { explode(w, id, drift, normal); }
 }
+
+/// The hit test's pass-through (0x2c3b7c..0x2c3ba4, after the young-bomb test): a hit moby whose update (+0x74) is
+/// the one 0x160770 holds ([`Services::pass_update`]: level03's air traffic 0x29dba8 or the flyer driver 0x293c78,
+/// whichever ran last) does not explode the bomb, unless it is class 0x336. The same code on every level.
+///
+/// [`Services::pass_update`]: crate::moby_update::Services::pass_update
+fn passes_through(w: &World, id: MobyId) -> bool {
+    w.table.mobys.get(id).is_some_and(|m| m.update_fn == Some(w.svc.pass_update) && m.o_class != PASS_EXCEPTION)
+}
+
+/// The class the pass-through never lets through (0x2c3b98: 822, Kerwan's train).
+const PASS_EXCEPTION: i16 = 0x336;
 
 /// The flight's trail (0x2c35c8..0x2c3788, every 8th tick while not in water): [`TRAIL_COUNT`] type-2 blobs
 /// (`crate::particles::type02`) from the gp block 0x1613f0: velocity 1 = half the bomb's velocity plus `rand_vec(0,
@@ -719,6 +731,58 @@ mod tests {
         assert_eq!(flashes, 3);
         assert_eq!(svc.camera_shakes.len(), 1);
         assert!(table.mobys.iter().all(|m| m.o_class != FIREBALL_CLASS || m.state >= 0xfd), "fireballs outlived their timers");
+    }
+
+    /// A bomb flying +x from (101, 100, 51) at 0.2 a tick toward moby 1 (class `o_class`, update `update`, a 0.5 sphere
+    /// primitive at (103, 100, 51)) with 0x160770 = `pass`: the x where it explodes (its 25-tick fuse ends near 106).
+    fn bomb_meets(o_class: i16, update: u32, pass: u32) -> f32 {
+        use rc_formats::moby_collision::{MobyCollPrim, MobyCollision};
+        let mut h = Moby::init_instance(0, 0, Some(&ClassInfo { scale: 1.0, ..Default::default() }));
+        h.mode |= crate::moby_runtime::mode::NO_UPDATE;
+        let mut t = Moby::init_instance(1, o_class, Some(&ClassInfo { scale: 1.0, has_collision: true, update_fn: Some(update), ..Default::default() }));
+        t.mode |= crate::moby_runtime::mode::NO_UPDATE;
+        t.position = [103.0, 100.0, 51.0, 1.0];
+        t.rows = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0; 4]];
+        t.bsphere = [103.0 * 1024.0, 100.0 * 1024.0, 51.0 * 1024.0, 1024.0];
+        let mut table = MobyTable::new(vec![h, t], 64);
+        let ct = classes();
+        let mut hero = Hero::new();
+        hero.pos = crate::hero::physics::v4(50.0, 50.0, 50.0);
+        let mut rng = Rng::new();
+        let mut svc = Services::new();
+        let mut raw = [0u32; 8];
+        raw[0] = 1 | 4 << 8 | 0x8003 << 16;
+        raw[7] = 512.0f32.to_bits();
+        svc.set_moby_collision(vec![(o_class as i32, MobyCollision { prims: vec![MobyCollPrim { raw }], ..Default::default() })]);
+        svc.build_grid(&mut table);
+        svc.pass_update = pass;
+        let mut sched = Scheduler::new();
+        let b = table.create(BOMB_CLASS, ct.classes.get(&BOMB_CLASS).map(|c| &c.0), 0).unwrap();
+        init_held(&mut table.mobys[b], &mut rng, [101.0, 100.0, 51.0], 0.0);
+        p::set_v4f(&mut table.mobys[b].pvars, pv::VEL, [0.2, 0.0, 0.0, 0.0]);
+        release(&mut table.mobys[b], [101.0, 100.0, 51.0], None);
+        p::set_i16(&mut table.mobys[b].pvars, pv::LIFE, 25);
+        for counter in 0..60u64 {
+            table.free_slot_pass(counter);
+            let x = table.mobys[b].position[0];
+            let mut w = World::new(&mut table, &hero, &mut rng, &ct, &mut svc, counter);
+            sched.tick(&mut w);
+            if table.mobys[b].state == EXPLODING { return table.mobys[b].position[0].max(x); }
+        }
+        panic!("never exploded");
+    }
+
+    /// The hit test's pass-through (0x2c3b7c): a moby whose update is 0x160770's lets the bomb through; any other
+    /// update, or class 0x336, explodes it on the sphere (x 102.5).
+    #[test]
+    fn hit_test_passes_through_the_0x160770_update() {
+        let air = crate::moby_update::classes::units::air_traffic::UPDATE_FN;
+        let at = bomb_meets(115, air, u32::MAX);
+        assert!((102.0..103.0).contains(&at), "no 0x160770 value: explodes on the moby, x {at}");
+        let at = bomb_meets(115, air, air);
+        assert!(at > 105.0, "passes through, x {at}");
+        let at = bomb_meets(PASS_EXCEPTION, air, air);
+        assert!((102.0..103.0).contains(&at), "class 0x336 never passes, x {at}");
     }
 
     /// Draws between two stream states.

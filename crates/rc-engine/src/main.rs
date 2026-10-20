@@ -321,7 +321,7 @@ fn setup(
 }
 
 /// The main world camera, once per process (crate::level_switch keeps it across level changes); framed on the boot
-/// level's tfrags (the play camera takes over from the first tick).
+/// level's spawn, else its tfrags (the play camera takes over from the first tick).
 fn setup_camera(mut commands: Commands, level: Res<Level>) {
     let level = &level.0;
 
@@ -335,8 +335,11 @@ fn setup_camera(mut commands: Commands, level: Res<Level>) {
     println!("bounds (game units): sphere centroid {:.1?}, extent {:.1}", c.to_array(), extent);
     let (eye, target) = match std::env::var("RC_CAM").ok().and_then(|v| parse_cam(&v)) {
         Some((e, t)) => (game_to_bevy(e), game_to_bevy(t)),
-        // Up (game +Z) and back (game -Y) from the centroid, looking at it.
-        None => (game_to_bevy((c + Vec3::new(0.0, -0.35 * extent, 0.25 * extent)).to_array()), game_to_bevy(c.to_array())),
+        // The level's spawn (fly_cam::spawn_view), else up (game +Z) and back (game -Y) from the centroid, looking at it.
+        None => {
+            let (e, t) = fly_cam::spawn_view(level).unwrap_or((c + Vec3::new(0.0, -0.35 * extent, 0.25 * extent), c));
+            (game_to_bevy(e.to_array()), game_to_bevy(t.to_array()))
+        }
     };
     let transform = Transform::from_translation(eye).looking_at(target, Vec3::Y);
     commands.spawn((

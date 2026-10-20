@@ -83,6 +83,8 @@ pub struct CollMoby {
     pub o_class: i16,
     /// +0x94 ≠ 0: the class has a collision blob.
     pub collision: bool,
+    /// Ratchet's rewritten primitives 0 / 1 ([`Moby::prim_writes`]).
+    pub prim_writes: [Option<[u32; 5]>; 2],
 }
 
 impl CollMoby {
@@ -98,6 +100,7 @@ impl CollMoby {
             key: m.uid_hi,
             o_class: m.o_class,
             collision: m.has_collision,
+            prim_writes: m.prim_writes,
         }
     }
 }
@@ -350,14 +353,23 @@ fn mesh_faces<'v>(blob: &'v MobyCollision, verts: &'v [Vert], fl: u32) -> impl I
 }
 
 /// The primitives a query tests, in order: `(index, record)` for each one not disabled by `moby+0x98` and
-/// with the query's mask bit (1 with flag 0x4, else 2); the walk ends after the record with mask bit 15.
-fn active_prims<'b>(blob: &'b MobyCollision, m: &CollMoby, fl: u32) -> impl Iterator<Item = (usize, &'b MobyCollPrim)> + 'b {
+/// with the query's mask bit (1 with flag 0x4, else 2); the walk ends after the record with mask bit 15. Records 0 / 1
+/// carry the moby's [`CollMoby::prim_writes`] (`FUN_00263cb8`'s words +0x04, +0x10..+0x1c).
+fn active_prims<'b>(blob: &'b MobyCollision, m: &CollMoby, fl: u32) -> impl Iterator<Item = (usize, MobyCollPrim)> + 'b {
     let sel: i32 = if fl & 0x4 == 0 { 2 } else { 1 };
     let disable = m.disable;
+    let writes = m.prim_writes;
     let end = blob.prims.iter().position(|p| p.mask() < 0).map_or(blob.prims.len(), |i| i + 1);
     blob.prims[..end].iter().enumerate().filter(move |(i, p)| {
         let off = if *i < 32 { (disable >> i) & 1 } else { 0 };
         off == 0 && sel & p.mask() as i32 != 0
+    }).map(move |(i, p)| {
+        let mut p = *p;
+        if let Some(w) = writes.get(i).copied().flatten() {
+            p.raw[1] = w[0];
+            p.raw[4..8].copy_from_slice(&w[1..]);
+        }
+        (i, p)
     })
 }
 
@@ -509,7 +521,7 @@ pub(super) fn volume_pass(sc: &MobyScene, fl: u32, vol: &Volume, h: Option<F>, i
                 }
                 if fl & 0x2 != 0 { continue; }
                 for (i, p) in active_prims(blob, &m, fl) {
-                    let (cc, rad) = vol_prim(p, &m, pos, &joints, c, h.is_some());
+                    let (cc, rad) = vol_prim(&p, &m, pos, &joints, c, h.is_some());
                     let from = match h {
                         None => c,
                         Some(h) => vec_z(c, add(c[2], max(min(sub(cc[2], c[2]), h), 0))),
@@ -570,7 +582,7 @@ pub fn coll_sphere_mobys(sc: &MobyScene, centre: [f32; 3], radius: f32, flags: s
                 }
                 if !hit {
                     hit = active_prims(blob, &m, fl).any(|(_, p)| {
-                        let (cc, rad) = vol_prim(p, &m, pos, &joints, c, false);
+                        let (cc, rad) = vol_prim(&p, &m, pos, &joints, c, false);
                         vol_prim_test(c, r, cc, rad, best).is_some()
                     });
                 }
@@ -635,7 +647,7 @@ pub(super) fn line_pass(sc: &MobyScene, fl: u32, a: V3, b: V3, d: V3, list: &[(F
             }
             if fl & 0x2 != 0 { continue; }
             for (i, p) in active_prims(blob, &m, fl) {
-                let Some((t, hit, nrm)) = line_prim(p, &m, pos, &joints, a, b, d, *best_t) else { continue };
+                let Some((t, hit, nrm)) = line_prim(&p, &m, pos, &joints, a, b, d, *best_t) else { continue };
                 *best_t = add(0, t);
                 best = Some(prim_best(i, hit, nrm, best.as_ref(), id));
             }

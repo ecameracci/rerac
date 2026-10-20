@@ -75,7 +75,9 @@ use crate::targeting;
 
 pub const MORPH: i32 = 21;
 pub const CLASS: i16 = 185;
-/// gp−0x54f4 (range), gp−0x54f8 (the cone in degrees), gp−0x54f0 (the meter's fall a second).
+/// gp−0x54f4 (range), gp−0x54f8 (the cone in degrees), gp−0x54f0 (the meter's fall a second). The range's readers
+/// (level18, gp−0x54b4): the search 0x2bec80, the lay 0x2bf834, the beam's line and length 0x2bf9e0 / 0x2bfa10, the
+/// pulses 0x2c02e8, and class 804's update 0x2e1da0 (unplaced, no spawn in the overlay).
 pub const RANGE: f32 = 8.0;
 pub const CONE_DEG: f32 = 10.0;
 pub const DRAIN: f32 = 3.0;
@@ -142,7 +144,8 @@ pub struct Beam {
     pub drawn: Option<u64>,
     /// Type-78 sparks queued (`super::fx::PartSpawn::Spark78`), a count for the tests.
     pub sparks78: u32,
-    /// gp−0x54f4 (level18 gp−0x54b4): the range the lay and the pulses use (8; level 18's scene 1 sets 24).
+    /// gp−0x54f4 (level18 gp−0x54b4 = 0x16174c): the range the lay and the pulses use (8; level 18's scene 1 sets 24
+    /// around its own beam call only, `units::veldin_finale_fx`'s `Beam`: the item never sees it).
     pub range: f32,
 }
 

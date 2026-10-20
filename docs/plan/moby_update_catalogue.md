@@ -687,9 +687,12 @@ Code: `crates/rc-game/src/moby_update.rs` (module root and unit tests), `moby_up
 ### Not ported / open
 
 * Hit delivery from the wrench and weapons (they would call `deliver_hit`).
-* Moby collision: ported (collision_queries.md §7). Not modelled there: Ratchet's per-tick collision
-  primitives (`FUN_00263cb8` from HeroSyncMoby rewrites his two cylinders from the hero capsule; the port keeps
-  the class blob's), the camera moby 0x3ef.
+* Moby collision: ported (collision_queries.md §7), with Ratchet's per-tick cylinders (`FUN_00263cb8` from
+  HeroSyncMoby, `Hero::sync_cylinders`; collision_queries.md "Ratchet's cylinders"; 2026-10-19). Not modelled
+  there: the camera moby 0x3ef.
+* The bomb's hit-test pass-through (0x2c3b7c, 2026-10-19): a moby whose +0x74 equals 0x160770 (written by
+  level03's air traffic 0x29dba8 and the flyer driver's level-3 tail 0x294b1c; −1 at load on every level) does not
+  explode it unless class 0x336 (`bomb::passes_through`, `Services::pass_update`). Leftovers G-HERO-045.
 * ~~Multi-hit crates.~~ (dead code: on no level's class table, G-CLS-009.)
 * Platforms.
 * Snapshot sphere of `fun_0020def8`.

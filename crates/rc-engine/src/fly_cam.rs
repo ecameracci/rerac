@@ -33,6 +33,21 @@ impl FlyCam {
     }
 }
 
+/// The default view without `RC_CAM` (main.rs `setup_camera`), as (eye, target) in game coordinates: 20 behind and 10
+/// above Ratchet's start (the placed class-0 instance, as crate::gameplay `setup` finds it) along its yaw, looking 2 above
+/// it; else the sweep's framing of the ship spawn (level settings +0x2c, `rc_formats::gameplay::ship_placement`), P +
+/// (0, −30, 15) looking at P (docs/plan/level_sweep.md H3). None: the level has neither.
+pub fn spawn_view(level: &crate::level_load::LoadedLevel) -> Option<(Vec3, Vec3)> {
+    let m = &level.mobys;
+    if let Some((hero, _)) = m.instances.iter().zip(&m.placed).find(|(i, p)| i.o_class == 0 && p.is_some()) {
+        let (p, yaw) = (Vec3::from(hero.position), hero.rotation[2]);
+        return Some((p - 20.0 * Vec3::new(yaw.cos(), yaw.sin(), 0.0) + 10.0 * Vec3::Z, p + 2.0 * Vec3::Z));
+    }
+    let (p, _) = rc_formats::gameplay::ship_placement(&level.gameplay).ok().flatten()?;
+    let p = Vec3::from(p);
+    Some((p + Vec3::new(0.0, -30.0, 15.0), p))
+}
+
 pub const CONTROLS: &str = "\
 controls: hold right mouse (or press Tab to toggle) to look | WASD move | Space/E up, Ctrl/Q down
           Shift fast | mouse wheel changes speed | Esc releases the cursor | P prints the game camera (RC_CAM + VU matrix)";

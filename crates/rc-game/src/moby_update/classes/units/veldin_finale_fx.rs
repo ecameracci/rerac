@@ -24,7 +24,7 @@
 //! | scene 7 | tick 1: the windows become flash 80 / 90, glow 10 / 100, beam 70 / 100 (gp−0x475c..), the piece found again; the three windows as in scene 4 with the fractions of the raw ticks | [`update`] |
 //! | scene 1 | actor 3: `(0x2f9a98, actor 3)` | [`update`] (`Callback::UnitGlow`) |
 //! | scene 5, 138..264, actor 2 | after 140: joint lists 0 / 2; twelve steps i: `0x2fa250(15000, 6000, q, q, 0)` at q = lerp(i/12, now, then) for each; then = now (also at 138..140) | [`update`], [`trail_puffs`] |
-//! | scene 1, 446..502, actor 4 | the Morph-o-Ray's beam fired by the driver as if it were the item: +0x10 (target) = 0; joint lists 3 / 10 of the actor: the muzzle +0x00 = j10, row 1 (+0xd0) = unit(j10 − j3), yaw +0x48 = atan(x, y), pitch +0x4c = atan(\|xy\|, z); range gp−0x54b4 = 24 (never set back: the hero's item would see it too [L], not reproduced); the beam `0x2bf908` (L01 `0x2d2d08`: the lay, the length by the line (flags 0x14, Ratchet ignored) up to 24, the shape, the sparkles and sparks, the pulses, `RegisterDrawCallback2(0x2c04b8)`); then 0x1617f4 = 0x207f7f, 0x1617f8 = 0x7f7f20 and 0x16174c put back (level 01's light timer / sound slot of the item at −0x40: no reader in the scene [L]) | [`morph_beam`] (`hero::morph_ray::beam_step` on the driver's own `Beam`; the draw's quads `Beam::quads` built at the step, the camera the update saw [L]) |
+//! | scene 1, 446..502, actor 4 | the Morph-o-Ray's beam fired by the driver as if it were the item: +0x10 (target) = 0; joint lists 3 / 10 of the actor: the muzzle +0x00 = j10, row 1 (+0xd0) = unit(j10 − j3), yaw +0x48 = atan(x, y), pitch +0x4c = atan(\|xy\|, z); the range gp−0x54b4 (0x16174c, 8) kept in $f20 (0x2f956c) and set to 24 in the call's delay slot (0x2f9578); the beam `0x2bf908` (L01 `0x2d2d08`: the lay, the length by the line (flags 0x14, Ratchet ignored) up to 24, the shape, the sparkles and sparks, the pulses, `RegisterDrawCallback2(0x2c04b8)`); then the range put back from $f20 (0x2f9580: only this call sees 24, the hero's item never does), 0x1617f4 = 0x207f7f, 0x1617f8 = 0x7f7f20 (level 01's light timer / sound slot of the item at −0x40: no reader in the scene [L]) | [`morph_beam`] (`hero::morph_ray::beam_step` on the driver's own `Beam`; the draw's quads `Beam::quads` built at the step, the camera the update saw [L]) |
 //! | scenes 0, 2, and 3 before 586 | actor 2: `(0x2f9a98, actor 2)` | [`update`] |
 //! | scene 3, tick 586 | p = camera (0x1677c0) + (10, 0, 0.6) in the camera rows (0x1679d0); 32 puffs k: v = the left row turned by k·π/16 about the forward row (`0x261f48`), length 0.0025·0x15ed60; `PartType23Spawn(0, 1, 1.01, 20000, p, ±randi(16), v, 0x7f7f7f7f)`, life `ticks(60)`, the fade patch | [`update`] (`fx::puff23`) |
 //! | `0x2fa250(g, c, a, b, v)` | two glow puffs at a (`randi(16)`, sign `randi(2)`; 0, 1 → 0.9, g, 0x7f204080, life `ticks(15)`), three cores at b (0, 1 → 0.97, c, spin ±16, 0x7fffffff, `ticks(4)`, a rotation byte) | [`trail_puffs`] |
@@ -49,7 +49,8 @@ pub const GLOW_FN: u32 = 0x2f_9c20;
 pub const BEAM_FN: u32 = 0x2f_9eb8;
 /// The Morph-o-Ray beam's draw (level18's copy of level01 `0x2d38b8`).
 pub const MORPH_FN: u32 = 0x2c_04b8;
-/// gp−0x54b4 as scene 1 sets it.
+/// gp−0x54b4 as scene 1 sets it for its own beam call (0x2f9578; put back at 0x2f9580): the driver's own `Beam`
+/// carries it, the hero's keeps `hero::morph_ray::RANGE`.
 const MORPH_RANGE: f32 = 24.0;
 pub const CLASSES: [i16; 1] = [1563];
 
@@ -329,9 +330,11 @@ fn trail_puffs(w: &mut World, glow: f32, core: f32, a: c::V, b: c::V, vel: c::V)
 }
 
 /// Scene 1's Morph-o-Ray beam from actor `a` (module table).
-fn morph_beam(w: &mut World, id: MobyId, a: &SceneActorState) {
+fn morph_beam(w: &mut World, id: MobyId, a: &SceneActorState) { morph_beam_from(w, id, a.joint_point(3), a.joint_point(10)); }
+
+/// [`morph_beam`] from the actor's joint-list points 3 and 10.
+fn morph_beam_from(w: &mut World, id: MobyId, j3: [f32; 4], j10: [f32; 4]) {
     use crate::moby_update::services::{fv, pv};
-    let (j3, j10) = (a.joint_point(3), a.joint_point(10));
     let dir = unit([j10[0] - j3[0], j10[1] - j3[1], j10[2] - j3[2]]);
     {
         let m = w.mm(id);
@@ -376,3 +379,36 @@ pub fn fx_quad_groups(svc: &Services, f: u32) -> Vec<FxQuads> {
 
 /// `0x2f9a98`'s glows this tick.
 pub fn glow_quads(_table: &MobyTable, svc: &Services) -> Vec<GlowQuad> { svc.units.veldin_finale.glows.clone() }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::hero::morph_ray::{Beam, RANGE};
+    use crate::moby_runtime::Moby;
+
+    /// Scene 1's beam reaches 24 (gp−0x54b4 set for the call only, 0x2f9578 / 0x2f9580); the hero's item keeps 8
+    /// before and after it, on level 18 as on every other level.
+    #[test]
+    fn scene_one_beam_reaches_24_and_the_item_stays_at_8() {
+        let mut t = MobyTable::new(vec![Moby { o_class: 1563, state: 1, pvars: vec![0; 0x80], ..Moby::default() }], 4);
+        let hero = crate::hero::Hero::new();
+        assert_eq!((RANGE, hero.weapons.reactive.morph.beam.range, Beam::default().range), (8.0, 8.0, 8.0));
+        let mut rng = crate::rng::Rng::new();
+        let classes = crate::moby_update::ClassTable::default();
+        let mut svc = Services::new();
+        svc.level = REFERENCE_LEVEL;
+        {
+            let mut w = World::new(&mut t, &hero, &mut rng, &classes, &mut svc, 500);
+            for _ in 0..3 { morph_beam_from(&mut w, 0, [0.0, 0.0, 1.0, 1.0], [0.0, 1.0, 1.0, 1.0]); }
+        }
+        let b = &svc.units.veldin_finale.morph;
+        assert_eq!(b.range, 24.0);
+        // Nothing in the line: the length is the full 24 (`seg` = length / 12).
+        assert!((b.seg - 24.0 / 12.0).abs() < 1e-3, "{}", b.seg);
+        // The hero's item after the scene: laid and stepped at 8.
+        let mut item = hero.weapons.reactive.morph.beam.clone();
+        item.lay([0.0, 0.0, 1.0], [0.0, -1.0, 0.0]);
+        assert_eq!(item.range, 8.0);
+        assert!((item.seg - 8.0 / 12.0).abs() < 1e-6 && (item.pts[11][1] - 11.0 * 8.0 / 12.0).abs() < 1e-4, "{:?}", item.pts[11]);
+    }
+}

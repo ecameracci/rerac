@@ -730,6 +730,50 @@ impl Hero {
         if self.f13f5 != 0 { moby.mode |= crate::moby_runtime::mode::HIDDEN; } else { moby.mode &= !crate::moby_runtime::mode::HIDDEN; }
         // His joint-modifier list (moby +0x64: the idle / lean joint records and the eyelids, idle::Manip).
         if !self.joint_targets.is_empty() { moby.joint_mods = self.idle.modifiers(&self.joint_targets); }
+        self.sync_cylinders(moby);
+    }
+
+    /// The collision cylinders of `HeroSyncMoby` (0x229f20 on foot, 0x22a110 in a body; after its `MobyBuildMatrix`):
+    /// unless 0x13f51c is set or the moby has no blob (+0x94), `FUN_00263cb8` writes primitives 0 / 1 of the blob
+    /// from the capsule (0x13f570 top, 0x13f574 bottom, 0x13f584 radius), each a base point `0x248d80(base)` (the
+    /// gravity step 0x248b68 by −base: up from the feet), radius and height `top − base`:
+    /// * 0: base = bottom; on foot the height is at least 0.05 (gp constant 0x3d4ccccd);
+    /// * 1: base = radius + 0.05; on foot + 0.15 in group 4 (the jumps), = bottom in the water (`0x22dea8`: groups
+    ///   0x11 / 0x12, states 0x6a / 0x82 / 0x76 / 0x75), the height at least 0.05.
+    ///
+    /// The game writes the class blob; the port keeps the records on the moby ([`Moby::prim_writes`], read by the moby
+    /// pass of every query). Native `f32`.
+    ///
+    /// [`Moby::prim_writes`]: crate::moby_runtime::Moby::prim_writes
+    fn sync_cylinders(&self, moby: &mut crate::moby_runtime::Moby) {
+        if self.no_vel_clamp != 0 || !moby.has_collision { return; }
+        const MIN_H: f32 = 0.05;
+        let (top, bottom, r) = (self.cap_top.to_f32(), self.cap_bottom.to_f32(), self.cap_radius.to_f32());
+        let on_foot = self.mode == 0;
+        let floor = |h: f32| if on_foot && h < MIN_H { MIN_H } else { h };
+        let mut base1 = r + MIN_H;
+        if on_foot {
+            if self.group == 4 { base1 += 0.15; }
+            if crate::help::hero_in_water(self.state, self.group) { base1 = bottom; }
+        }
+        for (i, base) in [bottom, base1].into_iter().enumerate() {
+            let p = self.up_from_feet(base);
+            moby.prim_writes[i] = Some(cylinder_words(moby, p, r, floor(top - base)));
+        }
+    }
+
+    /// `0x248d80(dst, pos, a)` = `0x248b68(dst, pos, −a)` by gravity mode: 0 z + a; 1 (and 2 in state 0x3e on the
+    /// ground) along the unit ground normal 0x13f5c0; 2 otherwise against the gravity direction 0x13f5e0; else `pos`.
+    fn up_from_feet(&self, a: f32) -> [f32; 3] {
+        let p = self.pos.map(Pf::to_f32);
+        let g = self.gravity_dir.map(Pf::to_f32);
+        match self.gravity_mode {
+            0 => [p[0], p[1], p[2] + a],
+            1 => physics::to_f32x3(boots::gravity_vec(self, self.pos, Pf::f(-a))),
+            2 if self.state == 0x3e && self.air_ticks == 0 => physics::to_f32x3(boots::gravity_vec(self, self.pos, Pf::f(-a))),
+            2 => [p[0] - g[0] * a, p[1] - g[1] * a, p[2] - g[2] * a],
+            _ => [p[0], p[1], p[2]],
+        }
     }
 
     /// Ratchet's class joint lists' modifier targets ([`Hero::joint_targets`]): for each list, the second byte list
@@ -749,6 +793,19 @@ impl Hero {
     /// The hand item classes' joint-list targets `(o_class, target per list)` ([`fx::JointData::items`]: the hand records
     /// and the Metal Detector's node, [`gadgets::hand_modifiers`]).
     pub fn set_item_joint_targets(&mut self, items: Vec<(i16, Vec<u8>)>) { self.fx.joints.items = std::sync::Arc::new(items); }
+}
+
+/// `FUN_00263cb8(moby, i, p, r, h)`'s words for one primitive: +0x10..+0x18 the world point `p` in model units
+/// (`(rows · (p − pos)) · 1024/scale`: moby +0xc0 transposed by 0x221c08, applied by 0x221608, scaled by 0x221210),
+/// +0x1c = `r · 1024/scale`, +0x04 = `h · 1024/scale`. Returned as `[+0x04, +0x10, +0x14, +0x18, +0x1c]`.
+fn cylinder_words(moby: &crate::moby_runtime::Moby, p: [f32; 3], r: f32, h: f32) -> [u32; 5] {
+    let k = 1024.0 / moby.scale;
+    let d = [p[0] - moby.position[0], p[1] - moby.position[1], p[2] - moby.position[2]];
+    let local = |l: usize| {
+        let row = moby.rows[l];
+        (row[0] * d[0] + row[1] * d[1] + row[2] * d[2]) * k
+    };
+    [(h * k).to_bits(), local(0).to_bits(), local(1).to_bits(), local(2).to_bits(), (r * k).to_bits()]
 }
 
 /// Sounds the hero update plays at the game's point inside `0x228870`, so their RNG draws (the class sound's
@@ -801,8 +858,23 @@ pub fn hero_update(hero: &mut Hero, moby: &mut crate::moby_runtime::Moby, env: &
     hero_update_with_sounds(hero, moby, env, anim, rng, &mut NoHeroSounds)
 }
 
-/// [`hero_update`] with the hero's sounds played at the game's points ([`HeroSounds`]).
+/// [`hero_update`] with the hero's sounds played at the game's points ([`HeroSounds`]). The counter mirror
+/// [`idle::Idle::counter`] steps only on the way out: the game's `0x15f5cc++` (`0x2ab960`, L01 call 0x2ac288) runs
+/// after the hero (call 0x2ac144), the camera and the sound, so every reader in the update sees this tick's value.
 pub fn hero_update_with_sounds(
+    hero: &mut Hero,
+    moby: &mut crate::moby_runtime::Moby,
+    env: &Env,
+    anim: &mut dyn AnimCtl,
+    rng: &mut crate::rng::Rng,
+    sounds: &mut dyn HeroSounds,
+) -> HeroTick {
+    let t = hero_update_inner(hero, moby, env, anim, rng, sounds);
+    hero.idle.counter = hero.idle.counter.wrapping_add(1);
+    t
+}
+
+fn hero_update_inner(
     hero: &mut Hero,
     moby: &mut crate::moby_runtime::Moby,
     env: &Env,
@@ -812,7 +884,6 @@ pub fn hero_update_with_sounds(
 ) -> HeroTick {
     fx::begin(hero, moby);
     let counter = hero.idle.counter;
-    hero.idle.counter = counter.wrapping_add(1);
     let (x, y) = (hero.pos[0], hero.pos[1]);
     let (lo, hi) = (Pf::b(0x4000_0000), Pf::b(0x447f_8000));
     if x < lo || y < lo || hi < x || hi < y {
@@ -1181,5 +1252,45 @@ mod tests {
         let states: Vec<i32> = r.log.iter().map(|l| l.0).collect();
         assert_eq!(states.iter().filter(|&&s| s == 7).count(), 51);
         assert_eq!(*states.last().unwrap(), 0);
+    }
+
+    /// `HeroSyncMoby`'s cylinders (`FUN_00263cb8` ×2, [`Hero::write_back`]): `[height, base x, y, z, radius]` of
+    /// records 0 / 1 in model units (scale 0.5: ×2048), from the capsule (top 0.8, bottom 0.7, radius 0.45).
+    #[test]
+    fn write_back_rewrites_the_collision_cylinders() {
+        let mut h = Hero::new();
+        h.pos = physics::v4(10.0, 20.0, 30.0);
+        h.rows = physics::euler_rows(h.rot);
+        (h.cap_top, h.cap_bottom, h.cap_radius) = (Pf::f(0.8), Pf::f(0.7), Pf::f(0.45));
+        let mut m = crate::moby_runtime::Moby { has_collision: true, scale: 0.5, ..Default::default() };
+        let check = |h: &mut Hero, m: &mut crate::moby_runtime::Moby, want: [[f32; 2]; 2]| {
+            h.write_back(m);
+            for (i, [base, height]) in want.into_iter().enumerate() {
+                let w = m.prim_writes[i].expect("written").map(f32::from_bits);
+                let k = 2048.0;
+                let ok = (w[0] - height * k).abs() < 0.05 && w[1] == 0.0 && w[2] == 0.0 && (w[3] - base * k).abs() < 0.05 && (w[4] - 0.45 * k).abs() < 0.05;
+                assert!(ok, "record {i}: {w:?}, want base {base} height {height}");
+            }
+        };
+        // On foot (0x229f20): record 1 from radius + 0.05.
+        check(&mut h, &mut m, [[0.7, 0.1], [0.5, 0.3]]);
+        // A jump (group 4): + 0.15.
+        h.group = 4;
+        check(&mut h, &mut m, [[0.7, 0.1], [0.65, 0.15]]);
+        // In the water (group 0x11): record 1 from the bottom; both heights at least 0.05.
+        (h.group, h.cap_top) = (0x11, Pf::f(0.72));
+        check(&mut h, &mut m, [[0.7, 0.05], [0.7, 0.05]]);
+        // A body (0x22a110): no floor, no jump or water rule.
+        h.mode = 1;
+        check(&mut h, &mut m, [[0.7, 0.02], [0.5, 0.22]]);
+        // 0x13f51c set, or no blob: nothing written.
+        h.no_vel_clamp = 1;
+        m.prim_writes = [None; 2];
+        h.write_back(&mut m);
+        assert_eq!(m.prim_writes, [None; 2]);
+        h.no_vel_clamp = 0;
+        m.has_collision = false;
+        h.write_back(&mut m);
+        assert_eq!(m.prim_writes, [None; 2]);
     }
 }

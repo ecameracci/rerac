@@ -258,8 +258,9 @@ pub fn euler_quat(e: [f32; 3]) -> [f32; 4] {
 /// The idle fields of the hero block and the globals the idle routines keep.
 #[derive(Clone, Debug)]
 pub struct Idle {
-    /// 0x15f5cc as the hero update sees it (the tick counter before its increment). The hero keeps a mirror
-    /// that [`super::hero_update`] increments; the tick driver should overwrite it with the game's counter.
+    /// 0x15f5cc as the hero update sees it (the tick counter before its increment `0x2ab960`, which runs after the
+    /// hero, the camera and the sound). The hero keeps a mirror that [`super::hero_update`] increments as it returns,
+    /// so its readers inside the update see the game's value; the tick driver should overwrite it with the game's counter.
     pub counter: i32,
     /// 0x15ed84: the current level (−1 = unknown; fidget record 3 and the ground probe's water footstep read it).
     pub level: i32,

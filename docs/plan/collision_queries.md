@@ -255,14 +255,28 @@ that (`CamInput::mobys`), with the game's `a2` per query (Ratchet, none, or the 
 not ported (no such moby on Novalis's crates).
 
 **Stand-ins removed:** `CrateBoxes` / `MobyCollider` (inferred unit crate tops) and the bounding-sphere `sphere_mobys`
-(`services.rs`). **Not modelled:** the query stamp wrap, list-storage exhaustion, cells beyond the 64×64 table, Ratchet's per-tick
-collision cylinders (HeroSyncMoby's `FUN_00263cb8` rewrites primitives 0 / 1 of his blob from the hero capsule; the port keeps
-the class blob's), the camera moby 0x3ef (`Camera_handleCollWithHero`).
+(`services.rs`). **Not modelled:** the query stamp wrap, list-storage exhaustion, cells beyond the 64×64 table, the camera moby
+0x3ef (`Camera_handleCollWithHero`).
+
+**Ratchet's cylinders** (2026-10-19, G-HERO-022). HeroSyncMoby (L01 0x229f20 on foot, 0x22a110 in a body), after its
+`MobyBuildMatrix` and unless 0x13f51c is set or +0x94 is 0, calls `FUN_00263cb8(moby, i, point, r, h)` for records 0 and 1 of
+his class blob (on foot 0x22a034 / 0x22a0b0, body 0x22a1f0 / 0x22a23c): with `k = 1024 / scale`, record +0x10..+0x18 = the
+point relative to the moby through the transposed +0xc0 rows ×k, +0x1c = r·k, +0x04 = h·k (kind 3: base, radius, height). The
+point is `0x248d80(base)` (the gravity step 0x248b68 by −base: up from the feet); record 0's base is the capsule bottom
+0x13f574, record 1's radius 0x13f584 + 0.05 (+ 0.15 in group 4, = bottom in the water `0x22dea8`); height = top 0x13f570 − base,
+at least 0.05 on foot (the body copy has neither floor nor the group rules). On Novalis record 0 has mask 0x0001 (flag-0x4
+queries) and record 1 mask 0x8002. `FUN_00263cb8` per level: 00 0x24eed8, 01 0x263cb8, 02 0x251548, 03 0x23da48, 04 0x241c10,
+05 0x279140, 06 0x25db98, 07 0x277900, 08 0x2593d8, 09 0x26e860, 10 0x241950, 11 0x274d08, 12 0x267c18, 13 0x25ab60, 14
+0x2573d8, 15 0x23e540, 16 0x24a5b0, 17 0x249690, 18 0x2511c0. Port: `Hero::sync_cylinders` (from `Hero::write_back`) stores the
+words on his moby (`Moby::prim_writes`: only his moby uses the class) and `mobys::active_prims` substitutes them for records
+0 / 1. Native `f32`.
 
 **Verification.** Unit tests (`collision_query/tests.rs`): grid registration order / swap-removal / off-grid / delete; a box
 mesh hit by a line (vs a nearer world floor, ignore, flag 0x9, one-sidedness), blocking a capsule and a sphere; a sphere
 primitive by line / sphere / capsule (entry point, unshrunk best, push-out), masks, `coll_sphere_mobys`; a joint capsule
-(side, cap, sphere) and the pose cache round robin; hero groups. Disc (`crates/rc-game/tests/world/moby_collision_novalis.rs`): after
+(side, cap, sphere) and the pose cache round robin; hero groups; records 0 / 1 replaced by `prim_writes`; the cylinder words
+per hero mode (`hero::tests::write_back_rewrites_the_collision_cylinders`). Disc (`novalis_line_hits_ratchets_cylinders`:
+Ratchet's records 0 / 1 are cylinders, a line across him enters at his capsule radius, record 1 / with flag 0x4 record 0). Disc (`crates/rc-game/tests/world/moby_collision_novalis.rs`): after
 120 ticks the 344 stack has settled; a line down onto crate 344 (ignoring 342 on it) hits its top face at z 66.390625 = 344.z + 1
 = where 342 rests (kind 0x107f); world-only the same line reaches the ground; a bolt dropped 1.5 above crate 342 settles on it
 (rest z 67.390625 = the crate top; world-only it falls through to 65.08). `moby_update_novalis`: 82 stacked crates, as with the

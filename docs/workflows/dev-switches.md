@@ -58,7 +58,7 @@ module that reads it: `grep -rn '"RC_' crates/` lists them all.
 | `RC_SKIP_LOGOS` | `1`: in the front end, skip the publisher logos movie and go straight to the title |
 | `RC_SAVE_DIR` | the memory-card folder (`0` or empty: no card); without it, the `memcard_dir = <path>` key of the port settings file (relative: from the settings file's folder), else a `memcard/` folder beside the executable if it exists, else `<config>/rerac/memcard` (deterministic runs: no card). `RC_SAVE_TRACE=1` logs every card state change |
 | `RC_MODS_DIR` | The mods folder (default: `mods/` beside the executable; docs/plan/mods.md §2.1b). Set, it also enables mods in deterministic runs, with the enabled set from `RC_SETTINGS_FILE`'s `mods = <id>, …` |
-| `RC_CAM` | Starting camera `ex,ey,ez,tx,ty,tz` (eye and target, game units) |
+| `RC_CAM` | Starting camera `ex,ey,ez,tx,ty,tz` (eye and target, game units). Without it the fly camera starts behind and above Ratchet's start (else the ship spawn, else the whole level; `fly_cam::spawn_view`); it shows with `RC_PLAY=0` or `RC_PLAY_FLY=1` |
 | `RC_SCREENSHOT` | Save a screenshot to this path, then exit |
 | `RC_SCREENSHOT_DELAY` | Seconds before the screenshot (default 3) |
 | `RC_DUMP_FRAMES` | `start..end`: save every frame from update `start` to `end` (inclusive) as `frame_NNNNN.png` into `RC_DUMP_DIR` (default `frames`), then exit (dev only; frame-exact, offscreen like `RC_SCREENSHOT_FRAME`) |

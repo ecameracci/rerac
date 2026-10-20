@@ -232,7 +232,7 @@ impl Hero {
             }
         }
         if self.state == id::WATER_JUMP && descending && z < w - 0.7 { enter = true; }
-        let counter = self.idle.counter.wrapping_sub(1);
+        let counter = self.idle.counter;
         if !(0x11..=0x12).contains(&self.group) && self.group != 7 && self.group != 0x14 && self.state != id::WATER_JUMP && counter & 0xf == 0 {
             let up = if counter & 0x3f == 0 { 16.0 } else { 4.0 };
             let mut a = self.pos;
