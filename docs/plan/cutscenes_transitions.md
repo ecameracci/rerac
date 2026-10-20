@@ -128,6 +128,14 @@ Each chunk repeats the entries that overlap it. The tables hold every line **twi
    * pos(+0x10) = lerp(track[f], track[f+1], t). Then +0x71 = 0xff and `fun_0020def8`.
    * Class 0 → `FUN_0024a1d0`. Classes 10/419/1365 → `FUN_00228bc0` [L: Clank/attachment]. +0x7f ≠ 0 →
      `FUN_0026f0e0`.
+   * `FUN_00228bc0`'s antenna sprite [H, level01 `peek dis 1 228bc0`]: class 0x1a3 → `FUN_002645a8(actor, 6)` −
+     0.07 z, drawn (0.25, 0.15) only when more than 2 above the actor; the others → `FUN_002645a8(actor, 1)` −
+     0.007 z (0x3be56042), `FUN_00229738(0.047, 0.15, point, 0x200000c0)`: the red glow on Clank's antenna bulb.
+     **In the port (2026-10-20, re-rac/rerac#37):** the "red pulsating dot under Clank" (Orxon scene 6, the
+     Pokitaru infobot) was this sprite at the actor's origin while the loader left the actor classes' joint lists
+     out; fixed 2026-10-17 by `gameplay::wants_joint_lists` (`rc_game::scene_actors::ACTOR_CLASSES`), not in the
+     releases up to v0.3.5. Checked on `dev` (`RC_LEVEL=10 RC_SCENE=6`, frame 750; Novalis `RC_SCENE=5`, frame
+     1300): the glow sits on the bulb; with the loader line dropped the dot is back between his feet.
 6. The effects are not in the chunk. Class 1546 (`0x30c190`, "cutscene FX driver") reads 0x16cd10/0x16cd14 and spawns
    particles on actor joints (e.g. scene 5, ticks < 120: a trail from joint 5 of actor 2).
 
