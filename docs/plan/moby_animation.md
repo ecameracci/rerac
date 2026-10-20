@@ -240,4 +240,5 @@ palette reading `joint_mods` (it evaluated without them). Retired: `rc-engine` `
 * Left (gaps G-HERO-009): U540 347 (17) and U197 447 / 920 (05, 07, 13) are cheap now (only this blocked them); the
   units that call `0x2777d8` behind other blockers (the big-head cheat, G-SAV-006: 638, 238, 623, 1382, 44, 574, 427,
   717, 631, 556; G-CLS-026: 221, 1356; the `memcard_Save` NPCs, G-SAV-002); `MobyAnimBlendEx` 0x26c7a8, `0x27b9c0`,
-  `0x2b52a8` (census `anim`: 4 units / 65 created, all behind the cheat or the save).
+  `0x2b52a8` (census `anim`: 4 units / 65 created, all behind the cheat or the save). `0x2b52a8` is level 01's copy of
+  `0x292cb8`, `creature::legs::reset_hips` (G-HERO-042, 2026-10-20).
