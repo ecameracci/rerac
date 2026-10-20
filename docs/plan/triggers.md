@@ -248,7 +248,12 @@ A crank let go before it is done unwinds (1/60 a tick) and the consumers follow 
 |---|---|---|---|
 | 641 rotator (Novalis #672, crank #297) | `0x2f4348` | Euler x = start + wrap((pvar+0x08° − start) · progress); sets the crank's update distance 0xff | no |
 | 665 slider (Novalis door pairs #683 / #684 ← #296, #685 / #686 ← #297) | `0x2f4710` | x, y = start + (pvar+0x0c / +0x10 − start) · progress (only when both targets ≠ 0); loop sound 0 while moving, sound 1 at 0 / 1 | no |
-| Eudora `0x2c6858`, `0x2c6bb8`, `0x2cdda0` (a lift: z − 15 · progress), `0x2e4418` (help) | level04 | not ported | — |
+| 432 / 1052 followers (Eudora, cranks #148 / #149; `units::eudora_crank_follower`) | level04 `0x2c6858` | animation t = progress; swaps 432 ↔ 1052; loop sound 0 while moving, sound 1 at 0 / 1 | no |
+| 434 lifts (Eudora #235–#237; `units::eudora_crank_lift`) | level04 `0x2c6bb8` | animation t = 1 − progress, joint 0 carries a second moby; sinks back by itself, unwinding the crank | the carried moby |
+| 481 floats (Eudora; `units::spinner_float`) | level04 `0x2cdda0` | z = placed z + bob − 15 · progress | no |
+| 617 path riders (Eudora, created; `units::eudora_path_rider`) | level04 `0x2d6f68` | on their path at 1 − the source's pvar +0x00 | the carried moby |
+| 1343 help director (Eudora; `units::help_eudora`) | level04 `0x2e4418` | reads the cranks +0x40 / +0x44 in state 5 → global flags 0x1e / 0x1f | no |
+| 468 / 469 bridges (Batalia #351–#360, a pair per crank #296–#300; `units::batalia_small`) | level08 `0x2ea4c0` | start + (end − start) · progress; 468 hums (class sound 0) | no |
 
 None of them has a platform block, so `HeroPlatformUpdate` never carries Ratchet on them (as in the game); they move
 under the scheduler's `MobyBuildMatrix` and grid re-registration like every moby, so their collision follows. Port:

@@ -42,8 +42,9 @@
 //!
 //! Novalis: crank #296 (spawn id 0x34, (172.85, 90.59, 62.0)) drives the door pair 665 #683 / #684; crank #297 (spawn
 //! id 0x35, (109.81, 93.46, 57.0), mission 1, checkpoint cuboid 55 at the landing pad) drives the door pair #685 /
-//! #686 and the rotator 641 #672. Eudora (9) and Batalia (5) have cranks whose consumers are other classes (not
-//! ported: they read the same progress).
+//! #686 and the rotator 641 #672. Eudora's 9 and Batalia's 5 cranks drive other classes that read the same progress
+//! (`units::eudora_crank_follower`, `eudora_crank_lift`, `spinner_float`, `eudora_path_rider`, `batalia_small`;
+//! docs/plan/triggers.md §8).
 
 use crate::hero::crank::{self, Seen, Turn};
 use crate::moby_runtime::{mode, MobyId};
