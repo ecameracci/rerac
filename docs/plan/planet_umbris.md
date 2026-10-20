@@ -31,6 +31,11 @@ them.
 - The shimmer's GS blend (1.25·Cd + Cs) is drawn additive; the beam's second fan is drawn in the strip's colour (the
   game draws it from a stack copy taken before the colour is set) [L].
 - The headless runs reach the arrival scene but not the lair: the beast's fight is checked in the user's QA only.
+- **In the port (2026-10-20, issue #36):** the Bomb Glove's bomb no longer goes off at Ratchet's feet in the drained
+  Hydrodisplacer pools (the patch mobys 902 / 941 … 971 of `water::managers`). Groups 0 and 1 drain to 0.5 above
+  their floor, so the bomb leaves the glove (0.49 up) under the pool moby's water face; the game's hit test takes a
+  moby's type-0 face for water (`CollType`, level07 0x21b3c0) and lets a rising bomb through, the port had not
+  (`classes::bomb::fly`, hero_gameplay.md §13; tests `weapons::bomb_water_umbris`).
 
 ## Open
 

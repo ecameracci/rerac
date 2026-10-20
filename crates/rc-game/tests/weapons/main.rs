@@ -1,6 +1,10 @@
 //! Integration tests: the weapons and gadgets Ratchet fires, the morph ray, the gloves, and targeting (docs/workflows/testing.md §3).
 //! One module per former test file; run one with `cargo xtask test-job --test weapons --filter <module>::`.
 
+#[path = "../common/mod.rs"]
+mod common;
+
+mod bomb_water_umbris;
 mod hero_doom;
 mod hero_gameplay_novalis;
 mod hero_gloves;

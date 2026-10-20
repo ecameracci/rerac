@@ -81,6 +81,7 @@ Hero movement `0x233940`: up to 8 passes of `capsule(0x2135a0, flags 0x24 or 0xd
 - **bits 5-6** = footstep sound class, via `0x215208` (3 → 0). The ground probe `0x232dc0` stores it at `0x14063d` (default 3). `0x227e48 → 0x2a1898`: sound = `tbl_0x1bdca0[level] + class*4 + foot*2 + variant + base`.
 - **bit 7** = ignored by queries passing flag 0x80.
 - id **0 = water surface** (inferred): the ground probe records the level (`0x13f640` via `0x26ed38`) and re-casts with flags `0x24`, which excludes id 0, to find the floor. The hero capsule also always uses 0x24, so the hero passes through it.
+  `CollType` reads +0x1c only, never +0x18, so a **moby** triangle of type 0 (`0x1000 | 0`: the patch managers' pools, `water::managers`) is water to its callers as a world face is. **In the port (2026-10-20, issue #36):** `CollOutput::surface_id` is that getter; the bomb's hit test (L01 0x2c3990, L07 0x2d72d0) had added "no hit moby" to it and now does not (`classes::bomb::fly`, hero_gameplay.md §13 "the bomb in moby water").
 - id **0xd**: level stored in `0x13f640` (same slot as water), then re-cast from 0.01 below. Hero capsule uses `0xd24` (excludes 0xd) when `0x1413d4==0x7f`. Liquid-like; only in level 12.
 - id **0xb**: z stored in `0x13f644`, and the ground snap is skipped.
 - Wall/ledge checks reject ids 9/0xc or 10/0xc, then test slope `atan < 0.349/1.309 rad` (`0x22c9a0`, `0x22d090`, `0x22d838`).

@@ -1227,6 +1227,21 @@ own helpers (the hero's SetState, which reads Ratchet's record, excluded). **H**
 | Suck Cannon, a fired creature | `react::flight` (0x305260) | 0x430000 | 1 / 1, class 0x351 | 2 | `react` |
 | Taunter's crate hit, mine seek, drones 479 | `0x2cc830`, `0x2bfe40`, `0x2e92b8` | 0x10000 | | 1 | `taunter`, `mine`, `drone` |
 | creatures' beam explosions with damage | `SpawnBeamExplosion` 0x273310 | 0x810001 | 2 / 1 | param | `creature::fx::beam_explosion` |
+**In the port (2026-10-20): the bomb in moby water (issue #36).** The bomb's hit test (level01 0x2c3990..0x2c3bb8,
+level07 0x2d72d0..0x2d74f8, the same code) asks `CollType` (L01 0x2151d8, L07 0x21b3c0), which reads CollOutput +0x1c
+alone, so a moby triangle of type 0 is water as a world one is [V, both overlays]. The port had keyed its water face on
+"no hit moby" too, so the water of the patch managers (Umbris's 902 / 941 … 971 and the other levels' managers,
+`water::managers`: surface-0 faces on the moby) was a solid hit. On Umbris it showed in the
+drained pools 0.5 deep (groups 0 / 1, drained to 66.5 over a floor at 66.0): the glove's launch point is 0.49082 above
+the feet, so the bomb starts just under the surface, its first segment rises through the pool moby's face (kind
+0x1000) and the port exploded it there, at Ratchet's feet; the game's 0x2c3b08 branch (not in water, `CollType` 0,
+vz ≥ 0) lets it fly on. In group 3's pool (0.42 deep) the bomb starts above the surface, hence "other pools work".
+Also ported, from the same block: a world hit (+0x18 = 0) explodes it only when +0x1c > 0 (0x2c3bac; world and
+hero-group faces always give 0x1000 | type, so this changes nothing today). `classes::bomb::fly`; tests
+`weapons::bomb_water_umbris` (the drained pools of groups 0 and 1: the first segment meets the pool moby's water face
+from below and the bomb flies on 48–60 ticks, exploding 7–9 units away; before the fix it went off at 66.5 on that
+first tick; the control, group 3: nothing met on the first ticks).
+
 | camera line into a crate | 0x312ef8 | 0x800000 | 3 / 3 | 20 | `tick.rs` |
 | Glove of Doom bots 186 | `0x2d5c10` | — | | | **not ported** (G-WPN-002) |
 | Visibomb missile 172 | `0x2cbda8` → `0x26f8f8` | — | | | ported (§17: the path's record, damage 6, flags 0x830000; the blast sphere 4, `attack::area_hit`) |
