@@ -437,10 +437,10 @@ fn setup(
     }
     if crate::saves::front_end_active() {
         fer.fe = Some(crate::saves::front_end(lh.lang, rc_game::rng::Rng::new().rand()));
-        if let Some(fe) = fer.fe.as_mut().filter(|_| crate::saves::take_front_end_at_title()) {
-            fe.phase = rc_game::frontend::Phase::Title;
-            fe.fade = 1.0;
-            println!("menus: front end: at the title (Quit Game □ Main Menu: no card check, logos or still)");
+        // Quit Game □ Main Menu: at the still, which covered the reload already (its time counts towards the minimum).
+        if let (Some(fe), Some(shown)) = (fer.fe.as_mut(), crate::saves::take_front_end_at_still()) {
+            fe.phase = rc_game::frontend::Phase::Still { frames: shown.min(rc_game::menus::scale_ticks(rc_game::frontend::STILL_MIN)) };
+            println!("menus: front end: at the still (Quit Game □ Main Menu: no card check or logos; shown {shown} vsyncs)");
         }
         mm.state.set(Mode::Menu);
         println!("menus: front end: the boot flow runs over the loaded level, the world hidden");
@@ -721,7 +721,7 @@ fn menu_frame(
         let busy = movies.as_deref().is_some_and(|m| m.busy());
         let fer = &mut *fer;
         let mut port = PortSettings { shadows: shadows.as_mut(), display: &mut display, gfx: &mut gfx, fps: fps.as_mut(), qs: qs.as_mut(), supported: supported.as_deref().cloned().unwrap_or_default(), mods: mods.as_mut(), strafing: strafing.as_mut() };
-        front_end_frame(rt, &mut mm, &mut play, gs, fer, &pad, &source, busy, audio.as_deref_mut(), &mut port);
+        front_end_frame(rt, &mut mm, &mut play, gs, fer, &pad, &source, busy, audio.as_deref_mut(), &mut port, &mut app_exit);
         mm.state.end_frame();
         mm.loop_frame += 1;
         return;
@@ -887,12 +887,12 @@ fn menu_frame(
                 if let Some((a, b)) = out.transition { println!("menus: frame {frame}: transition {a:#x} → {b:#x} (kind 1, 12 ticks)"); }
                 if let Some(p) = out.entered { println!("menus: frame {frame}: page {p:#x} entered (kind {:#x})", menu.kind); }
                 // Port-only: Quit Game closes the app (the game goes back to the boot's logos and title);
-                // `RC_QUIT_TO_TITLE=1` keeps the game's. □ Main Menu (port-only) always leaves for the front end, at its title.
+                // `RC_QUIT_TO_TITLE=1` keeps the game's. □ Main Menu (port-only) always leaves for the front end, at its still.
                 let quit_app = out.quit && !out.main_menu && std::env::var("RC_QUIT_TO_TITLE").map_or(true, |v| v.trim() != "1");
                 if out.quit { println!("menus: frame {frame}: Quit Game ○ (0x13d384 = 0, 0x15f5c0 = −1, 0x15f570 = 1){}", if quit_app { ": the app closes" } else { "" }); }
                 if out.main_menu {
-                    println!("menus: frame {frame}: Quit Game □ Main Menu (0x15f5c0 = −1, 0x15f570 = 1): the front end at its title");
-                    crate::saves::set_front_end_at_title();
+                    println!("menus: frame {frame}: Quit Game □ Main Menu (0x15f5c0 = −1, 0x15f570 = 1): the front end at its still");
+                    crate::saves::set_front_end_at_still();
                 }
                 if quit_app { app_exit.write(AppExit::Success); }
                 // 0x15f5c0 = dest, 0x15f570 = 1: the level loop ends (crate::media_render, the travel lane's level change).
@@ -1439,6 +1439,7 @@ fn front_end_frame(
     movie_busy: bool,
     mut audio: Option<&mut crate::audio_out::AudioOut>,
     port: &mut PortSettings,
+    app_exit: &mut MessageWriter<AppExit>,
 ) {
     let frame = mm.loop_frame;
     let vsync = frame as u32;
@@ -1471,6 +1472,7 @@ fn front_end_frame(
         rt.assets.all_text = t;
         rt.front_text = Some(fe.lang);
     }
+    fe.hold = !crate::saves::title_world_ready();
     let out = match fe.phase {
         rc_game::frontend::Phase::CardCheck { .. } => {
             let check = crate::saves::with_card(|c| {
@@ -1526,6 +1528,11 @@ fn front_end_frame(
                     fe.mode = 4;
                 }
                 if let Some(l) = o.level_exit { exit = Some(l); }
+                // Port-only: the main menu's Quit Game (`rc_game::menus::pause::port::FRONT_QUIT_ACTION`) closes the app.
+                if o.quit {
+                    println!("menus: frame {frame}: front end: Quit Game: the app closes");
+                    app_exit.write(AppExit::Success);
+                }
                 if o.exit.is_some() {
                     fe.menu_closed();
                     println!("menus: frame {frame}: front end: the menu closed, the title");

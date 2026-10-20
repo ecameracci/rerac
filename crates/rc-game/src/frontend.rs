@@ -14,7 +14,7 @@
 //! | 0x1e9658 | 0x15f5e8 = 1 (the front end flag the card dialog reads) | [`FrontEnd::new`] (`MemCard::front_end`, set by the engine) |
 //! | 0x1e9658 card check | `fun_00209168` every vsync: 0 ok, 1 no / not a PS2 card, 2 no save folder and < 350 KB; while ≠ 0 the warning picture (IRX lump +0x10 / +0x40 + 8·language) until it is 0 or after 10 vsyncs any button; then `FadeToBlack(10)` if one was shown | [`Phase::CardCheck`] (`CardFs::boot_check`) |
 //! | 0x1e9658 logos | the PSS `mpegs[0]` (PAL [1]), `FadeToBlack(ticks(18))` | [`Phase::Logos`] (the engine plays it; port-only: Start skips it) |
-//! | 0x1e9658 still | the IRX still (+0x00 NTSC) on screen while the sound bank and the title world load | [`Phase::Still`] (port-only: Start ends it early) |
+//! | 0x1e9658 still | the IRX still (+0x00 NTSC) on screen while the sound bank and the title world load | [`Phase::Still`] (port-only: Start ends it early; it holds while the title world loads, [`FrontEnd::hold`]) |
 //! | 0x1e9658 sound bank, music globals 0x15f630 / 0x186100 | the front end's sounds | the engine's audio (n/a here) |
 //! | 0x1eb798 entry | level 0x15ed84 = 0, `load_and_initialize_level_chunk` (the template restored), the title world (`transition_load_wad`), the HUD banks; the still stays ≥ ticks(180) since the clock start; sound reset; `rand() % 4` the first attract movie | [`Phase::Still`], [`FrontEnd::new`] (the reset is the engine's) |
 //! | 0x1eb798 loop | per vsync: `memcard_update_state`, the card monitor, `UpdatePad`, the voice slots, `fun_001eb0a8`, the draw; in mode 0 a frame counter: at ticks(1500) the attract movie `fun_001e9488(i)` (i cycles 0..3), the fade 0x15f43c = 1.0, the camera chunk 0 again, 0x15ef50 / 0x15ef54 / 0x15ef58 = 0; any other mode clears the counter | [`FrontEnd::frame`] (the card's two calls run in the engine's card frame) |
@@ -88,6 +88,9 @@ pub struct FrontEnd {
     /// PRESS START of every language (`GetEffectTex(max(language − 1, 0) + 4)`, by language): the draw follows a
     /// language change at once ([`FrontEnd::set_language`]).
     pub press_texs: Vec<Option<Arc<Texture>>>,
+    /// Port-only: the title world is still loading (the engine's `saves::title_world_ready`): the still does not end,
+    /// not even on Start, so the title never fades in over an empty world.
+    pub hold: bool,
 }
 
 /// The language slots 0x15ed88 indexes (the text blocks of `all_text` and the levels' text, `rc_formats::strings`).
@@ -127,6 +130,7 @@ impl FrontEnd {
             warning_tex: None,
             lang: 0,
             press_texs: Vec::new(),
+            hold: false,
         }
     }
 
@@ -169,8 +173,8 @@ impl FrontEnd {
                 }
             }
             Phase::Still { frames } => {
-                // Port-only: Start ends the still early (the port's title world is loaded by then).
-                if frames + 1 >= scale_ticks(STILL_MIN) || pressed & button::START != 0 {
+                // Port-only: Start ends the still early, and it holds while the title world loads ([`FrontEnd::hold`]).
+                if !self.hold && (frames + 1 >= scale_ticks(STILL_MIN) || pressed & button::START != 0) {
                     self.phase = Phase::Title;
                     self.fade = 1.0;
                 } else {
@@ -288,7 +292,7 @@ impl FrontEnd {
 /// Picture keys of [`ImageSrc::Pixels`] (constant pictures).
 const KEY_LOGO: u64 = 0xf0_0001;
 const KEY_PRESS: u64 = 0xf0_0002;
-const KEY_STILL: u64 = 0xf0_0003;
+pub const KEY_STILL: u64 = 0xf0_0003;
 const KEY_WARNING: u64 = 0xf0_0004;
 
 #[cfg(test)]
@@ -308,5 +312,20 @@ mod tests {
         fe.phase = Phase::Still { frames: 0 };
         for _ in 0..scale_ticks(STILL_MIN) { fe.frame(0, false); }
         assert_eq!(fe.phase, Phase::Title);
+    }
+
+    /// Port-only: while the title world loads ([`FrontEnd::hold`]) the still stays past its minimum and on Start; it
+    /// ends on the first vsync after the load (Quit Game □ enters at the still with the reload's time counted).
+    #[test]
+    fn still_holds_until_the_title_world_is_ready() {
+        let mut fe = FrontEnd::new(0, 0);
+        fe.phase = Phase::Still { frames: scale_ticks(STILL_MIN) };
+        fe.hold = true;
+        fe.frame(button::START, false);
+        fe.frame(0, false);
+        assert!(matches!(fe.phase, Phase::Still { .. }));
+        fe.hold = false;
+        fe.frame(0, false);
+        assert_eq!((fe.phase, fe.fade), (Phase::Title, 1.0));
     }
 }

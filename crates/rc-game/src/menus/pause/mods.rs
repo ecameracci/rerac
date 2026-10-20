@@ -6,8 +6,8 @@
 //! Built like the Port Options' main-menu page ([`super::port`]): the front end's Sound sub-page frames with the list
 //! panel stretched ([`super::port::panel_stretch`]), a copy of the port title label, a list drawn and driven like
 //! the camera list (Up/Down without wrap with sound 1, ✕ with sound 0, the generic Start/Select/R3 and △ keys).
-//! Entry: one item "Mods" (action 3 → [`PAGE`]) appended to both of the front end's Options lists, after Port
-//! Options. Records live at port-only addresses (0x7f00_xxxx), the text ids are negative ([`super::port::text`]).
+//! Entry: one item "Mods" (action 3 → [`PAGE`]) in both of the front end's Options lists, after Port Options and
+//! before the port's Quit Game ([`super::port::front_options_insert`]). Records live at port-only addresses (0x7f00_xxxx), the text ids are negative ([`super::port::text`]).
 
 use super::super::{text as print, MenuAssets, MenuDraw, MenuInput, MenuSound};
 use super::options::{keys, right};
@@ -88,7 +88,7 @@ impl PageMenu {
         widgets[port::LIST_SLOT] = LIST_W;
         let page = Page { addr: PAGE, focus: LIST_W, widgets, ..model };
         for list in &mut self.saves.front_options {
-            list.push(Item { label: port::text::MODS as i16, action: 3, arg: PAGE, sublabel: 0, hl: 0 });
+            port::front_options_insert(list, Item { label: port::text::MODS as i16, action: 3, arg: PAGE, sublabel: 0, hl: 0 });
         }
         self.widgets.insert(TITLE_W, title);
         self.widgets.insert(LIST_W, mods);

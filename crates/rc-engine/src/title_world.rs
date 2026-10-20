@@ -200,8 +200,8 @@ impl Plugin for TitleWorldPlugin {
     }
 }
 
-/// A level change: the title world's entities and states are gone (the data stays loaded for the next front end); the
-/// cameras back on the level's view if the title still had them.
+/// A level change: the title world's entities and states are gone (the data, or its load in flight, stays for the next
+/// front end); the cameras back on the level's view if the title still had them.
 fn unload(
     mut commands: Commands,
     mut rt: ResMut<TitleWorldRt>,
@@ -212,9 +212,9 @@ fn unload(
         for e in &main { commands.entity(e).remove::<RenderLayers>(); }
         for mut layers in &mut sky { *layers = RenderLayers::layer(crate::sky_render::SKY_LAYER); }
     }
-    let data = rt.data.take();
+    let (data, load) = (rt.data.take(), rt.load.take());
     let failed = rt.failed;
-    *rt = TitleWorldRt { data, failed, ..Default::default() };
+    *rt = TitleWorldRt { data, load, failed, ..Default::default() };
     crate::saves::set_title_world_shown(false);
 }
 
@@ -237,8 +237,8 @@ type WorldMaterials<'w> = (
 /// The main world camera (not the sky camera).
 type MainCam<'w, 's> = Query<'w, 's, (Entity, &'static mut Camera), (With<FlyCam>, Without<SkyCamera>)>;
 
-/// Loads the title world on a worker thread once the front end runs (the boot's still covers it), then spawns its
-/// draws when the title phase starts (module docs).
+/// Loads the title world on a worker thread once the front end runs (the boot's still covers it and holds until the
+/// load is done: `crate::saves::title_world_ready`), then spawns its draws when the title phase starts (module docs).
 #[allow(clippy::too_many_arguments)]
 fn spawn(
     mut commands: Commands,
@@ -252,7 +252,8 @@ fn spawn(
 ) {
     let rt = &mut *rt;
     let Some(fer) = fer else { return };
-    if fer.fe.is_none() || rt.failed { return; }
+    // Quit Game □ Main Menu: the load runs behind the level reload too (its still covers both).
+    if (fer.fe.is_none() && !crate::saves::front_end_at_still()) || rt.failed { return; }
     if rt.data.is_none() {
         if rt.load.is_none() {
             let root = crate::level_load::extracted_root();
@@ -273,10 +274,12 @@ fn spawn(
                     d.level.sky.as_ref().map_or(0, |s| s.sky.shells.len()), d.scene.chunks.len(), d.scene.end_tick(), d.scene.actor_classes().len()
                 );
                 rt.data = Some(Box::new(d));
+                crate::saves::set_title_world_ready();
             }
             Err(e) => {
                 eprintln!("title world: not loaded ({e:#}): the front end stays over black");
                 rt.failed = true;
+                crate::saves::set_title_world_ready();
                 return;
             }
         }

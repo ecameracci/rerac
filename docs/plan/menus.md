@@ -316,8 +316,19 @@ y 44/93/144/193/242/292/342 (stored +1).
   21071 start with △ 0x12 / ○ 0x11; no disc message says "Main Menu"); the question and the three lines one 0x14 step
   higher (h−84, h−60, h−40, h−20) to stay in the panel, x centred on the widest (`options::quit_draw`). □ (pad 0x80) is ○'s
   level exit −1 without its quit (`MenuOut::main_menu`): always the front end, whatever `RC_QUIT_TO_TITLE`, entered at its
-  title (`frontend::Phase::Title`: no card check, logos or still; `saves::set_front_end_at_title`, rc-engine
-  `menu_render`). ○ by default closes the app (`RC_QUIT_TO_TITLE=1`: the game's path, logos included).
+  still (`frontend::Phase::Still`: no card check or logos; `saves::set_front_end_at_still`, rc-engine `menu_render`).
+  The −1 transition's level reload (about 6–9 s, level 01 on Windows) used to be black: the still is drawn over the
+  travel's black from the first blank frame (rc-engine `travel_render::hud_layer`, the IRX lump's NTSC still made opaque,
+  `saves::still_picture`), its time counts towards `STILL_MIN`, and the title world loads behind the reload
+  (`title_world::spawn`). The still holds until the title world is loaded (`FrontEnd::hold`, `saves::title_world_ready`),
+  then the title fades in from black as in the boot. ○ by default closes the app (`RC_QUIT_TO_TITLE=1`: the game's path,
+  logos included).
+* Front-end Quit Game (port-only, 2026-10-20; the disc's front-end Options has none): an item with the pause Options'
+  Quit Game label 20262 and the port-only action `port::FRONT_QUIT_ACTION` (0x7f00; the disc's are 0..=11), last in both
+  front-end Options lists, after Port Options and Mods (`PageMenu::install_front_quit_entry`; later port entries go
+  before it, `port::front_options_insert`). No confirmation page: ✕ on it plays the confirm sound and sets
+  `MenuOut::quit` (`PageMenu`'s list update), and the app closes at once (`AppExit::Success`, whatever
+  `RC_QUIT_TO_TITLE`; rc-engine `menu_render::front_end_frame`).
 * Language is not in the in-level Options (only list 0x1b8fe8, action 9, in front-end page 0x1b8b48); no vibration option.
 
 **Map** 0x1b3998 (Select; kind 0xb, seqs [21..25, 5..13], no parent, focus W2): W0 label flags 0x4b (large, centred,

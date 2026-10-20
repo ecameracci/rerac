@@ -1066,6 +1066,12 @@ impl PageMenu {
                         out.language = Some(it.arg);
                         return 0;
                     }
+                    port::FRONT_QUIT_ACTION => {
+                        // Port-only: the main menu's Quit Game, no confirmation (the engine closes the app).
+                        out.sounds.push(MenuSound::Confirm);
+                        out.quit = true;
+                        return 0;
+                    }
                     _ => {}
                 }
             }
