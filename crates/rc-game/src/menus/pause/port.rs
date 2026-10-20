@@ -143,6 +143,9 @@ pub mod text {
     /// HelpDesk toggle values, are lower case).
     pub const ON: i32 = -0x103;
     pub const OFF: i32 = -0x104;
+    /// Quit Game's third line (`options::quit_draw`): "□ Main Menu" with the font's □ glyph 0x13, as 21067 "△ No" /
+    /// 21071 "○ Yes" start with △ 0x12 / ○ 0x11 (no disc message says "Main Menu").
+    pub const MAIN_MENU: i32 = -0x105;
 
     pub fn get(id: i32) -> Option<&'static [u8]> {
         Some(match id {
@@ -150,6 +153,7 @@ pub mod text {
             DESCRIPTION => b"Settings of this port that the original game does not have",
             ON => b"On",
             OFF => b"Off",
+            MAIN_MENU => b"\x13 Main Menu",
             ANTI_ALIASING => b"Anti-aliasing",
             X2 => b"2x",
             X4 => b"4x",

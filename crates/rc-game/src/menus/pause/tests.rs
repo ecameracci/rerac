@@ -329,6 +329,70 @@ fn sound_slider_full_range_takes_342_ticks() {
     assert!(matches!(m.widgets[&SOUND_W].data, Data::Sound { cursor: 2 }));
 }
 
+/// The Quit Game page 0x1b6060 (kind 0xd, update 0x2921d0) open under Options.
+fn quit_page() -> (PageMenu, GameState) {
+    const QUIT: u32 = 0x1b6060;
+    const QUIT_W: u32 = 0x1b6140;
+    let (mut m, g) = (menu(), gs());
+    m.widgets.insert(QUIT_W, Widget { addr: QUIT_W, update: func::QUIT_UPDATE, draw: func::QUIT_DRAW, enter: 0, leave: 0, dflags: 0, moby: 0, rect: [0, 0, 300, 120], raw: [0; 8], data: Data::Quit });
+    m.pages.insert(QUIT, pg(QUIT, 0xd, OPTIONS, QUIT_W, &[(3, QUIT_W)], 80));
+    m.enter(0, &g);
+    m.kind = 0xd;
+    m.current = QUIT;
+    (m, g)
+}
+
+/// △ No: back to Options; ○ Yes: the quit and the level exit −1; port-only □ Main Menu: the level exit −1 without the
+/// quit (the engine enters the front end at its title, rc-engine `menu_render`).
+#[test]
+fn quit_page_no_yes_and_main_menu() {
+    let env = MenuEnv::default();
+    let (mut m, mut g) = quit_page();
+    let o = m.tick(&press(button::TRIANGLE), &mut g, &env);
+    assert_eq!((m.target, o.quit, o.main_menu, o.level_exit), (OPTIONS, false, false, None));
+    let (mut m, mut g) = quit_page();
+    let o = m.tick(&press(button::CIRCLE), &mut g, &env);
+    assert_eq!((o.quit, o.main_menu, o.level_exit), (true, false, Some(-1)));
+    let (mut m, mut g) = quit_page();
+    let o = m.tick(&press(button::SQUARE), &mut g, &env);
+    assert_eq!((o.quit, o.main_menu, o.level_exit), (false, true, Some(-1)));
+    assert_eq!(m.target, 0);
+}
+
+/// `DrawQuitGameMenu` 0x292298 with the port's third line: the window text, the question, then △ No, ○ Yes and
+/// □ Main Menu (glyph 0x13) one 0x14 step apart at one x, the last at h − 0x14.
+#[test]
+fn quit_page_draws_three_lines() {
+    use rc_formats::font::{Glyph, OverlaySection};
+    use rc_formats::strings::Message;
+    let overlay = crate::menus::Overlay::from_sections(vec![OverlaySection { dest: 0x1000, kind: 1, entry: 1, data: vec![0; 4] }]);
+    let msg = |id: i32, t: &[u8]| Message { id, text: t.to_vec(), help_audio: -1 };
+    let messages = vec![msg(0x4f6d, b"Window"), msg(0x4f3f, b"Question"), msg(0x524b, b"\x12 No"), msg(0x524f, b"\x11 Yes")];
+    let mut glyphs: [rc_formats::font::GlyphTable; 3] = std::array::from_fn(|_| std::array::from_fn(|_| Glyph::default()));
+    for t in &mut glyphs { for g in t.iter_mut() { g.advance = 10; } }
+    let hud = crate::hud::HudAssets { icons: Vec::new(), frame_sizes: Vec::new(), glyphs, messages };
+    let a = crate::menus::MenuAssets::new(hud, overlay);
+    let (mut m, _) = quit_page();
+    let mut out = Vec::new();
+    options::quit_draw(&mut m, 0x1b6140, &a, &mut out);
+    let texts: Vec<(i32, i32, Vec<u8>)> = out
+        .iter()
+        .filter_map(|d| match d {
+            MenuDraw::Hud(crate::hud::Draw::Text { x, y, text, .. }) => Some((*x, *y, text.clone())),
+            _ => None,
+        })
+        .collect();
+    // "□ Main Menu" is the widest (11 glyphs of 10): x = (300 − 110) / 2.
+    let x = (300 - 110) >> 1;
+    assert_eq!(texts, vec![
+        (150 - 40, 120 - 0x54, b"Question".to_vec()),
+        (x, 120 - 0x3c, b"\x12 No".to_vec()),
+        (x, 120 - 0x28, b"\x11 Yes".to_vec()),
+        (x, 120 - 0x14, b"\x13 Main Menu".to_vec()),
+    ]);
+    assert!(out.iter().any(|d| matches!(d, MenuDraw::Hud(crate::hud::Draw::TextWindow { text, .. }) if text == b"Window")));
+}
+
 #[test]
 fn planet_list_in_acquisition_order() {
     let (mut m, mut g) = (menu(), gs());

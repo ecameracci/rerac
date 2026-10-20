@@ -59,6 +59,13 @@ pub fn take_ending() -> Option<Vec<u8>> { ENDING.lock().unwrap_or_else(|e| e.int
 pub fn front_end_active() -> bool { FRONT.load(std::sync::atomic::Ordering::Relaxed) }
 pub fn set_front_end_active(v: bool) { FRONT.store(v, std::sync::atomic::Ordering::Relaxed); }
 
+static FRONT_AT_TITLE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Port-only, Quit Game □ "Main Menu" (`rc_game::menus::pause::MenuOut::main_menu`): the next front end starts at its
+/// title (`rc_game::frontend::Phase::Title`), without the card check, the logos and the still (crate::menu_render's set-up).
+pub fn set_front_end_at_title() { FRONT_AT_TITLE.store(true, std::sync::atomic::Ordering::Relaxed); }
+pub fn take_front_end_at_title() -> bool { FRONT_AT_TITLE.swap(false, std::sync::atomic::Ordering::Relaxed) }
+
 static TITLE_WORLD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// The title world is drawn behind the front end (crate::title_world, G-SAV-012): the menu layer is then clear

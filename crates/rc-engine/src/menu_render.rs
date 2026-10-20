@@ -437,6 +437,11 @@ fn setup(
     }
     if crate::saves::front_end_active() {
         fer.fe = Some(crate::saves::front_end(lh.lang, rc_game::rng::Rng::new().rand()));
+        if let Some(fe) = fer.fe.as_mut().filter(|_| crate::saves::take_front_end_at_title()) {
+            fe.phase = rc_game::frontend::Phase::Title;
+            fe.fade = 1.0;
+            println!("menus: front end: at the title (Quit Game □ Main Menu: no card check, logos or still)");
+        }
         mm.state.set(Mode::Menu);
         println!("menus: front end: the boot flow runs over the loaded level, the world hidden");
     }
@@ -882,9 +887,13 @@ fn menu_frame(
                 if let Some((a, b)) = out.transition { println!("menus: frame {frame}: transition {a:#x} → {b:#x} (kind 1, 12 ticks)"); }
                 if let Some(p) = out.entered { println!("menus: frame {frame}: page {p:#x} entered (kind {:#x})", menu.kind); }
                 // Port-only: Quit Game closes the app (the game goes back to the boot's logos and title);
-                // `RC_QUIT_TO_TITLE=1` keeps the game's.
-                let quit_app = out.quit && std::env::var("RC_QUIT_TO_TITLE").map_or(true, |v| v.trim() != "1");
+                // `RC_QUIT_TO_TITLE=1` keeps the game's. □ Main Menu (port-only) always leaves for the front end, at its title.
+                let quit_app = out.quit && !out.main_menu && std::env::var("RC_QUIT_TO_TITLE").map_or(true, |v| v.trim() != "1");
                 if out.quit { println!("menus: frame {frame}: Quit Game ○ (0x13d384 = 0, 0x15f5c0 = −1, 0x15f570 = 1){}", if quit_app { ": the app closes" } else { "" }); }
+                if out.main_menu {
+                    println!("menus: frame {frame}: Quit Game □ Main Menu (0x15f5c0 = −1, 0x15f570 = 1): the front end at its title");
+                    crate::saves::set_front_end_at_title();
+                }
                 if quit_app { app_exit.write(AppExit::Success); }
                 // 0x15f5c0 = dest, 0x15f570 = 1: the level loop ends (crate::media_render, the travel lane's level change).
                 if let Some(d) = out.level_exit.filter(|_| !quit_app) { crate::media_render::request_level_exit(&mut play, d); }

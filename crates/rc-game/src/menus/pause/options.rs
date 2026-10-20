@@ -222,7 +222,8 @@ pub fn sound_update(m: &mut PageMenu, w: u32, inp: &MenuInput, gs: &mut GameStat
     0
 }
 
-/// 0x2921d0 (not focus-gated; the close keys ignore `0x1ba294`).
+/// 0x2921d0 (not focus-gated; the close keys ignore `0x1ba294`). Port-only: □ is "Main Menu" ([`MenuOut::main_menu`]),
+/// ○'s level exit −1 without its quit.
 pub fn quit_update(m: &mut PageMenu, _w: u32, inp: &MenuInput, _gs: &mut GameState, out: &mut MenuOut) -> i32 {
     if inp.pressed_u & 0xd00 != 0 { return -1; }
     if inp.pressed_u & button::TRIANGLE != 0 {
@@ -236,6 +237,10 @@ pub fn quit_update(m: &mut PageMenu, _w: u32, inp: &MenuInput, _gs: &mut GameSta
     if inp.pressed_u & button::CIRCLE != 0 {
         out.quit = true;
         // 0x15f5c0 = −1, 0x15f570 = 1: the level loop ends for the title.
+        out.level_exit = Some(-1);
+    }
+    if inp.pressed_u & button::SQUARE != 0 {
+        out.main_menu = true;
         out.level_exit = Some(-1);
     }
     0
@@ -302,17 +307,18 @@ pub fn sound_draw(m: &mut PageMenu, w: u32, a: &MenuAssets, gs: &GameState, out:
     2
 }
 
-/// `DrawQuitGameMenu` 0x292298.
+/// `DrawQuitGameMenu` 0x292298. Port-only: a third line "□ Main Menu" ([`super::port::text::MAIN_MENU`]) one 0x14 step
+/// below "○ Yes"; to stay in the panel the question and the three lines sit one step higher than the disc's (h − 0x54,
+/// h − 0x3c, h − 0x28, h − 0x14), x centred on the widest.
 pub fn quit_draw(m: &mut PageMenu, w: u32, a: &MenuAssets, out: &mut Vec<MenuDraw>) -> u32 {
     let Some(wd) = m.widgets.get(&w) else { return 1 };
     let [_, _, ww, wh] = wd.rect;
     let win = wtext::Window::new(0, wh as i16, 4, (ww - 4) as i16, (ww / 2) as i16, 6, 0x10, wtext::CENTRE_LINES);
     out.push(MenuDraw::Hud(Draw::TextWindow { font: Font::Regular, window: win, rgba: LIGHT_BLUE, text: a.msg(0x4f6d).to_vec() }));
     let q = a.msg(0x4f3f);
-    text(out, Font::Regular, ww / 2 - (a.width(Font::Regular, q) >> 1), wh - 0x40, LIGHT_BLUE, q);
-    let (no, yes) = (a.msg(0x524b), a.msg(0x524f));
-    let x = (ww - a.width(Font::Regular, no).max(a.width(Font::Regular, yes))) >> 1;
-    text(out, Font::Regular, x, wh - 0x28, LIGHT_BLUE, no);
-    text(out, Font::Regular, x, wh - 0x14, LIGHT_BLUE, yes);
+    text(out, Font::Regular, ww / 2 - (a.width(Font::Regular, q) >> 1), wh - 0x54, LIGHT_BLUE, q);
+    let lines = [a.msg(0x524b), a.msg(0x524f), a.msg(super::port::text::MAIN_MENU)];
+    let x = (ww - lines.iter().map(|t| a.width(Font::Regular, t)).max().unwrap_or(0)) >> 1;
+    for (t, y) in lines.into_iter().zip([wh - 0x3c, wh - 0x28, wh - 0x14]) { text(out, Font::Regular, x, y, LIGHT_BLUE, t); }
     2
 }

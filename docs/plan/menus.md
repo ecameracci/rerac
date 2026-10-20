@@ -312,6 +312,12 @@ y 44/93/144/193/242/292/342 (stored +1).
 * Quit 0x1b6060 (0xd): update 0x2921d0, `DrawQuitGameMenu` 0x292298: 20333 in a regular window {y 0..h, x 4..w−4, anchor
   w/2, y 6, line 16, flags 1}; 20287 "Quit Game?" centred at (w/2, h−64); 21067 "△ No" at (x, h−40), 21071 "○ Yes" at
   (x, h−20), x = (w − max width)/2; all 0x80ffa888. ○ quits: `0x13d384 = 0, 0x15f5c0 = −1, 0x15f5d8 = 1, 0x15f570 = 1`.
+  In the port (2026-10-19), port-only: a third line "□ Main Menu" (`port::text::MAIN_MENU`, the □ glyph 0x13 as 21067 /
+  21071 start with △ 0x12 / ○ 0x11; no disc message says "Main Menu"); the question and the three lines one 0x14 step
+  higher (h−84, h−60, h−40, h−20) to stay in the panel, x centred on the widest (`options::quit_draw`). □ (pad 0x80) is ○'s
+  level exit −1 without its quit (`MenuOut::main_menu`): always the front end, whatever `RC_QUIT_TO_TITLE`, entered at its
+  title (`frontend::Phase::Title`: no card check, logos or still; `saves::set_front_end_at_title`, rc-engine
+  `menu_render`). ○ by default closes the app (`RC_QUIT_TO_TITLE=1`: the game's path, logos included).
 * Language is not in the in-level Options (only list 0x1b8fe8, action 9, in front-end page 0x1b8b48); no vibration option.
 
 **Map** 0x1b3998 (Select; kind 0xb, seqs [21..25, 5..13], no parent, focus W2): W0 label flags 0x4b (large, centred,
