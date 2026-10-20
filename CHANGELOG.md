@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- In airless areas (Orxon and Blarg outside the air curtains), the pause menu's Gadgets page shows the head items as unusable, so the O2 Mask can't be swapped out where Ratchet needs it, as in the original. Before, this only happened on Gemlik.
+
 ## v0.4.2-alpha
 
 - Options → Quit Game has a third choice, Square: Main Menu, which goes back to the title screen without the logos; the loading picture shows while the level reloads, instead of a black screen. Circle: Yes still closes the game.
