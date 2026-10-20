@@ -59,6 +59,32 @@ pub fn take_ending() -> Option<Vec<u8>> { ENDING.lock().unwrap_or_else(|e| e.int
 pub fn front_end_active() -> bool { FRONT.load(std::sync::atomic::Ordering::Relaxed) }
 pub fn set_front_end_active(v: bool) { FRONT.store(v, std::sync::atomic::Ordering::Relaxed); }
 
+static FRONT_AT_STILL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static STILL_SINCE: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+
+/// Port-only, Quit Game □ "Main Menu" (`rc_game::menus::pause::MenuOut::main_menu`): the next front end starts at its
+/// still (`rc_game::frontend::Phase::Still`), without the card check and the logos (crate::menu_render's set-up); the
+/// still already covers the level reload before it (crate::travel_render's `hud_layer`, [`note_still_shown`]).
+pub fn set_front_end_at_still() {
+    FRONT_AT_STILL.store(true, std::sync::atomic::Ordering::Relaxed);
+    *STILL_SINCE.lock().unwrap_or_else(|e| e.into_inner()) = None;
+}
+pub fn front_end_at_still() -> bool { FRONT_AT_STILL.load(std::sync::atomic::Ordering::Relaxed) }
+/// The flag, cleared, and the vsyncs (1/60 s) the still has been on screen so far.
+pub fn take_front_end_at_still() -> Option<i32> {
+    if !FRONT_AT_STILL.swap(false, std::sync::atomic::Ordering::Relaxed) { return None; }
+    let since = STILL_SINCE.lock().unwrap_or_else(|e| e.into_inner()).take();
+    Some(since.map_or(0, |t| (t.elapsed().as_secs_f64() * 60.0) as i32))
+}
+/// The still is drawn during the reload: its clock starts at the first frame.
+pub fn note_still_shown() { STILL_SINCE.lock().unwrap_or_else(|e| e.into_inner()).get_or_insert_with(std::time::Instant::now); }
+
+static TITLE_READY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Port-only: the title world's data is loaded (or failed to load; crate::title_world's `spawn`): until then the front
+/// end's still holds (`rc_game::frontend::FrontEnd::hold`), so the title never starts over an empty world.
+pub fn title_world_ready() -> bool { TITLE_READY.load(std::sync::atomic::Ordering::Relaxed) }
+pub fn set_title_world_ready() { TITLE_READY.store(true, std::sync::atomic::Ordering::Relaxed); }
 static TITLE_WORLD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// The title world is drawn behind the front end (crate::title_world, G-SAV-012): the menu layer is then clear
@@ -282,6 +308,17 @@ pub fn front_end_requested() -> bool {
     }
 }
 
+/// The boot's still (the IRX lump +0x00 NTSC, `rc_game::frontend::Phase::Still`), for the reload before the front end
+/// of Quit Game □ Main Menu (crate::travel_render's `hud_layer`). Made opaque (GS alpha 0x80): the picture's own alpha
+/// is not meant for blending, and the HUD layer it is drawn on blends over the travel's black.
+pub fn still_picture() -> Option<std::sync::Arc<rc_formats::texture::Texture>> {
+    use rc_formats::frontend::{BootPicture, BootPictures};
+    let b = crate::disc_source::read(&crate::level_load::extracted_root(), "global/irx.bin").ok()?;
+    let mut t = BootPictures::parse(&b).ok()?.picture(BootPicture::Still { pal: false }).ok()?;
+    for p in t.rgba.as_chunks_mut::<4>().0 { p[3] = 0x80; }
+    Some(std::sync::Arc::new(t))
+}
+
 /// The front end's pictures and its state machine (the card check, the first attract movie `rand() % 4`).
 pub fn front_end(lang: u32, rand: i32) -> rc_game::frontend::FrontEnd {
     use rc_formats::frontend::{BootPicture, BootPictures, TitleWad};
@@ -313,6 +350,20 @@ pub fn front_end(lang: u32, rand: i32) -> rc_game::frontend::FrontEnd {
     }
     println!("saves: front end: card check {check}, first attract movie {}", fe.attract_next);
     fe
+}
+
+#[cfg(test)]
+mod still_tests {
+    /// Quit Game □ Main Menu: the next front end enters at the still once, with the time the reload showed it.
+    #[test]
+    fn main_menu_enters_the_front_end_at_the_still() {
+        super::set_front_end_at_still();
+        assert!(super::front_end_at_still());
+        super::note_still_shown();
+        assert!(super::take_front_end_at_still().is_some_and(|f| f >= 0));
+        assert!(!super::front_end_at_still());
+        assert_eq!(super::take_front_end_at_still(), None);
+    }
 }
 
 #[cfg(test)]

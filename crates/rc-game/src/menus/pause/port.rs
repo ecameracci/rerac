@@ -26,6 +26,9 @@
 //! them), and the page takes the frames of that Options' Sound sub-page 0x1b8e38 (the front-end sub-pages' title is
 //! W2, not W0). Both pages share the title and the list widgets, so the values and the cursor are one.
 //!
+//! The main menu's Options also ends with a Quit Game the disc's has not ([`FRONT_QUIT_ACTION`]): ✕ on it closes the
+//! app at once, no confirmation (`MenuOut::quit`; the engine's front-end frame).
+//!
 //! Records live at addresses no EE pointer can hold (0x7f00_xxxx), and the text ids are negative (the disc's
 //! ids are 0..=21500), so nothing here can collide with or be mistaken for game data.
 //!
@@ -44,6 +47,8 @@ use rc_formats::font::Font;
 pub const PAGE: u32 = 0x7f00_0000;
 /// The main menu's page (parent: the front end's Options).
 pub const FRONT_PAGE: u32 = 0x7f00_0010;
+/// The list action of the main menu's Quit Game: ✕ quits (`PageMenu`'s list update), a value no disc item has (0..=11).
+pub const FRONT_QUIT_ACTION: i16 = 0x7f00;
 pub const TITLE_W: u32 = 0x7f00_0100;
 pub const LIST_W: u32 = 0x7f00_0200;
 /// The list's callbacks (dispatched like the game's by address).
@@ -143,6 +148,9 @@ pub mod text {
     /// HelpDesk toggle values, are lower case).
     pub const ON: i32 = -0x103;
     pub const OFF: i32 = -0x104;
+    /// Quit Game's third line (`options::quit_draw`): "□ Main Menu" with the font's □ glyph 0x13, as 21067 "△ No" /
+    /// 21071 "○ Yes" start with △ 0x12 / ○ 0x11 (no disc message says "Main Menu").
+    pub const MAIN_MENU: i32 = -0x105;
 
     pub fn get(id: i32) -> Option<&'static [u8]> {
         Some(match id {
@@ -150,6 +158,7 @@ pub mod text {
             DESCRIPTION => b"Settings of this port that the original game does not have",
             ON => b"On",
             OFF => b"Off",
+            MAIN_MENU => b"\x13 Main Menu",
             ANTI_ALIASING => b"Anti-aliasing",
             X2 => b"2x",
             X4 => b"4x",
@@ -317,6 +326,12 @@ pub const PICTURE: i32 = 0x7f00;
 /// [`ImageSrc::Pixels`](super::super::ImageSrc::Pixels) key of [`PICTURE`].
 pub const PICTURE_KEY: u64 = 0x7f00_0000_0000_0001;
 
+/// Adds `it` to a front-end Options list before its Quit Game ([`FRONT_QUIT_ACTION`], kept last), else at the end.
+pub fn front_options_insert(list: &mut Vec<Item>, it: Item) {
+    let at = list.iter().position(|i| i.action == FRONT_QUIT_ACTION).unwrap_or(list.len());
+    list.insert(at, it);
+}
+
 /// An Options entry the port inserted (Port Options, Mods): not in the disc list, so it has no `options_ss` picture.
 pub fn is_port_item(it: &Item) -> bool { it.label == text::ENTRY as i16 || it.label == text::MODS as i16 }
 
@@ -379,7 +394,8 @@ impl PageMenu {
     }
 
     /// The main menu's page: the front end's Sound sub-page with the shared title (W2) and list (W3), parent the front
-    /// end's Options; the entry last in both of its lists. Needs the pause page's widgets.
+    /// end's Options; the entry last in both of its lists, then Quit Game ([`PageMenu::install_front_quit_entry`]).
+    /// Needs the pause page's widgets.
     fn install_front_port_page(&mut self) -> bool {
         if self.pages.contains_key(&FRONT_PAGE) { return true; }
         if !self.widgets.contains_key(&TITLE_W) || !self.widgets.contains_key(&LIST_W) { return false; }
@@ -393,6 +409,20 @@ impl PageMenu {
             list.push(Item { label: text::ENTRY as i16, action: 3, arg: FRONT_PAGE, sublabel: 0, hl: 0 });
         }
         self.pages.insert(FRONT_PAGE, page);
+        self.install_front_quit_entry();
+        true
+    }
+
+    /// The main menu's Quit Game (port-only; the disc's main menu has none): the pause Options' Quit Game label with
+    /// [`FRONT_QUIT_ACTION`] (no page: ✕ closes the app), last in both front-end Options lists (the later port entries
+    /// go before it, [`front_options_insert`]). False when the pause Options' Quit Game is missing (nothing changed).
+    pub fn install_front_quit_entry(&mut self) -> bool {
+        if self.saves.front_options.iter().flatten().any(|it| it.action == FRONT_QUIT_ACTION) { return true; }
+        let Some(Data::List(opts)) = self.widgets.get(&self.addrs.port_options_list).map(|w| &w.data) else { return false };
+        let Some(label) = opts.items.iter().find(|it| it.action == 3 && it.arg == self.addrs.port_quit).map(|it| it.label) else { return false };
+        for list in &mut self.saves.front_options {
+            list.push(Item { label, action: FRONT_QUIT_ACTION, arg: 0, sublabel: 0, hl: 0 });
+        }
         true
     }
 

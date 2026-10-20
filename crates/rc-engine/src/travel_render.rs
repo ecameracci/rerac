@@ -842,6 +842,7 @@ fn hud_layer(
     mut assets: ResMut<Assets<Image>>,
     mut plates: Local<Option<(usize, Arc<Plates>)>>,
     mut flight: ResMut<crate::flight_render::FlightRender>,
+    mut still: Local<Option<Option<Arc<rc_formats::texture::Texture>>>>,
 ) {
     if !t.hud_off && !t.blank && t.card.is_none() { return; }
     hook.replace_hud = true;
@@ -850,6 +851,15 @@ fn hud_layer(
     let mut h = Hud2d::default();
     // The black frame the transition draws on (the flight shows through: its actors are on the travel layer).
     if t.card.is_some() || (t.blank && t.lump.is_none()) { h.rect(0, crate::hud_render::H, 0, crate::hud_render::W, 0x8000_0000); }
+    // Port-only, Quit Game □ Main Menu: the front end's still over the reload's black (crate::saves::front_end_at_still).
+    if let (true, Some(img)) = (t.blank && crate::saves::front_end_at_still(), images.as_deref_mut()) {
+        let src = still.get_or_insert_with(crate::saves::still_picture).clone().map(|tex| rc_game::menus::ImageSrc::Pixels { key: rc_game::frontend::KEY_STILL, tex });
+        if let Some(s) = src.and_then(|src| img.resolve(&src, &mut assets)) {
+            let sh = rc_game::frontend::SCREEN_H;
+            h.prims.push(crate::hud_images::prim(s, 0, 0, 0x200, sh, 0, 0, 0x200, sh, 0x8080_8080));
+            crate::saves::note_still_shown();
+        }
+    }
     if let (Some(card), Some(img)) = (t.card.as_ref(), images.as_deref_mut()) {
         let lang = rc_game::travel::cards::lang_index(crate::hud_render::language() as i32);
         if plates.as_ref().is_none_or(|p| p.0 != lang) {

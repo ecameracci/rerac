@@ -423,6 +423,9 @@ pub struct MenuOut {
     pub exit: Option<PostAction>,
     /// Quit Game ○: `0x13d384 = 0, 0x15f5c0 = −1, 0x15f5d8 = 1, 0x15f570 = 1`.
     pub quit: bool,
+    /// Port-only, Quit Game □ "Main Menu" (`options::quit_update`): ○'s level exit −1 without [`MenuOut::quit`]; the
+    /// engine enters the front end at its title (rc-engine `menu_render`).
+    pub main_menu: bool,
     /// `mode_freezeInit(3, page)` requested (Save / Load actions 4 / 5); not ported.
     pub freeze: Option<u32>,
     /// `PageMenuClose`: the item requests `0x141408 + 4·slot` of the slots whose menu copy changed (hand, feet,
@@ -1061,6 +1064,12 @@ impl PageMenu {
                         // Language 0x15ed88 = arg (session state; the front end's Language list), no sound.
                         self.lang = it.arg;
                         out.language = Some(it.arg);
+                        return 0;
+                    }
+                    port::FRONT_QUIT_ACTION => {
+                        // Port-only: the main menu's Quit Game, no confirmation (the engine closes the app).
+                        out.sounds.push(MenuSound::Confirm);
+                        out.quit = true;
                         return 0;
                     }
                     _ => {}

@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Options → Quit Game has a third choice, Square: Main Menu, which goes back to the title screen without the logos; the loading picture shows while the level reloads, instead of a black screen. Circle: Yes still closes the game.
+- Quit Game in the main menu's Options closes the game.
+
 ## v0.4.1-alpha
 
 - Port Options has two new rows. Strafing: Modern gives L2 / R2 Ratchet & Clank 3's strafe on foot, with a strafe flip on Cross. Quick Select: Modern holds the world still, dimmed, while Triangle keeps the quick-select ring open. Classic keeps both as in the original.
