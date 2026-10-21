@@ -149,7 +149,7 @@ C:580a5ea4d4ce	FUN_00263678	anim	has	L	anim frame reached test, not on L01
 C:fb8fab7333a3	FUN_00249618	anim	has	L	sequence frame count from the class table, not on L01
 C:eaa5cf4465ec	FUN_002418b0	anim	has	L	sequence frame count, not on L01
 C:94cf214dfe7f	FUN_0027b9c0	anim	partly	L	moby kept on another moby's joint every tick (attach child), not on L01
-L01:002b52a8	FUN_002b52a8	anim	partly	L	manipulator z rotations (0x221e38), vendor-style
+L01:002b52a8	FUN_002b52a8	anim	has	L	the walker hips back to 0 and their manipulators at rest (creature::legs::reset_hips, level 04's 0x292cb8; G-HERO-042 2026-10-20)
 L01:00263d90	FUN_00263d90	anim	has	V	class texture/scale helper (pyro_glow.rs)
 L01:00263718	update_moby_animation_state	anim	has	V	update_moby_animation_state: moby_update::class_swap::update_anim_state (G-CLS-031)
 L01:002a1618	PlayClassSound	sound	has	V	PlayClassSound

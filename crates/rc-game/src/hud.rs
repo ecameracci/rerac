@@ -59,7 +59,7 @@
 //! | 0x2406b0 | oxygen meter queued every tick under water (group 0x11) without the O2 mask | `frame_calls` |
 //! | 0x303000 | Suck Cannon meter queued every tick of its update | `frame_calls` (`Inputs::suck_active`) |
 //! | 0x2d2450 | Morph meter queued on a new target, released when the ray stops | `frame_calls` (`Inputs::morph_*`) |
-//! | `randf` 0x26c9c8 in the bubble inits | the game's one stream | NOT ported: a HUD-local newlib stream (G-UI-011) |
+//! | `randf` 0x26c9c8 in the bubble inits | the game's one stream | NOT ported: a HUD-local newlib stream (G-UI-030) |
 //! | 0x27b028 `NpcTalkUpdate` | bolt counter queued and kept up `ScaleTicks(60)` for NPC nodes of kind 1 / 6 | `interact::talk_update_at` → `Services::hud` |
 //! | 0x2bc4f0 `CollectBolt` | the bolt counter queued | `classes::bolt` → `Services::hud` (and the count's change, `frame_calls`) |
 //! | 0x24fb50 second banner line 0x1795e8 (countdown > 1000) | | NOT ported (G-UI-011) |

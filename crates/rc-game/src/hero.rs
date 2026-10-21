@@ -852,7 +852,8 @@ impl HeroSounds for NoHeroSounds {
 /// 0x231d18, surface reaction 0x22cd48, the wall / ledge probe 0x22d090 ([`ledge`]), transitions 0x242930, the
 /// idle sub-updates (head look 0x22b928, secondaries 0x22bdd0, blinks 0x227590 / 0x2278c0, joint springs
 /// 0x2273d0), the write-back 0x229f20, then the back items' part of `HeroItemsUpdate` (the hand is
-/// [`items::items_update`]). The other cosmetic / combat / HUD sub-updates are not ported. No sound layer:
+/// [`items::items_update`]). Its HUD calls are `crate::hud`'s (derived each tick from the hero); the other cosmetic /
+/// combat sub-updates are not in this function. No sound layer:
 /// [`hero_update_with_sounds`] with [`NoHeroSounds`].
 pub fn hero_update(hero: &mut Hero, moby: &mut crate::moby_runtime::Moby, env: &Env, anim: &mut dyn AnimCtl, rng: &mut crate::rng::Rng) -> HeroTick {
     hero_update_with_sounds(hero, moby, env, anim, rng, &mut NoHeroSounds)
