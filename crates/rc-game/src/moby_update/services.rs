@@ -1460,7 +1460,11 @@ impl HeroFields {
                         None => crate::hero::bodies::switch_character_with(h, c, mode, state, b, None),
                     }
                 }
-                HeroCall::LeaveBody { game_mode } => crate::hero::bodies::leave_body(h, c, game_mode),
+                HeroCall::LeaveBody { game_mode } => {
+                    // The body moby's `+0x34 &= ~6` was made at the call (`crate::hero::bodies::queue_leave`).
+                    h.bodies.moby = None;
+                    crate::hero::bodies::leave_body(h, c, game_mode);
+                }
                 HeroCall::BodyIdle => crate::hero::bodies::body_idle(h, c),
                 HeroCall::Reload => h.fell_out = 1,
                 HeroCall::RaceScore(n) => h.board.score += n,

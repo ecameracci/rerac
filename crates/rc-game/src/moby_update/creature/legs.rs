@@ -305,7 +305,7 @@ pub fn reset(w: &mut World, id: MobyId, wr: usize) {
     for o in [w::PITCH, w::PITCH_V, w::YAW_V, w::LIFT, w::FALL, w::AHEAD] { set_wf(w, id, wr + o, 0.0); }
 }
 
-/// `0x292cb8(W)`: both pairs' hip angles 0 and their manipulators at rest.
+/// `0x292cb8(W)` (level 01's copy `0x2b52a8`): both pairs' hip angles 0 and their manipulators at rest.
 pub fn reset_hips(w: &mut World, id: MobyId, wr: usize) {
     for i in 0..2 {
         let b = wr + w::PAIR + 0xb0 * i;
