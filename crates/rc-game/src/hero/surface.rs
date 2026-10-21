@@ -59,11 +59,11 @@
 //!
 //! **Not ported** (cosmetic, recorded as [`SurfaceEvent`]s for the engine where it can use them): the body leans
 //! of 0x2f / 0x31 (joint records 0x17a680 / 0x17ab00 and their spring settings, as the walk's; the sinking floor's
-//! bubbles `0x22b140(4, 2)` and sand puff `0x286cb0` are ported, through `super::fx`), level 15's lava splash 0x217450 on
-//! 0x7b, the Hologuise end 0x231450 before the surface states (mode 3 is not in the port). Landing on a slippery
-//! floor goes through the landing picker (jump.rs, P3 / P4): its leading L00 test (0x2293a8: slippery and
+//! bubbles `0x22b140(4, 2)` and sand puff `0x286cb0` are ported, through `super::fx`, as is level 15's lava splash
+//! 0x217450 on 0x7b), the Hologuise end 0x231450 before the surface states (mode 3 is not in the port). Landing on a
+//! slippery floor goes through the landing picker (jump.rs, P3 / P4): its leading L00 test (0x2293a8: slippery and
 //! |eff.xy| > 0.5·dt → 0x2f) is ported; the idle / walk / stop entries it picks redirect to 0x2f as the game's do.
-//! The Thruster hover's slippery brake (L00 case 0x81) is P4's.
+//! The Thruster hover's slippery brake (L00 0x21e7cc, case 0x81) is in `super::packs::hover_physics`.
 #![allow(clippy::neg_cmp_op_on_partial_ord)] // compare order kept from the original.
 
 use super::anim::AnimCtl;
