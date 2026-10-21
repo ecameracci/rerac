@@ -13,7 +13,7 @@
 //! | `0x281e40` | a step of `d` along the path from the segment start `seg` (`dir` the way), the point and its segment | [`path_step`] |
 //! | `0x30bdf0` | 1558 | [`thrusters_update`] |
 //!
-//! [L] 1558's actor is the word 0x16cce0 of the scene's actor table, taken as its third entry.
+//! 1558's actor is the word 0x16cce0: the actor slots 0x16ccd8 + 4·k (level 01's 0x16ce58) at k = 2, the third.
 
 use crate::moby_runtime::MobyId;
 use crate::moby_update::creature as c;
