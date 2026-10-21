@@ -57,6 +57,7 @@ fn menu() -> PageMenu {
         items: None,
         unusable_head: false,
         unusable_back: false,
+        airless: false,
         view: super::gadgets::GadgetsView::default(),
         view_model: None,
         text_swap: 0,
@@ -254,6 +255,22 @@ fn goodies_wiring_both_ways() {
     g.global.completes = 1;
     m.enter(0, &g);
     assert!(m.goodies, "challenge mode counts too");
+}
+
+/// 0x1ba2a4: the head items are unusable on level 0xd or with the airless flag 0x14161b set.
+#[test]
+fn head_items_unusable_on_level_0xd_or_airless() {
+    let (mut m, mut g) = (menu(), gs());
+    g.global.level = 4;
+    m.enter(0, &g);
+    assert!(!m.unusable_head);
+    m.airless = true;
+    m.enter(0, &g);
+    assert!(m.unusable_head, "airless");
+    m.airless = false;
+    g.global.level = 0xd;
+    m.enter(0, &g);
+    assert!(m.unusable_head, "level 0xd");
 }
 
 #[test]

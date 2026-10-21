@@ -1072,6 +1072,7 @@ fn map_trace(rt: Option<Res<MenuRt>>, mm: Res<MenuMode>, play: Option<Res<Play>>
 fn open_menu(rt: &mut MenuRt, mm: &mut MenuMode, play: &mut Play, gs: &rc_game::game_state::GameState, audio: Option<&mut crate::audio_out::AudioOut>, k: i32, frame: u64) {
     let counter = play.game.counter;
     let Some(menu) = rt.menu.as_mut() else { return };
+    menu.airless = play.game.hero.worn.airless != 0;
     menu.enter(k, gs);
     // The map system joins the page menu while it is open (rc_game::menus::pause::map_page).
     menu.map.state = std::mem::take(&mut play.svc.map);

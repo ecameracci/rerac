@@ -526,6 +526,8 @@ pub struct PageMenu {
     /// `0x1ba2a4` (level 0xd or 0x14161b: the head items unusable) and `0x1ba2a8` (level 0 or 0xe: the packs).
     pub unusable_head: bool,
     pub unusable_back: bool,
+    /// `0x14161b`, the hero's airless flag (`hero::worn::Worn::airless`), given by the engine before [`Self::enter`].
+    pub airless: bool,
     /// The 3D widgets of the last draw (the engine renders them) and the 3D Ratchet widget while it exists.
     pub view: gadgets::GadgetsView,
     pub view_model: Option<u32>,
@@ -593,6 +595,7 @@ impl PageMenu {
             items: None,
             unusable_head: false,
             unusable_back: false,
+            airless: false,
             view: gadgets::GadgetsView::default(),
             view_model: None,
             text_swap: 0,
@@ -663,8 +666,8 @@ impl PageMenu {
         self.dest = if g.level < 0x13 { g.level } else { 0 };
         // FUN_00262760 (0x28c0ec): the destination's missions.
         map_page::enter(self, gs);
-        // 0x1ba2a4 / 0x1ba2a8 (0x14161b is not modelled: 0).
-        self.unusable_head = g.level == 0xd;
+        // 0x1ba2a4 / 0x1ba2a8.
+        self.unusable_head = g.level == 0xd || self.airless;
         self.unusable_back = g.level == 0 || g.level == 0xe;
         self.active = true;
         // FUN_0029aa60: the Goodies entries the skill points and gold weapons unlock.

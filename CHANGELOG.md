@@ -4,6 +4,7 @@
 
 - Blarg: after Clank hands the hero back to Ratchet (and the Hydrodisplacer cutscene), Clank's footsteps no longer keep playing at the Clank station. The same applies to Orxon's Clank section.
 - Skipping a planet landing with Cross no longer makes Ratchet jump: he steps forward out of the landing spot first, as in the original.
+- In airless areas (Orxon and Blarg outside the air curtains), the pause menu's Gadgets page shows the head items as unusable, so the O2 Mask can't be swapped out where Ratchet needs it, as in the original. Before, this only happened on Gemlik.
 
 ## v0.4.2-alpha
 
