@@ -1211,6 +1211,33 @@ mod tests {
         let _ = coll;
     }
 
+    /// The landing skipped with ✕ (`FUN_0024a3d8`, `travel::space::walk_back`): Ratchet sits in 0x64 on the press,
+    /// then walks to a point. Walked 0.75 forward, the press is out of idle's buffer when he stops; a walk to the
+    /// spot he stands on ends at once and idle jumps on it.
+    #[test]
+    fn landing_skip_press_is_not_a_jump_after_the_walk_back() {
+        let coll = floor(100.0, 100, 106, 100, 106);
+        let jumps = |ahead: f32| {
+            let mut r = Runner::new([410.0, 410.0, 100.0], 0.0);
+            r.run(&coll, PadInput::neutral(), 2);
+            r.with_ctx(&coll, |h, c| h.set_state(c, 0x64, true));
+            r.tick(&coll, PadInput::neutral().press(button::CROSS));
+            r.with_ctx(&coll, |h, c| {
+                h.walk_to.point = [Pf::f(410.0 + ahead), Pf::f(410.0), Pf::f(100.0), Pf::ZERO];
+                h.walk_to.yaw = Pf::ZERO;
+                h.walk_to.release = 1;
+                h.set_state(c, 0x65, true);
+            });
+            r.run(&coll, PadInput::neutral(), 60);
+            (r.log.iter().any(|l| l.0 == 7), r.hero.state, r.hero.position()[0] - 410.0)
+        };
+        assert!(jumps(0.0).0, "no walk: idle takes the buffered press");
+        let (jumped, state, moved) = jumps(0.75);
+        assert!(!jumped, "the walk back outlasts the buffer");
+        assert_eq!(state, 0);
+        assert!((moved - 0.75).abs() < 0.2, "walked {moved}");
+    }
+
     #[test]
     fn unported_state_freezes() {
         let coll = floor(100.0, 100, 106, 100, 106);

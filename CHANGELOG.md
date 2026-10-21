@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Blarg: after Clank hands the hero back to Ratchet (and the Hydrodisplacer cutscene), Clank's footsteps no longer keep playing at the Clank station. The same applies to Orxon's Clank section.
+- Skipping a planet landing with Cross no longer makes Ratchet jump: he steps forward out of the landing spot first, as in the original.
 
 ## v0.4.2-alpha
 
