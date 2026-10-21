@@ -446,8 +446,11 @@ pub fn restore_from_checkpoint(h: &mut Hero, table: &crate::moby_runtime::MobyTa
     h.bodies.restore = Some((body, state, BodyMoby { id, o_class: m.o_class, anim: m.anim }));
 }
 
-/// A class's call of its level's leave-the-body copy (as a hero call, [`queue_switch`]).
+/// A class's call of its level's leave-the-body copy (as a hero call, [`queue_switch`]). Its body moby store (+3:
+/// `+0x34 &= ~6`) is made here, at the call: the callers hide and freeze that moby right after it (Blarg's Clank
+/// station 1061, Orxon's Clank section: `mode |= 3`), and their store has to stay.
 pub fn queue_leave(w: &mut crate::moby_update::services::World) {
+    if let Some(id) = w.hero.bodies.moby { w.mm(id).mode &= !6; }
     let game_mode = w.svc.game_mode;
     w.hero_fields_mut().call(crate::moby_update::services::HeroCall::LeaveBody { game_mode });
 }

@@ -148,7 +148,7 @@ One row per item. Scores are V R D F = total; E = effort; W = wave (§4). "—" 
 | ~~**G-CLS-009**~~ multi-hit crates | **closed 2026-09-30**: dead code (no level's class table has 503–510); no consumer | — | 2 1 0 0 = 3 | S | 3 |
 | **G-CLS-014** breakables outside the general system, break variant `0x251f08` | reuses breakables (ported) | 5 units / 87 | 2 1 0 0 = 3 | M | 6 |
 | **G-CLS-015** flyer path driver family | **based-on** G-PRT-001 type 10 (PRT row). The skill-point part **depends** G-SAV-007 [deferred] (gaps). | — | 2 1 0 0 = 3 | M | 7 |
-| **G-CLS-011** bolt-crank consumers (Eudora, Batalia) | reuses the bolt crank (ported) | — | 2 1 0 0 = 3 | S | 7 |
+| ~~**G-CLS-011** bolt-crank consumers (Eudora, Batalia)~~ closed 2026-10-20 (all ported) | reuses the bolt crank (ported) | — | 2 1 0 0 = 3 | S | 7 |
 | **G-CLS-013** talk-table kinds 4 / 5 | — | — | 2 0 0 0 = 2 | S | 7 |
 | ~~**G-ENM-005**~~ creature fx helpers: census residue | **resolved 2026-09-29**: the splash and burn-spark tags are has; no unit is blocked | — | — | — | — |
 | ~~**G-LVL-008**~~ level height grid `0x278020` (**done 2026-09-29**: `HeightGrid`) | — | 1400 (3 instances), which still **depends** G-PRT-001 (type 01, `SpawnImpactSparks`) | 1 0 0 0 = 1 | S | 2 |

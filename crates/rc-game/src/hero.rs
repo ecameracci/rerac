@@ -852,7 +852,8 @@ impl HeroSounds for NoHeroSounds {
 /// 0x231d18, surface reaction 0x22cd48, the wall / ledge probe 0x22d090 ([`ledge`]), transitions 0x242930, the
 /// idle sub-updates (head look 0x22b928, secondaries 0x22bdd0, blinks 0x227590 / 0x2278c0, joint springs
 /// 0x2273d0), the write-back 0x229f20, then the back items' part of `HeroItemsUpdate` (the hand is
-/// [`items::items_update`]). The other cosmetic / combat / HUD sub-updates are not ported. No sound layer:
+/// [`items::items_update`]). Its HUD calls are `crate::hud`'s (derived each tick from the hero); the other cosmetic /
+/// combat sub-updates are not in this function. No sound layer:
 /// [`hero_update_with_sounds`] with [`NoHeroSounds`].
 pub fn hero_update(hero: &mut Hero, moby: &mut crate::moby_runtime::Moby, env: &Env, anim: &mut dyn AnimCtl, rng: &mut crate::rng::Rng) -> HeroTick {
     hero_update_with_sounds(hero, moby, env, anim, rng, &mut NoHeroSounds)
@@ -1208,6 +1209,33 @@ mod tests {
         p.update(Some(&PadInput::neutral().bytes()), false);
         assert_eq!(p.pressed_within(button::CROSS, 7), None);
         let _ = coll;
+    }
+
+    /// The landing skipped with ✕ (`FUN_0024a3d8`, `travel::space::walk_back`): Ratchet sits in 0x64 on the press,
+    /// then walks to a point. Walked 0.75 forward, the press is out of idle's buffer when he stops; a walk to the
+    /// spot he stands on ends at once and idle jumps on it.
+    #[test]
+    fn landing_skip_press_is_not_a_jump_after_the_walk_back() {
+        let coll = floor(100.0, 100, 106, 100, 106);
+        let jumps = |ahead: f32| {
+            let mut r = Runner::new([410.0, 410.0, 100.0], 0.0);
+            r.run(&coll, PadInput::neutral(), 2);
+            r.with_ctx(&coll, |h, c| h.set_state(c, 0x64, true));
+            r.tick(&coll, PadInput::neutral().press(button::CROSS));
+            r.with_ctx(&coll, |h, c| {
+                h.walk_to.point = [Pf::f(410.0 + ahead), Pf::f(410.0), Pf::f(100.0), Pf::ZERO];
+                h.walk_to.yaw = Pf::ZERO;
+                h.walk_to.release = 1;
+                h.set_state(c, 0x65, true);
+            });
+            r.run(&coll, PadInput::neutral(), 60);
+            (r.log.iter().any(|l| l.0 == 7), r.hero.state, r.hero.position()[0] - 410.0)
+        };
+        assert!(jumps(0.0).0, "no walk: idle takes the buffered press");
+        let (jumped, state, moved) = jumps(0.75);
+        assert!(!jumped, "the walk back outlasts the buffer");
+        assert_eq!(state, 0);
+        assert!((moved - 0.75).abs() < 0.2, "walked {moved}");
     }
 
     #[test]
