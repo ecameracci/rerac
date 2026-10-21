@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Skipping a planet landing with Cross no longer makes Ratchet jump: he steps forward out of the landing spot first, as in the original.
+
 ## v0.4.2-alpha
 
 - Options → Quit Game has a third choice, Square: Main Menu, which goes back to the title screen without the logos; the loading picture shows while the level reloads, instead of a black screen. Circle: Yes still closes the game.
