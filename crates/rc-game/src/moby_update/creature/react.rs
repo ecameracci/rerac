@@ -1053,7 +1053,8 @@ fn flight(w: &mut World, id: MobyId, r: usize) -> i32 {
         let sp = super::len3(vel0);
         let q0 = rows_quat(rows3(w, id));
         let back = super::set_len3(vel, -1.0);
-        let axis = super::set_len3(cross(back, [0.0, 0.0, 1.0, 0.0]), 1.0);
+        // 0x305d38 `FastVecCross(out, back, up)`: up × back.
+        let axis = super::set_len3(cross([0.0, 0.0, 1.0, 0.0], back), 1.0);
         let ang = sp / fr;
         let (s, c) = (ang * 0.5).sin_cos();
         let qa = [axis[0] * s, axis[1] * s, axis[2] * s, c];

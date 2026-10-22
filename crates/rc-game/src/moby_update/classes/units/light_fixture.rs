@@ -184,15 +184,16 @@ fn smoke(w: &mut World, size: f32, p: c::V, spin: i32, v: c::V) {
     }
 }
 
-/// The callback's frame (0x31cf58): rows `d` (to the camera, `FastVecNormalize`), `side = unit(d × (0, 0, 1))`, `up =
-/// side × d` (`FastVecCross`), and the centre (the head pulled 0.1 away from the camera). Built when the update
+/// The callback's frame (0x31cf58): rows `d` (to the camera, `FastVecNormalize`), `side = unit((0, 0, 1) × d)`, `up =
+/// d × side` (`FastVecCross`, b × a), and the centre (the head pulled 0.1 away from the camera). Built when the update
 /// registers the callback, from the camera it saw (the game draws with the frame's camera) [L].
 fn glow_frame(top: c::V, cam: [f32; 3]) -> [[f32; 4]; 4] {
     let unit = |v: [f32; 3]| { let n = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt(); if n == 0.0 { v } else { v.map(|x| x / n) } };
     let cross = |a: [f32; 3], b: [f32; 3]| [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
     let d = unit([cam[0] - top[0], cam[1] - top[1], cam[2] - top[2]]);
-    let side = unit(cross(d, [0.0, 0.0, 1.0]));
-    let up = cross(side, d);
+    // `FastVecCross(out, a, b)` is b × a: L05 0x31d04c ẑ × d, 0x31d06c d × side.
+    let side = unit(cross([0.0, 0.0, 1.0], d));
+    let up = cross(d, side);
     let c = [top[0] + d[0] * PULL, top[1] + d[1] * PULL, top[2] + d[2] * PULL];
     [[d[0], d[1], d[2], 0.0], [side[0], side[1], side[2], 0.0], [up[0], up[1], up[2], 0.0], [c[0], c[1], c[2], 1.0]]
 }

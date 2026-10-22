@@ -116,8 +116,9 @@ pub fn scan_frame(w: &mut World) {
     };
     let cross = |a: [f32; 3], b: [f32; 3]| [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
     let ax = unit(s.axis);
-    let a = unit(cross(ax, [1.0, 0.0, 0.0]));
-    let b = unit(cross(ax, a));
+    // `FastVecCross(out, a, b)` is b × a: 0x2f1f80 x̂ × axis, 0x2f1fa0 a × axis.
+    let a = unit(cross([1.0, 0.0, 0.0], ax));
+    let b = unit(cross(a, ax));
     let (mut d, mut k) = (s.phase, s.phase);
     while s.phase - 1.0 < k {
         if d <= s.reach {

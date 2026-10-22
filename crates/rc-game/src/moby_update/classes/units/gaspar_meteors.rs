@@ -178,10 +178,11 @@ fn rock(w: &mut World, parent: MobyId) -> Option<MobyId> {
     if 2 <= n {
         let f = w.rng.randf(-30.0, 30.0);
         let d_end = sub(pts[n - 1], pts[n - 2]);
-        let mut a = cross(sub(pts[1], pts[0]), d_end);
+        // `FastVecCross(out, a, b)` is b × a: 0x2eabd4 d_end × (P1 − P0), 0x2eac10 (Pn−1 − P0) × a.
+        let mut a = cross(d_end, sub(pts[1], pts[0]));
         a[2] = 0.0;
         let mut off = set_len3(a, f);
-        let b = cross(a, sub(pts[n - 1], pts[0]));
+        let b = cross(sub(pts[n - 1], pts[0]), a);
         let r = w.rng.randf(0.0, 5.0);
         off = add(off, set_len3(b, r));
         c::set_pv4(w, m, pvo::POS, off);

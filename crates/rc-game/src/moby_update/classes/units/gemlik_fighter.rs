@@ -274,8 +274,9 @@ fn shoot(w: &mut World, id: MobyId, ship_pos: c::V) {
     let sv = c::pv4(w, v, 0x10);
     let up = [0.0, 0.0, 1.0, 0.0];
     let cross = |a: c::V, b: c::V| -> c::V { [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0], 0.0] };
-    let side = cross(sv, up);
-    let vert = cross(side, sv);
+    // `FastVecCross(out, a, b)` is b × a: 0x2c4a28 up × sv, 0x2c4a44 sv × side.
+    let side = cross(up, sv);
+    let vert = cross(sv, side);
     let (k, ang) = (c::pf(w, id, o::SPREAD), c::pf(w, id, o::SPREAD_A));
     let vert = c::set_len3(vert, k * 5.0 * ang.sin());
     let side = c::set_len3(side, k * 5.0 * ang.cos());
