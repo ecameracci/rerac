@@ -8,8 +8,7 @@
 //! states 10 / 11 in [`super::comet`]; the glove throw 0x23 has the group-6 entry here and the rest in
 //! [`super::weapons`]; the gadget lunge 0x20 has the group-6 entry here and the rest in [`super::walloper`] (with the
 //! melee aim search `0x22e238`, [`aim_search`]); the rebound 0x21 off a target whose record has flag 2 ([`Hero::rebound_entry`],
-//! the physics and transitions of 0x7a: `super::packs`). Not ported: 0x51, the aim-assist target search `0x22e238` (targets need a
-//! mode-0x20 record no ported class has: always none), the wall-hit spark line and the jump-attack
+//! the physics and transitions of 0x7a: `super::packs`). Not ported: 0x51, the wall-hit spark line and the jump-attack
 //! ground sparks (cosmetic + sounds) and the trail counters of the wrench (pvar +0x70/+0x74/+0x7c). The stats
 //! records the entries bump (0x1416c0, 0x141848, 0x141850 + 0x1417a8) are counted in [`Melee::entered`] and
 //! applied to the game state by the caller ([`apply_melee_stats`], [`MeleeRecords`]).
@@ -25,6 +24,7 @@ use crate::moby_update::services::HitTemplate;
 use crate::pad::{button, fast_arctan, fast_diff_rots};
 use crate::ps2v::Pf;
 use rc_formats::moby_anim;
+use std::f32::consts::{FRAC_PI_3, FRAC_PI_4, FRAC_PI_6};
 
 /// The wrench's look-stance reticle (`0x2be1c0`): its colour (R low) and FX texture.
 pub const LOOK_MARKER_RGBA: u32 = 0xff91_7267;
@@ -141,26 +141,6 @@ pub fn apply_melee_stats(melee: &mut Melee, gs: &mut crate::game_state::GameStat
 impl Hero {
     fn combo_row(&self) -> &'static [i32; 11] { &COMBO[(self.melee.combo.clamp(0, 6)) as usize] }
 
-    /// `FUN_002351d0(range, cone, cone2)`: unless already aimed, aim at the stick direction when the stick is
-    /// past 0.5, else the facing; then the target search `0x22e238(range, aim, cone, cone2)` over the
-    /// targetable list (none in the port, see the module doc).
-    /// [`Hero::melee_aim`] for the other weapon states (`super::comet`, `super::weapons`).
-    pub(super) fn melee_aim_pub(&mut self, env: &Env) { self.melee_aim(env) }
-
-    fn melee_aim(&mut self, env: &Env) {
-        let mut a = self.melee.aim_yaw;
-        if self.melee.aimed == 0 {
-            a = self.rot[2];
-            if Pf::b(0x3f00_0000) < self.stick_mag {
-                self.stick_target(env, Pf::ONE);
-                self.melee.aimed = 1;
-                self.melee.target = None;
-                a = self.target_yaw;
-            }
-        }
-        self.melee.aim_yaw = a;
-    }
-
     /// `FUN_0022dda0(0)` is a wrench (`0x231ac0`): the hand moby is ready and of class 0x47.
     fn hand_is_wrench(&self) -> bool { self.items.ready_item().is_some_and(|m| m.o_class == WRENCH_CLASS) }
 
@@ -266,7 +246,8 @@ impl Hero {
                     step = (old[C_STEP] + 1) % 3;
                 }
                 self.melee.combo = step;
-                self.melee_aim(c.env);
+                // 0x23fbb0.
+                self.aim_assist(c.env, 5.0, FRAC_PI_4, FRAC_PI_4);
                 if !play { return; }
                 let (b, f2) = match step { 0 => (5, 0), 1 => (7, 2), _ => (7, 4) };
                 let mut b = ticks(b);
@@ -280,7 +261,8 @@ impl Hero {
                 self.melee.combo = 4;
                 self.f15d4 = 0x50;
                 self.items.restore = 0;
-                self.melee_aim(c.env);
+                // 0x23f7b0.
+                self.aim_assist(c.env, 8.0, FRAC_PI_3, -1.0);
                 self.melee.falling = Pf::ZERO;
                 self.items.slot.swap_timer = 10;
                 if !play { return; }
@@ -294,7 +276,8 @@ impl Hero {
             0x15 => {
                 self.melee.combo = 3;
                 self.items.restore = 0;
-                self.melee_aim(c.env);
+                // 0x23f998.
+                self.aim_assist(c.env, 14.0, FRAC_PI_6, -1.0);
                 self.melee.comet_side = (self.melee.comet_side == 0) as u32;
                 if !play { return; }
                 let mut b = ticks(10);
@@ -320,7 +303,25 @@ impl Hero {
         let row = *self.combo_row();
         if blending || frame < Pf::from_i32(row[C_HIT_TO]) { self.items.slot.swap_timer = 2; }
         self.target_speed = Pf::ZERO;
-        // The target branch (0x13fda4 set, timer < 4: speed from the distance to it) is not reachable.
+        // 0x2397e4: with a target (0x13fda4) in the first 4 ticks, the step's speed from the 2-D distance to it.
+        if let Some(t) = self.melee.target.filter(|_| self.timer < ticks(4)) {
+            let pos = env.world.and_then(|w| w.melee_targets().iter().find(|m| m.id == t).map(|m| m.pos));
+            if let Some(p) = pos {
+                let mut d = dist2([Pf::f(p[0]), Pf::f(p[1]), Pf::f(p[2]), Pf::ZERO], self.pos) - Pf::b(0x3f00_0000);
+                if d < Pf::ZERO { d = Pf::ZERO; }
+                let (off, tol, cap) = match row[C_STEP] {
+                    0 => (0x3f40_0000, 0x3f4c_cccd, 0x4080_0000),
+                    1 => (0x3f19_999a, 0x3fd9_999a, 0x4080_0000),
+                    _ => (0x3fa6_6666, 0x3fd9_999a, 0x3ff3_3333),
+                };
+                let e = d - Pf::b(off);
+                if e.abs() < Pf::b(tol) + Pf::b(0x4040_0000) {
+                    let mut k = e / Pf::b(0x3f66_6666);
+                    if Pf::b(cap) < k { k = Pf::b(cap); }
+                    if Pf::ONE < k { self.melee.speed_k = k; }
+                }
+            }
+        }
         let k = self.melee.speed_k;
         match row[C_STEP] {
             0 if frame < Pf::b(0x4190_0000) => self.target_speed = (DT * Pf::b(0x408c_cccd)) * k,
@@ -348,7 +349,8 @@ impl Hero {
             self.target_yaw = self.melee.aim_yaw;
             self.turn_to(f * Pf::b(0x3d4c_cccd), f * Pf::b(0x3e4c_cccd), DT * AIM_TURN);
         } else if !(row[C_STEP] == 1 && !blending && Pf::b(0x40e0_0000) < frame) {
-            self.melee_aim(env);
+            // 0x239bbc.
+            self.aim_assist(env, 5.0, FRAC_PI_4, FRAC_PI_4);
         }
         self.speed_step(DT2 * Pf::b(0x4214_0000), DT2 * Pf::b(0x41e0_0000));
         let y = if self.melee.aimed != 0 { self.melee.aim_yaw } else { YAW_SENTINEL };
@@ -376,7 +378,8 @@ impl Hero {
             self.target_yaw = self.melee.aim_yaw;
             self.turn_to(SCALE64 * Pf::b(0x3d4c_cccd), SCALE64 * Pf::b(0x3e4c_cccd), DT * AIM_TURN);
         } else if frame < Pf::b(0x41c8_0000) {
-            self.melee_aim(env);
+            // 0x239284.
+            self.aim_assist(env, 8.0, FRAC_PI_3, FRAC_PI_3);
         }
         let t9 = ticks(9);
         let mut up = DT * Pf::b(0x40f6_6666);
@@ -788,8 +791,9 @@ impl Hero {
     /// `FUN_002351d0(range, cone, cone2)` with its target search: unless already aimed (0x13fda8), the facing, or the
     /// stick's direction when it is past 0.5 (then aimed, the target cleared); a target of [`aim_search`] from there
     /// turns the aim toward it and becomes 0x13fda4 (a target kept from before with the stick not taken keeps the
-    /// aim). Its callers in the port: the gadget lunge 0x20 (`super::walloper`, (11, 50°, −1)). The wrench states still
-    /// use [`Hero::melee_aim`] without the search (G-WPN-008).
+    /// aim). Its callers, as (range, cone, cone2): the entries 0x13 (5, 45°, 45°), 0x14 (8, 60°, −1), 0x15 (14, 30°,
+    /// −1); the physics 0x13 (5, 45°, 45°), 0x14 (8, 60°, 60°), 0x15 (14, 30°, 45°, `super::comet`), 0x20 and the
+    /// glove's 0x23 (11, 50°, −1; `super::walloper`, `super::weapons`).
     pub(super) fn aim_assist(&mut self, env: &Env, range: f32, cone: f32, cone2: f32) {
         let mut a = self.melee.aim_yaw;
         if self.melee.aimed == 0 {
@@ -897,6 +901,37 @@ mod tests {
     }
 
     fn sq() -> PadInput { PadInput::neutral().press(button::SQUARE) }
+
+    /// The combo's aim search (0x23fbb0, (5, 45°, 45°)): a target ahead within 5 becomes 0x13fda4 and the aim turns to
+    /// it; in the first 4 ticks the step speed is (d − 0.5 − 0.75) / 0.9 (0x2397e4). One behind is not picked.
+    #[test]
+    fn the_combo_aims_at_a_target_ahead() {
+        let target = |id, x: f32, y: f32| MeleeTarget { id, pos: [x, y, 100.0], health: 1.0, targetable: true, is_crate: false, look: [0; 3] };
+        let run = |t: MeleeTarget| {
+            let (mut r, coll, mut a) = runner();
+            let mut w = crate::hero::platform::Carriers::default();
+            w.melee = vec![t];
+            let mut step = |r: &mut crate::hero::testkit::Runner, input: PadInput| {
+                r.pad.update(Some(&input.bytes()), false);
+                let env = Env { coll: &coll, pad: &r.pad, cam_yaw: r.cam_yaw, cam_rows: r.cam_rows, mirror: false, death_z: Pf::ZERO, mobys: None, hero_moby: None, water: None, world: Some(&w) };
+                hero_update(&mut r.hero, &mut r.moby, &env, &mut a, &mut r.rng);
+            };
+            step(&mut r, sq());
+            assert_eq!(r.hero.state, 0x13);
+            let picked = (r.hero.melee.target, r.hero.melee.aim_yaw.to_f32());
+            let p = r.hero.position();
+            step(&mut r, PadInput::neutral());
+            (picked, p, r.hero.melee.speed_k.to_f32())
+        };
+        let ((id, yaw), p, k) = run(target(7, 412.5, 411.0));
+        assert_eq!(id, Some(7));
+        let (dx, dy) = (412.5 - p[0], 411.0 - p[1]);
+        assert!((yaw - dy.atan2(dx)).abs() < 1e-3, "aim {yaw} toward the target");
+        let want = ((dx * dx + dy * dy).sqrt() - 0.5 - 0.75) / 0.9;
+        assert!((k - want).abs() < 1e-3, "speed_k {k}, want {want}");
+        let ((id, _), _, _) = run(target(7, 407.0, 410.0));
+        assert_eq!(id, None, "outside the 45° cone");
+    }
 
     #[test]
     fn square_starts_the_combo_and_chains_in_the_window() {

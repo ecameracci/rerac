@@ -116,7 +116,8 @@ fn sheet(m: &crate::moby_runtime::Moby, t: f32) -> Sheet {
     let (c1, c2, c3) = ((f(q, 6) - f(q, 5)) * iy, (f(q, 9) - f(q, 7)) * iy, (f(q, 10) - f(q, 8)) * iy);
     let (q0s, q1s) = ((f(q, 0x1a) - f(q, 0x18)) * ix, (f(q, 0x1b) - f(q, 0x19)) * iy);
     let (ha, hb) = (f(q, 1) - f(q, 0x20), f(q, 1) - f(q, 0x21));
-    let n = norm(cross(sub(v1, v0), row_step), 1.0);
+    // 0x2f62f8 `FastVecCross(out, v1 − v0, row_step)`: row_step × (v1 − v0).
+    let n = norm(cross(row_step, sub(v1, v0)), 1.0);
     let (mut left, mut right) = (v0, v1);
     let ph0 = f(q, 0x24);
     let (mut a5, mut a7, mut a8, mut q0, mut q1) = (f(q, 5), f(q, 7), f(q, 8), f(q, 0x18), f(q, 0x19));

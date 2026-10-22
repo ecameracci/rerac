@@ -214,8 +214,9 @@ pub fn strips(b: &Bolt) -> Vec<BeamQuad> {
 pub fn glow(b: &Bolt, at: [f32; 3], sizes: [f32; 2], rgba: [u32; 2]) -> Vec<BeamQuad> {
     let toward = add(at, unit(sub(b.eye, at), 0.3));
     let f = unit(sub(b.eye, toward), 1.0);
-    let r = unit(cross(f, b.gravity), -1.0);
-    let u = cross(r, f);
+    // `FastVecCross(out, a, b)` is b × a: L18 0x2ec224 g × f, 0x2ec248 f × r.
+    let r = unit(cross(b.gravity, f), -1.0);
+    let u = cross(f, r);
     (0..2).map(|k| {
         let q = |y: f32, z: f32| add(toward, add(scale(r, y * sizes[k]), scale(u, z * sizes[k])));
         BeamQuad { fx: FX_GLOW, corners: [q(-1.0, 1.0), q(-1.0, -1.0), q(1.0, 1.0), q(1.0, -1.0)], st: [[0.0, 0.0], [0.0, 1.0], [1.0, 0.0], [1.0, 1.0]], rgba: [rgba[k]; 4] }
