@@ -651,7 +651,8 @@ pub fn launch_point(pos: [f32; 3], fwd: [f32; 3]) -> [f32; 3] {
 pub(super) fn physics(h: &mut Hero, env: &Env) -> bool {
     h.target_speed = Pf::ZERO;
     if h.melee.aimed == 0 {
-        h.melee_aim_pub(env);
+        // 0x23a254.
+        h.aim_assist(env, super::walloper::AIM_RANGE, super::walloper::SIDE, -1.0);
     } else {
         h.target_yaw = h.melee.aim_yaw;
         h.turn_to(SCALE64 * Pf::b(0x3d23_d70a), SCALE64 * Pf::b(0x3e4c_cccd), DT_PF * Pf::b(0x4170_2845));
