@@ -737,6 +737,7 @@ The tables below are the audit as taken, minus these four rows.
 | `hero/ledge::wall_jump_off_a_tall_wall` | port logic: wall jump off a tall wall | fast | lib:hero | keep |
 | `hero/melee::square_starts_the_combo_and_chains_in_the_window` | port logic: square starts the combo and chains in the window | fast | lib:weapons | keep |
 | `hero/melee::a_late_press_does_not_chain_and_the_combo_ends_in_idle` | port logic: a late press does not chain and the combo ends in idle | fast | lib:weapons | keep |
+| `hero/melee::the_combo_aims_at_a_target_ahead` | game-checked: `0x23fbb0` / `0x2397e4` [`0x2351d0`, `0x2397e4`] | fast | lib:weapons | keep |
 | `hero/melee::third_swing_wraps_to_the_first` | port logic: third swing wraps to the first | fast | lib:weapons | keep |
 | `hero/melee::hit_frames` | port logic: hit frames | fast | lib:weapons | keep |
 | `hero/melee::square_in_the_air_is_the_jump_attack` | port logic: square in the air is the jump attack | fast | lib:weapons | keep |
