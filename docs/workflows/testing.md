@@ -975,6 +975,7 @@ The tables below are the audit as taken, minus these four rows.
 | `moby_update/classes/units/lamp::pulse_colour_and_one_callback_per_group` | port logic: pulse colour and one callback per group | fast | lib:classes | keep |
 | `moby_update/classes/units/linked_mover::opens_while_the_link_is_away_and_closes_on_state_b` | port logic: opens while the link is away and closes on state b | fast | lib:classes | keep |
 | `moby_update/classes/units/loose_piece::rests_then_flies_fades_and_drops_out` | port logic: rests then flies fades and drops out | fast | lib:classes | keep |
+| `moby_update/classes/units/quartu_story::captions_type_and_blink` | game-checked: level15 `0x2eb6b8` [`0x2eb6b8`] | fast | lib:classes | keep |
 | `moby_update/classes/units/rising_block::rises_on_the_links_command` | port logic: rises on the links command | fast | lib:classes | keep |
 | `moby_update/classes/units/slider::slides_to_the_target_fraction` | port logic: slides to the target fraction | fast | lib:classes | keep |
 | `moby_update/classes/units/smoke_emitter::one_blob_per_period` | port logic: one blob per period | fast | lib:classes | keep |

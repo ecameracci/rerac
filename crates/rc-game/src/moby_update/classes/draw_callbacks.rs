@@ -119,7 +119,7 @@ pub struct DrawCallbacks {
     /// The 2-D primitives the last [`run_frame`]'s callbacks laid out in screen pixels (the vehicles' HUDs: Gemlik's
     /// ship 69, `super::units::gemlik_ship_hud`), in draw order; `rc-engine`'s scene_render draws them over the world.
     pub screen: Vec<ScreenPrim>,
-    /// The centred small-font texts of those callbacks (`font_print_center_small`), drawn after [`Self::screen`].
+    /// The texts of those callbacks ([`ScreenText`]), drawn after [`Self::screen`].
     pub screen_texts: Vec<ScreenText>,
 }
 
@@ -157,7 +157,7 @@ impl ScreenPrim {
 }
 
 /// `font_print_center_small(x, y, rgba, text, len)` (`font` Small), `font_print_center_large` (`font` Regular: the FX-1
-/// font Lombyte calls "large").
+/// font Lombyte calls "large"); not `centred`: the plain `FontPrint` wrappers (x is the left edge).
 #[derive(Clone, Debug, PartialEq)]
 pub struct ScreenText {
     pub x: i32,
@@ -166,6 +166,7 @@ pub struct ScreenText {
     pub text: Vec<u8>,
     pub len: i32,
     pub font: rc_formats::font::Font,
+    pub centred: bool,
 }
 
 impl DrawCallbacks {

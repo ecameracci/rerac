@@ -33,7 +33,7 @@
 //! | state 2 | game mode ≠ 2: `DialogStreamUpdate(17)`, → 1 | [`broadcast_update`] |
 //! | state 1 | game mode ≠ 2: `DialogStreamStart(4)`, → 3, Ratchet shown (`0x223d08` = `0x2487a8`), `HeroTeleport(cuboid P[1], 0, 1)` | [`broadcast_update`] |
 //! | state 3 | game mode ≠ 2: `UnlockPlanet(17)`, the checkpoint at cuboid P[1], `ShowPlanetBanner(17)`, `memcard_Save`, → 4 | [`broadcast_update`] |
-//! | tail | in game mode 2: `RegisterDrawCallback(0x2eb6b8)`: the typed captions of scene 3 (21098 at scene ticks 181..260, 21099 at 450..640, 21100 at 750..930) and scene 4 (21102 at 2300..2400), one character per 4 ticks, large font with a shadow | NOT ported (G-UI-025: a class's text over a scene) |
+//! | tail | in game mode 2: `RegisterDrawCallback(0x2eb6b8)`: the typed captions of scene 3 (21098 at scene ticks 181..260, 21099 at 450..640, 21100 at 750..930) and scene 4 (21102 at 2300..2400), one character per 4 ticks, then the last one blinking, large font with a shadow | [`broadcast_update`], [`caption_frame`] (`DrawCallbacks::screen_texts`, drawn over the scene by `rc-engine` hud_render) |
 
 //!
 //! ## 1469 coverage (level15 `0x2ed398`)
@@ -63,6 +63,14 @@ pub const GRABBER_FN: u32 = 0x2e_a748;
 pub const GRABBER_CLASSES: [i16; 1] = [1388];
 pub const BROADCAST_FN: u32 = 0x2e_b4c0;
 pub const BROADCAST_CLASSES: [i16; 1] = [1419];
+/// 1419's draw callback: the scene captions.
+pub const CAPTION_FN: u32 = 0x2e_b6b8;
+/// gp−0x4a80 / gp−0x4a7c (level15 0x162180 / 0x162184): the captions' left edge and top.
+const CAPTION_XY: (i32, i32) = (150, 150);
+/// gp−0x4a78 (0x162188): the captions' colour (R low).
+const CAPTION_RGBA: u32 = 0x3800_ffff;
+/// gp−0x4a74 (0x16218c): their shadow's.
+const CAPTION_SHADOW: u32 = 0x3880_0000;
 pub const HELP_FN: u32 = 0x2e_d398;
 pub const HELP_CLASSES: [i16; 1] = [1469];
 /// The level-15 death flag 0x15f5a4 (gp−0x765c) the director reads.
@@ -152,7 +160,46 @@ pub fn broadcast_update(w: &mut World, id: MobyId) {
         }
         _ => {}
     }
-    if w.svc.game_mode == 2 { w.svc.unported("quartu 1419: scene captions 0x2eb6b8 (G-UI-025)"); }
+    if w.svc.game_mode == 2 {
+        if let Some(r) = super::row(REFERENCE_LEVEL, CAPTION_FN) { w.svc.draw_callbacks.register(crate::moby_update::classes::draw_callbacks::Callback::UnitFrame(r), id); }
+    }
+}
+
+/// Level15 `0x2eb6b8`'s pick from the running scene (0x16ce90 / 0x16ce94 = level01's 0x16cd10 / 0x16cd14): the message
+/// and its typed count `(tick − start) >> 2`; the later window wins (they never overlap).
+pub fn caption(scene: usize, tick: i32, ticks: impl Fn(i32) -> i32) -> Option<(i32, i32)> {
+    let windows: &[(i32, i32, i32)] = match scene {
+        3 => &[(181, 260, 0x526a), (450, 640, 0x526b), (750, 930, 0x526c)],
+        4 => &[(0x8fc, 0x960, 0x526e)],
+        _ => &[],
+    };
+    let mut out = None;
+    for &(from, to, msg) in windows {
+        if ticks(from) < tick && tick < ticks(to) { out = Some((msg, (tick - ticks(from)) >> 2)); }
+    }
+    out
+}
+
+/// The characters `0x2eb6b8` prints of a caption of `n` with `typed` typed: the typed ones, then all of them with the
+/// last one blinking (gone while `(n − typed) & 4`).
+pub fn caption_len(n: i32, typed: i32) -> i32 {
+    if typed < n { typed } else if n < typed && (n - typed) & 4 != 0 { n - 1 } else { n }
+}
+
+/// Level15 `0x2eb6b8` (the draw callback of 1419 in game mode 2; module doc): `sprintf("%s", msg)`, then
+/// `FontPrint` (font 3) at gp−0x4a80 / −0x4a7c (150, 150) + 1 in the shadow gp−0x4a74 and at (150, 150) in gp−0x4a78.
+pub fn caption_frame(w: &mut World) {
+    use crate::moby_update::classes::draw_callbacks::ScreenText;
+    let Some((scene, tick)) = w.svc.cinematic.scene.as_ref().map(|s| (s.id, s.tick)) else { return };
+    let Some((msg, typed)) = caption(scene, tick, |n| w.ticks(n)) else { return };
+    let mut text = w.svc.interact.msg(msg);
+    if let Some(z) = text.iter().position(|&b| b == 0) { text.truncate(z); }
+    let len = caption_len(text.len() as i32, typed);
+    let font = rc_formats::font::Font::Large;
+    let (x, y) = CAPTION_XY;
+    for (d, rgba) in [(1, CAPTION_SHADOW), (0, CAPTION_RGBA)] {
+        w.svc.draw_callbacks.screen_texts.push(ScreenText { x: x + d, y: y + d, rgba, text: text.clone(), len, font, centred: false });
+    }
 }
 
 /// Level15 `0x2ed398` (1469; module doc).
@@ -214,4 +261,28 @@ pub fn help_update(w: &mut World, id: MobyId) {
         set_pvi(w, id, 0x38, 0);
     }
     if !flag(w, 0x6e) && in_cuboid(w, id, 0x2c) { set_flag(w, 0x6e); }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `0x2eb6b8`: scene 3's three windows and scene 4's, exclusive at both ends, one character per 4 ticks; the
+    /// typed-out caption's last character blinks every 4 counts.
+    #[test]
+    fn captions_type_and_blink() {
+        let t = |n| n;
+        assert_eq!(caption(3, 181, t), None);
+        assert_eq!(caption(3, 182, t), Some((21098, 0)));
+        assert_eq!(caption(3, 259, t), Some((21098, 19)));
+        assert_eq!(caption(3, 260, t), None);
+        assert_eq!(caption(3, 500, t), Some((21099, 12)));
+        assert_eq!(caption(3, 800, t), Some((21100, 12)));
+        assert_eq!(caption(4, 2301, t), Some((21102, 0)));
+        assert_eq!(caption(4, 800, t), None);
+        assert_eq!(caption(5, 200, t), None);
+        assert_eq!(caption(3, 182, |n| n * 5 / 6), Some((21098, 8)), "the window scales with the frame rate");
+        assert_eq!((caption_len(10, 3), caption_len(10, 10)), (3, 10));
+        assert_eq!((11..=18).map(|k| caption_len(10, k)).collect::<Vec<_>>(), [9, 9, 9, 9, 10, 10, 10, 10]);
+    }
 }
