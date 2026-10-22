@@ -699,8 +699,9 @@ pub fn beam_quads(t: &Tesla, eye: [f32; 3], gravity: [f32; 3]) -> Vec<BeamQuad> 
     // The claw's glow: a quad facing the eye.
     let toward = add3(t.start, with_len(sub3(eye, t.start), 0.3));
     let f = with_len(sub3(eye, toward), 1.0);
-    let r = with_len(cross3(f, gravity), -1.0);
-    let u = cross3(r, f);
+    // `FastVecCross(out, a, b)` is b × a: 0x2d0e08 g × f, 0x2d0e2c f × r.
+    let r = with_len(cross3(gravity, f), -1.0);
+    let u = cross3(f, r);
     for (size, col) in [(0.1f32, 0x307f_7f7f), (0.35, c.color | 0x7f00_0000)] {
         let q = |x: f32, y: f32| add3(toward, add3(scale3(r, x * size), scale3(u, y * size)));
         out.push(BeamQuad { fx: FX_CLAW, corners: [q(-1.0, 1.0), q(1.0, 1.0), q(-1.0, -1.0), q(1.0, -1.0)], st: [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]], rgba: [col; 4] });

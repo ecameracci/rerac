@@ -605,7 +605,8 @@ fn fly(w: &mut World, id: MobyId) {
     c::set_pos(w, id, [o.point[0], o.point[1], o.point[2] + 0.16, 1.0]);
     let v = reflect(c::pv4(w, id, 0x10), o.normal);
     let n = [o.normal[0], o.normal[1], o.normal[2], 0.0];
-    let side = cross(v, n);
+    // 0x2d2798 `FastVecCross(out, v, n)`: n × v.
+    let side = cross(n, v);
     let s = w.rng.randf(-(DT * 1.5), DT * 1.5);
     let side = c::set_len3(side, s);
     let v = c::scale(c::add(v, side), f32::from_bits(0x3ecc_cccd));

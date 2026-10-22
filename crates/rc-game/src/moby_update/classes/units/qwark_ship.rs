@@ -1356,8 +1356,9 @@ pub fn beam_quads(table: &crate::moby_runtime::MobyTable, svc: &crate::moby_upda
     let mut rgba = 0x4080_8080u32;
     while t < len {
         let half = (t * 0.0) / (len + len) + 0.5;
-        let a = set_len3(cross(dir, up), half);
-        let b = set_len3(cross(dir, a), half);
+        // `FastVecCross(out, a, b)` is b × a: 0x2eaaa0 up × dir, 0x2eaac0 a × dir.
+        let a = set_len3(cross(up, dir), half);
+        let b = set_len3(cross(a, dir), half);
         let p = sub(at, b);
         let q = add(at, b);
         let corners = [sub(p, a), add(p, a), sub(q, a), add(q, a)].map(|v| [v[0], v[1], v[2]]);

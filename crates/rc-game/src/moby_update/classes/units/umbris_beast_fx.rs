@@ -506,8 +506,9 @@ pub fn tongue_step(w: &mut World, id: MobyId, mouth: V) -> f32 {
     }
     t.phase = c::add_rot(t.phase, 0.1);
     let mut up = c::set_len3(grav, -1.0);
-    let cr1 = c::set_len3(cross(dir, up), 1.0);
-    let cr2 = cross(up, cr1);
+    // `FastVecCross(out, a, b)` is b × a: 0x3181ec up × dir, 0x318210 cr1 × up.
+    let cr1 = c::set_len3(cross(up, dir), 1.0);
+    let cr2 = cross(cr1, up);
     let m0 = [cr2, cr1, up];
     for k in 0..20 {
         let q = mul3(m0, c::scale(template(k), 0.02));
@@ -549,8 +550,9 @@ pub fn tongue_step(w: &mut World, id: MobyId, mouth: V) -> f32 {
             up2 = c::set_len3(grav, -1.0);
         }
         let fwd = c::set_len3(dir, 1.0);
-        let r1 = c::set_len3(cross(fwd, up2), 1.0);
-        up2 = cross(r1, fwd);
+        // 0x3185a8 up2 × fwd, 0x3185c8 fwd × r1.
+        let r1 = c::set_len3(cross(up2, fwd), 1.0);
+        up2 = cross(fwd, r1);
         up = up2;
         let m = [fwd, r1, up2];
         let fi = i as f32;
@@ -877,7 +879,8 @@ pub fn ground_quads(table: &MobyTable, svc: &Services, id: MobyId) -> Option<FxQ
     let [jp, far] = svc.units.umbris_beast.ground;
     let cam = svc.units.umbris_beast.cam;
     let seg = c::sub(jp, far);
-    let side = c::set_len3(cross([cam[0], cam[1], cam[2], 0.0], seg), 0.25);
+    // 0x31257c `FastVecCross(out, row0, seg)`: seg × row0.
+    let side = c::set_len3(cross(seg, [cam[0], cam[1], cam[2], 0.0]), 0.25);
     let v = |q: V| [q[0], q[1], q[2]];
     let quad = FxQuad { corners: [v(jp), v(c::add(jp, side)), v(far), v(c::add(far, side))], st: [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]], rgba: [0x8080_8080; 4] };
     Some(FxQuads { fx: 0x3b, additive: true, subtract: false, quads: vec![quad] })
