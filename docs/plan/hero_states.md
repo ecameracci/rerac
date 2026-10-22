@@ -231,7 +231,9 @@ the states 0x2f / 0x31 / 0x68 / 0x69 / 0x7b, the seams in the ground / walk / id
 tests `platform::tests`, `surface::tests`, `tests/hero/hero_platform_novalis.rs` (the lift carries Ratchet down, the
 steep bank at its foot, determinism), `tests/hero/hero_surfaces.rs` (surface ids per level vs rules, Aridia quicksand,
 ice on levels 12 / 14, Novalis' flow chutes). Open: ~~the flow class 679~~ (done, "Hero follow-ups" below), ~~the
-landing picker's leading slippery test (jump.rs)~~ (ported: `hero/jump.rs::landing_picker`), the Thruster hover's slippery brake (packs.rs), the sinking
+landing picker's leading slippery test (jump.rs)~~ (ported: `hero/jump.rs::landing_picker`), ~~the Thruster hover's slippery brake (packs.rs)~~ (checked 2026-10-20:
+`packs::hover_physics` is L00 0x21e7cc, AirAccel 3.7 / 1.2 on 0x140632; the branch is in the overlays of exactly the
+surface-7 levels), the sinking
 ~~floor's sand particles (`0x22b140(4, 2)`, the 6-draw `0x286cb0` spawn: still not ported, so the `rand` stream
 diverges from the PS2 while sinking)~~ (done: `hero/fx.rs` PartType47Spawn, surface.rs), ~~the surface sounds~~ (done below).
 

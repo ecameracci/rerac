@@ -385,7 +385,7 @@ pub(super) fn rebound_physics(h: &mut Hero) {
     h.turn_to(SCALE64 * p(0.05), SCALE64 * p(0.2), DT * p(15.009_831));
 }
 
-/// 0x81 (0x2370b8 case 0x23 / 0x81; level00's adds the slippery brake): the Thruster's loop; stick target
+/// 0x81 (0x2370b8 case 0x23 / 0x81; the surface-7 levels' add the slippery brake): the Thruster's loop; stick target
 /// (5.75·dt, 4·dt above 0.7) × the stick; the turn (L2 / R2: toward the camera); AirAccel 7·dt² (3.5 with the
 /// stick below 0.2; on a slippery floor 3.7 / 1.2); the wall check; below 0.7 the feet spring to 0.17 above the
 /// ground (the position itself), above it vz = −2.88 u/s.
@@ -407,7 +407,8 @@ fn hover_physics(h: &mut Hero, env: &Env) {
     h.lean(); // HeroLean 0x235638: super::idle.
     let slow = h.stick_mag < p(0.2);
     let mut a = if slow { 3.5 } else { 7.0 };
-    // Level00: on a slippery floor (0x140632) the hover brakes less (P1's open item).
+    // On a slippery floor (0x140632) the hover brakes less: L00 0x21e7cc, in the overlays of the surface-7 levels
+    // (0, 4, 7, 9, 10, 12, 13, 14, 17), the only ones that set the flag.
     if h.f0632 != 0 { a = if slow { 1.2 } else { 3.7 }; }
     h.air_accel(DT2 * p(a));
     h.wall_check(env, 1);

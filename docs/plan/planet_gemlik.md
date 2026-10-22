@@ -29,7 +29,8 @@ crates, bolts and checkpoints. The census of 2026-10-03 left these classes witho
 
 - [L] The tower blasts' velocity argument and the fields' texture scroll have no renderer input yet.
 - [L] The robot ring's TEST change (alpha reference for the z write) has no counterpart.
-- [L] 1558's actor index read from the actor table word is taken as the third entry.
+- 1558's actor is the word 0x16cce0, the actor slot table 0x16ccd8 + 4·k (level 01's 0x16ce58, 0x180 lower on
+  level13) at k = 2: the scene's third actor (checked 2026-10-21, G-TRI-018).
 
 ## Open
 
