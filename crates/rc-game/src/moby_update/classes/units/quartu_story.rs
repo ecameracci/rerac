@@ -125,10 +125,8 @@ pub fn broadcast_update(w: &mut World, id: MobyId) {
     let mode2 = w.svc.game_mode == 2;
     let pv = |w: &World, k: usize| p::i32(&w.m(id).pvars, 4 * k);
     match w.m(id).state {
-        0 => {
-            if story::mission_done(w, w.m(id).mission as i32) { return; }
-            if w.svc.units.word(HOLD_WORD) != 0 { return; }
-            if !story::hero_in(w, pv(w, 0)) { return; }
+        // Every exit of state 0 reaches the tail (0x2eb67c / 0x2eb684): the captions of a replayed scene too.
+        0 if !story::mission_done(w, w.m(id).mission as i32) && w.svc.units.word(HOLD_WORD) == 0 && story::hero_in(w, pv(w, 0)) => {
             if story::link(w, pv(w, 2)).is_some_and(|m| w.m(m).state == 3) {
                 crate::cinematic::start_scene(w, 3, false);
                 w.mm(id).state = 2;
