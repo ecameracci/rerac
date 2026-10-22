@@ -276,7 +276,7 @@ W save, C checkpoint, X level exit.
 | | Morph-o-Ray 1354 `0x305758` | touch → I 21, S 6 → D, W, banner, H 14000 | P `oltanis_story` |
 | | 684 `0x2ed280` | S 0 (F 0x68, the ship hidden), then the lightning | — G-CLS-033 |
 | 15 Quartu | Bolt Grabber 1388 `0x2ea748` | touch → S 5 → I 34, W | P `quartu_story` |
-| | broadcast 1419 `0x2eb4c0` | cuboid + moby P[2] in state 3 → S 3, D; V 17; S 4 → P 17, C, W | P `quartu_story` (the captions: G-UI-025) |
+| | broadcast 1419 `0x2eb4c0` | cuboid + moby P[2] in state 3 → S 3, D; V 17; S 4 → P 17, C, W | P `quartu_story` (the captions: `caption_frame`) |
 | | Giant Clank mission 1446, pads 1451 | P 16 | P |
 | | help director 1469 `0x2ed398` | the sentry / Hologuise hints (15000..15002, 15006, 15007), the Giant Clank hint 15004 (F 0x6f), the Hydro-Pack hints 15005 / 20014, F 0x6e | P `quartu_story` (the disguise's branches wait on body 3: G-WPN-006) |
 | | 1179 (pads, help 11009 / 11010) | | — G-CLS-033 |
