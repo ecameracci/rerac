@@ -8,6 +8,7 @@
 - Quartu: Drek's broadcast cutscenes show the typed yellow captions at the top left, as in the original, also when replayed from Goodies → In-Level Movies.
 - Effects that were built mirrored now face the right way, as in the original: Umbris' beast tongue and its ground line, the light fixtures' glows, Qwark's tractor beam, the Tesla Claw's and the Tesla bolts' glows, Batalia's flame sheets, the Metal Detector's scan, Gaspar's meteor paths, the Gemlik fighters' shot spread, grenade bounces on Batalia and the roll of tumbling debris.
 - Wrench swings and glove throws auto-aim as in the original: the ground combo, the jump attack, the Comet Strike and the glove throws turn Ratchet toward a nearby enemy in front of him, and the combo's steps close the distance to it.
+- Suck Cannon shots that bounce off a slope, step or doorway lip keep flying straight, as in the original; before, the bounce could send them up toward the ceiling or off to the side.
 
 ## v0.4.2-alpha
 

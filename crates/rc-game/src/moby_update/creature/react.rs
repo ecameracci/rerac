@@ -1086,7 +1086,9 @@ fn flight(w: &mut World, id: MobyId, r: usize) -> i32 {
             land(w, id, r, true);
             return 0;
         }
-        vel = reflect(vel, [n[0], n[1], n[2], 0.0]);
+        // Off (0, 0, n.z) only (0x305ed4: the plane's x, y zeroed): a bounce flips the vertical speed, never turns
+        // the shot.
+        vel = reflect(vel, [0.0, 0.0, n[2], 0.0]);
     }
     set_rv(w, r, id, rec::VEL, vel);
     let mut t = ri(w, r, id, rec::TIMER);
