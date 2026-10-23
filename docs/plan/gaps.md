@@ -1,6 +1,9 @@
 # Gap register
 
 > **Order of work:** `docs/plan/priority_order.md` ranks every row below (and the memory-only items) by importance and dependency, in waves of at most 3 parallel lanes (2026-09-29).
+>
+> **Not here:** the original game's own bugs, which the port keeps on purpose, are listed in
+> `docs/plan/post_port_fixes.md` (fixes for after the port matches the original).
 
 One list of every known gap in ReRAC, **by missing shared system**: what agents left as "not ported", "later",
 "left", "still not drawn", "not modelled" or "inferred", plus the open items of the plan docs. The plan docs

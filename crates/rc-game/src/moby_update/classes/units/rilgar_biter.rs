@@ -35,7 +35,7 @@
 //! | 8 | key < 1.5, facing within 15°, within 3 and 2 in height → `0x283e60(1, target, m, 0x10001, target + 0.75 z, (cos, sin, 0, 5627.925))` (`0x10000` with head item 6); the animation's end → 9 (seq 4) | [`bite`] (`attack::hit_moby`) |
 //! | 9 | the animation's end: within 3 and facing within 15° → 7 (seq 7, `ticks(5)`); else speed 0, 4 (seq 1) | [`update`] |
 //! | 10 | [`steer`] home (no weave); there → 1 (seq 0, `ticks(3)`); no target: alerted → 6; a target → 4 (seq 1, `ticks(3)`) | [`update`] |
-//! | 0xb | the knockback flight (`0x286910` = `0x271558`); flying: below 2 → deleted; landed: a route home → 4 (seq 1), none → the death explosion (0.5, 13), deleted | [`update`] (`knock::update`, `fx::death_explosion`) |
+//! | 0xb | the knockback flight (`0x286910` = `0x271558`); flying: below 2 → deleted; landed: a route home → 4 (seq 1), none → the death explosion (0.5, 13), deleted; targetable is not set, so a biter hit while waiting in 0xf stays untargetable (`docs/plan/post_port_fixes.md` PPF-001) | [`update`] (`knock::update`, `fx::death_explosion`) |
 //! | 0xc | nothing (hidden until other code wakes it) | — |
 //! | 0xd | the animation's end → 1 (seq 0) | [`update`] |
 //! | 0xe | the death flight; landed → the explosion, `BreakFxB` 0x6da / 0x6db / 0x6dc, deleted; below 0 → deleted | [`update`] |
