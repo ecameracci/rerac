@@ -5,6 +5,9 @@
 //          table computed per frame on the CPU with the VU0 sine (rc_game::water::wobble_table);
 //          z = z0·w + z1·(1 − w) with w = the class's z blend (761 / 1225 bob, else the stored 0).
 //   2 / 3  ripple patch water / env pass (FUN_002b91c8): the CPU built positions, grey and both UV sets.
+//   4      port-only chute sheet (crate::chute_water): uv = (across, along, flow dir x, flow dir y) in game units,
+//          z1 = the edge fade (the output alpha), params.misc.z = the flow speed (u/s); Water Enhanced only (nothing
+//          is drawn otherwise).
 // Strip vertex: position = (game x, game y, z0), z1, uv = (u1, v1, u2, v2), tag = (RGBA, hash group); the
 // per-frame w, scroll and wobble come from this draw's `frame` record (storage, index = params.ids.x).
 // Ripple vertex: tag = (sub-block | strip index << 8, grid vertex); position, grey and UVs come from the
@@ -100,6 +103,9 @@ struct WaterVertexOutput {
     @location(2) @interpolate(linear) fog: f32,
     // The ripple module's surface slope (d height / d Bevy x, d height / d Bevy z); 0 on the strips.
     @location(3) ripple_grad: vec2<f32>,
+    // Kind 4: the vertex uv (across, along, flow dir) and the edge fade; 0 otherwise.
+    @location(4) flow: vec4<f32>,
+    @location(5) fade: f32,
 }
 
 fn ripple_pos(base: u32, g: u32) -> vec3<f32> {
@@ -122,7 +128,12 @@ fn vertex(v: WaterVertex) -> WaterVertexOutput {
     var c = v.tag.x;
     var drop = false;
     var grad = vec2<f32>(0.0);
-    if (kind < 2u) {
+    out.flow = vec4<f32>(0.0);
+    out.fade = 0.0;
+    if (kind == 4u) {
+        out.flow = v.uv;
+        out.fade = v.z1;
+    } else if (kind < 2u) {
         let f = frame[params.ids.x];
         let w = f.misc.x;
         z = v.position.z * w + v.z1 * (1.0 - w);
@@ -292,8 +303,19 @@ fn caustics(xz: vec2<f32>, t: f32) -> f32 {
     return pow(clamp(a, 0.0, 1.0), 7.0) * 0.8 + pow(clamp(b, 0.0, 1.0), 7.0) * 0.6;
 }
 
+// Kind 4: the chute surface's height over (across, along), carried downhill at `speed`.
+fn chute_height(p: vec2<f32>, t: f32, speed: f32) -> f32 {
+    let a = vec2<f32>(p.x * 1.6, (p.y - t * speed) * 0.9);
+    let b = vec2<f32>(p.x * 3.3 + 1.7, (p.y - t * speed * 1.15) * 2.1);
+    return gnoise(a) * 0.06 + gnoise(b) * 0.025;
+}
+
 @fragment
 fn fragment(in: WaterVertexOutput) -> @location(0) vec4<f32> {
+    // The surface's own normal (kind 4 slopes), from the screen-space derivatives before any branch.
+    let wp_d = (view.world_from_view * vec4<f32>(position_ndc_to_view(frag_coord_to_ndc(in.position)), 1.0)).xyz;
+    var n_geo = normalize(cross(dpdy(wp_d), dpdx(wp_d)));
+    if (n_geo.y < 0.0) { n_geo = -n_geo; }
     let t = textureSample(tex, tex_sampler, in.uv);
     // MODULATE on the display bytes: floor(Ct·Cv / 128), clamped to 255.
     let ct = round(t.rgb * 255.0);
@@ -302,27 +324,45 @@ fn fragment(in: WaterVertexOutput) -> @location(0) vec4<f32> {
         rgb = mix(fog.color.rgb, rgb, in.fog);
     }
     let size = vec2<i32>(textureDimensions(scene_depth));
+    let kind = u32(params.misc.y + 0.5);
     if (look.misc.x < 0.5 || size.x <= 1) {
+        if (kind == 4u) { return vec4<f32>(0.0); }
         return vec4<f32>(srgb_to_linear(rgb), params.misc.x);
     }
 
-    let kind = u32(params.misc.y + 0.5);
     if (kind == 1u || kind == 3u) { return vec4<f32>(0.0); }
     let vp = position_ndc_to_view(frag_coord_to_ndc(in.position));
     let wp = (view.world_from_view * vec4<f32>(vp, 1.0)).xyz;
     let t_now = globals.time;
     let here = vec2<i32>(floor(in.position.xy));
     let thickness = clamp(vp.z - scene_z(here, size), 0.0, 1e4);
-    let shore = smoothstep(0.0, 0.6, thickness);
+    let chute = kind == 4u;
+    // Kind 4 is a film everywhere: its edges fade by the vertex fade instead.
+    let shore = select(smoothstep(0.0, 0.6, thickness), 1.0, chute);
 
-    let g = wave_grad(wp.xz, t_now) + in.ripple_grad + ring_grad(wp.xz, t_now);
-    let n_world = normalize(mix(vec3<f32>(0.0, 1.0, 0.0), normalize(vec3<f32>(-g.x, 1.0, -g.y)), shore));
+    var n_world: vec3<f32>;
+    var tilt: vec2<f32>;
+    if (chute) {
+        // Kind 4: the sloped sheet's normal tilted by the flowing height field (game flow dir -> Bevy (x, −y)).
+        let speed = params.misc.z;
+        let along = vec3<f32>(in.flow.z, 0.0, -in.flow.w);
+        let across = vec3<f32>(-in.flow.w, 0.0, -in.flow.z);
+        let e = 0.05;
+        let gu = (chute_height(in.flow.xy + vec2<f32>(e, 0.0), t_now, speed) - chute_height(in.flow.xy - vec2<f32>(e, 0.0), t_now, speed)) / (2.0 * e);
+        let gv = (chute_height(in.flow.xy + vec2<f32>(0.0, e), t_now, speed) - chute_height(in.flow.xy - vec2<f32>(0.0, e), t_now, speed)) / (2.0 * e);
+        n_world = normalize(mix(n_geo, normalize(n_geo - along * gv - across * gu), shore));
+        tilt = (n_world - n_geo).xz * 2.5;
+    } else {
+        let g = wave_grad(wp.xz, t_now) + in.ripple_grad + ring_grad(wp.xz, t_now);
+        n_world = normalize(mix(vec3<f32>(0.0, 1.0, 0.0), normalize(vec3<f32>(-g.x, 1.0, -g.y)), shore));
+        tilt = n_world.xz;
+    }
     let n = normalize((view.view_from_world * vec4<f32>(n_world, 0.0)).xyz);
     let to_eye = normalize(-vp);
     let dist = -vp.z;
 
     // The bed through the surface: the pixel bent by the waves, kept only where the bent pixel lies under the water.
-    let bend = n_world.xz * (18.0 * clamp(thickness, 0.0, 2.0) / (1.0 + dist * 0.05));
+    let bend = tilt * (18.0 * clamp(select(thickness, max(thickness, 0.4), chute), 0.0, 2.0) / (1.0 + dist * 0.05));
     var coord = in.position.xy + vec2<f32>(bend.x, -bend.y);
     if (scene_z(vec2<i32>(floor(coord)), size) > vp.z) { coord = in.position.xy; }
     let ci = clamp(vec2<i32>(floor(coord)), vec2<i32>(0), size - 1);
@@ -344,7 +384,13 @@ fn fragment(in: WaterVertexOutput) -> @location(0) vec4<f32> {
     let absorb = vec3<f32>(0.30, 0.12, 0.07) * (0.6 + params.misc.x);
     let trans = exp(-absorb * path);
     var col = bed * trans + deep * (1.0 - trans);
-    col = mix(col, tint, 0.12 * shore);
+    col = mix(col, tint, select(0.12, 0.4, chute) * shore);
+    if (chute) {
+        // White streaks stretched along the flow and carried with it.
+        let q = vec2<f32>(in.flow.x * 5.0, (in.flow.y - t_now * params.misc.z * 1.1) * 0.5);
+        let streak = smoothstep(0.3, 0.55, gnoise(q) + 0.5 * gnoise(q * 2.3 + 4.1));
+        col = mix(col, vec3<f32>(0.9, 0.95, 1.0), streak * 0.25 * shore);
+    }
 
     // Reflection (Fresnel, raised a little so the surface reads as water from above) and the key light's glint.
     let cos_v = max(dot(n, to_eye), 0.0);
@@ -352,8 +398,10 @@ fn fragment(in: WaterVertexOutput) -> @location(0) vec4<f32> {
     var r = reflection(vp, reflect(-to_eye, n), size);
     let l = normalize((view.view_from_world * vec4<f32>(look.sun.xyz, 0.0)).xyz);
     let glint = pow(max(dot(n, normalize(l + to_eye)), 0.0), 300.0) * 4.0 * smoothstep(0.0, 0.1, look.sun.y);
-    col = mix(col, r, clamp(f, 0.0, 0.9)) + vec3<f32>(1.0, 0.96, 0.88) * glint * shore;
+    // A chute is seen along its slope at grazing angles: its reflection is capped so the bed shows through.
+    col = mix(col, r, clamp(f, 0.0, select(0.9, 0.55, chute))) + vec3<f32>(1.0, 0.96, 0.88) * glint * shore;
 
+    if (chute) { return vec4<f32>(col, in.fade); }
     // Foam along the shore, broken up by drifting noise.
     let foam_n = smoothstep(0.1, 0.5, gnoise(wp.xz * 3.0 + vec2<f32>(t_now * 0.2, -t_now * 0.15)) + 0.35);
     let foam = (1.0 - smoothstep(0.05, 0.45, thickness)) * smoothstep(0.02, 0.1, thickness) * foam_n;

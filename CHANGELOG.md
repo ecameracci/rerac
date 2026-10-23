@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Water on Enhanced: the chutes Ratchet slides down (Rilgar's slide to the rising-water area, and the chutes on Batalia and Quartu) are covered by a shallow sheet of flowing water. The original game draws them bare, so Water on Original is unchanged.
+
 ## v0.4.3-alpha
 
 - Blarg: after Clank hands the hero back to Ratchet (and the Hydrodisplacer cutscene), Clank's footsteps no longer keep playing at the Clank station. The same applies to Orxon's Clank section.
