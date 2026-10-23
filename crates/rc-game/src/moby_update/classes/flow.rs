@@ -7,7 +7,8 @@
 //! level01 0x2f6328, level05 0x3067b8, level08 0x2f74c0, level15 0x2d95e8 ([`LEVEL_FNS`]); the registry maps the
 //! class, so one port serves them all. Instances: Novalis 2 (the chute from (268.9, 199.3, 93.2) down to the landing
 //! plateau at (176.6, 133.0, 59.5), splines 43 and 44; the second instance has no spline and never runs), Rilgar 1,
-//! Blarg 2, Orxon 1. No geometry (headerless class).
+//! Batalia 2, Quartu 1. No geometry (headerless class; Water Enhanced draws a sheet along the splines:
+//! rc-engine `chute_water`).
 //!
 //! **Pvars** (0x80): +0x00.. the spline indices (s32; +0x00 = −1: inactive), +0x60 the flow speed (f32, u/tick;
 //! level 1 recomputes it), +0x64 the reach (the hero within this of a spline), +0x68 initialised, +0x70 the spline
