@@ -73,8 +73,9 @@ use bevy::camera::CameraProjection;
 use bevy::mesh::{Indices, MeshVertexAttribute, MeshVertexBufferLayoutRef, PrimitiveTopology, VertexAttributeValues, VertexFormat};
 use bevy::pbr::{MaterialPipeline, MaterialPipelineKey};
 use bevy::prelude::*;
+use bevy::image::ImageSampler;
 use bevy::render::render_resource::{
-    AsBindGroup, RenderPipelineDescriptor, ShaderType, SpecializedMeshPipelineError,
+    AsBindGroup, Extent3d, RenderPipelineDescriptor, ShaderType, SpecializedMeshPipelineError, TextureDimension, TextureFormat,
 };
 use bevy::render::storage::ShaderBuffer;
 use bevy::shader::ShaderRef;
@@ -93,6 +94,12 @@ const SHADER_PATH: &str = "shaders/water.wgsl";
 const WATER_BIAS: f32 = 5.0e5;
 /// The ripple patches' place in [`LevelWater::order`] (a manager class stands for it).
 const RIPPLE_SLOT: u16 = u16::MAX;
+/// The chute sheets' FX texture when the level's own water has no clear one ([`clear_water`]): Rilgar's ripple
+/// water, then its env pass. Without either (Quartu) the sheets get a one-texel water colour, [`CHUTE_TINT_RGBA`].
+const CHUTE_FX: [i32; 2] = [42, 41];
+/// The `fx` of a material with the [`CHUTE_TINT_RGBA`] texel (clear water by definition).
+const CHUTE_TINT: i32 = -2;
+const CHUTE_TINT_RGBA: [u8; 4] = [60, 110, 130, 0x80];
 
 pub const ATTRIBUTE_WATER_Z1: MeshVertexAttribute = MeshVertexAttribute::new("WaterZ1", 0x5741_5431, VertexFormat::Float32);
 pub const ATTRIBUTE_WATER_UV: MeshVertexAttribute = MeshVertexAttribute::new("WaterUv", 0x5741_5432, VertexFormat::Float32x4);
@@ -115,6 +122,8 @@ pub struct LevelWater {
     pub fire_fields: Option<FireFieldTables>,
     /// The other draw callbacks' tables (crate::fx_draw: the nanotech glow).
     pub fx: crate::fx_draw::LevelFx,
+    /// The flow chutes' splines (Water Enhanced's chute sheets: crate::chute_water).
+    pub chutes: Vec<crate::chute_water::ChuteSpline>,
 }
 
 /// Reads the level's water data (by code identity against the reference overlays: rc_game::water::world), the strip
@@ -154,7 +163,8 @@ pub fn load(root: &Path, index: u32, gameplay: &[u8]) -> Result<LevelWater> {
         let slot = if strips.iter().any(|s| s.class == c) { c } else if has_patches && managers.contains(&m.o_class) { RIPPLE_SLOT } else { continue };
         if !order.contains(&slot) { order.push(slot); }
     }
-    Ok(LevelWater { strips, data, order, fire_fields, fx })
+    let chutes = crate::chute_water::chutes(gameplay, index);
+    Ok(LevelWater { strips, data, order, fire_fields, fx, chutes })
 }
 
 /// Static uniform of one water draw.
@@ -274,7 +284,7 @@ fn follow_look(
     for h in &st.materials {
         let Some(m) = materials.get(h) else { continue };
         let clear = *st.clear_fx.entry(m.fx).or_insert_with(|| {
-            let clear = usize::try_from(m.fx).ok().and_then(|i| tex?.fx_textures.get(i)?.as_ref()).is_some_and(clear_water);
+            let clear = m.fx == CHUTE_TINT || usize::try_from(m.fx).ok().and_then(|i| tex?.fx_textures.get(i)?.as_ref()).is_some_and(clear_water);
             if m.fx >= 0 { println!("water: fx texture {} is {}", m.fx, if clear { "clear water (Enhanced applies)" } else { "not clear water (kept Original)" }); }
             clear
         });
@@ -478,7 +488,7 @@ fn setup(
     copy: Res<crate::scene_copy::SceneCopy>,
 ) {
     let lw = &level.0.water;
-    if lw.order.is_empty() { return; }
+    if lw.order.is_empty() && lw.chutes.is_empty() { return; }
     let Some(tex) = level.0.particles.textures.as_ref() else {
         eprintln!("water: no FX textures, not drawn");
         return;
@@ -587,6 +597,53 @@ fn setup(
             *p = Some(PatchDraw { entities: [ew, ee], mats: [mw, me], fx: [-1, -1], fix: [0, 0], slots: [slot, slot + 1], visible: false });
             slot += 2;
         }
+    }
+    // Water Enhanced's chute sheets (crate::chute_water), after every game draw. Kind 4 reads no `frame` record.
+    let mut chute_rows = Vec::new();
+    if let (false, Some(coll)) = (lw.chutes.is_empty(), level.0.collision.as_ref()) {
+        let is_clear = |i: i32| usize::try_from(i).ok().and_then(|i| tex.fx_textures.get(i)?.as_ref()).is_some_and(clear_water);
+        let fx = records.iter().map(|p| p.fx_water).chain(lw.strips.iter().flat_map(|c| c.strips.iter().map(|d| d.fx[0]))).chain(CHUTE_FX).find(|&i| is_clear(i));
+        let boxes: Vec<[f32; 6]> = lw.strips.iter().flat_map(|c| &c.strips).map(|d| {
+            d.vertices.iter().fold([f32::MAX, f32::MAX, f32::MAX, f32::MIN, f32::MIN, f32::MIN], |b, v| {
+                [b[0].min(v[0]), b[1].min(v[1]), b[2].min(v[2].min(v[3])), b[3].max(v[0]), b[4].max(v[1]), b[5].max(v[2].max(v[3]))]
+            })
+        }).collect();
+        // Water already there: a strip's box, or a water face (surface 0: the hero's ground probe `0x232dc0` with
+        // flags 2) over the spline (from high enough to start above a river the spline runs under); the floor is the
+        // probe's re-cast through the water (flags 0x24).
+        use rc_game::collision_query::{coll_line, QueryFlags};
+        let covered = |p: [f32; 3]| {
+            boxes.iter().any(|b| b[0] - 1.0 <= p[0] && p[0] <= b[3] + 1.0 && b[1] - 1.0 <= p[1] && p[1] <= b[4] + 1.0 && b[2] - 3.0 <= p[2] && p[2] <= b[5] + 3.0)
+                || coll_line(coll, [p[0], p[1], p[2] + 6.0], [p[0], p[1], p[2] - 4.0], QueryFlags(2)).is_some_and(|o| o.surface_id() == 0)
+        };
+        let floor = |a: [f32; 3], b: [f32; 3]| coll_line(coll, a, b, QueryFlags(0x24)).map(|o| o.point[2]);
+        let (img, fx) = match fx.and_then(|i| Some((fx_image(&mut fx_images, &mut images, tex, i)?, i))) {
+            Some(found) => found,
+            None => {
+                let mut t = Image::new_fill(Extent3d::default(), TextureDimension::D2, &CHUTE_TINT_RGBA, TextureFormat::Rgba8Unorm, RenderAssetUsages::RENDER_WORLD);
+                t.sampler = ImageSampler::linear();
+                (images.add(t), CHUTE_TINT)
+            }
+        };
+        for (k, c) in lw.chutes.iter().enumerate() {
+            let s = crate::chute_water::sheet(c, floor, covered);
+            chute_rows.push(s.idx.len() / 6);
+            if s.idx.is_empty() { continue; }
+            let n = s.pos.len();
+            let mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD)
+                .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, s.pos.clone())
+                .with_inserted_attribute(ATTRIBUTE_WATER_Z1, s.fade)
+                .with_inserted_attribute(ATTRIBUTE_WATER_UV, s.uv)
+                .with_inserted_attribute(ATTRIBUTE_WATER_TAG, VertexAttributeValues::Uint32x2(vec![[0x0080_8080, 0]; n]))
+                .with_inserted_indices(Indices::U32(s.idx));
+            let mut p = params(0x80, 4, slot, 0);
+            p.misc.z = c.speed;
+            let m = new_mat(&mut materials, img.clone(), p, slot, fx);
+            spawn(&mut commands, meshes.add(mesh), m, Visibility::Inherited, format!("chute {k} water sheet"));
+            slot += 1;
+        }
+        let starts: Vec<[i32; 3]> = lw.chutes.iter().map(|c| c.points[0].map(|x| x.round() as i32)).collect();
+        println!("water: chute sheets (Water Enhanced) {} chutes from {starts:?}, quads {chute_rows:?}, fx {fx:?}", lw.chutes.len());
     }
     let data = lw.data.as_ref();
     println!(
