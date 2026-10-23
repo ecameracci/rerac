@@ -48,6 +48,7 @@ mod chute_water;
 mod disc_source;
 mod first_run;
 mod fly_cam;
+mod foliage;
 mod fx_draw;
 mod fog_state;
 mod screen_tint;
@@ -244,6 +245,8 @@ fn main() -> anyhow::Result<()> {
     .insert_resource(spawn)
     .add_plugins(tie_render::TieRenderPlugin)
     .add_plugins(shrub_render::ShrubRenderPlugin)
+    // Port-only grass and plant copies (the Foliage option).
+    .add_plugins(foliage::FoliagePlugin)
     // Point lights on tfrags, ties and shrubs (the game's Light* point passes; crate::world_lights).
     .add_plugins(world_lights::WorldLightsPlugin)
     .add_plugins(sky_render::SkyRenderPlugin)

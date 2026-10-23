@@ -1,6 +1,6 @@
 //! **Port-only** (not in the game): the "Port Options" page, for settings the PS2 never had (the graphics options and
-//! their preset, anti-aliasing, detail and draw distance, ambient occlusion, water, particles, the lighting (the game's
-//! shadows, sun shadows, or sun shadows with the advanced lighting effects),
+//! their preset, anti-aliasing, detail and draw distance, ambient occlusion, water, particles, foliage, the lighting (the
+//! game's shadows, sun shadows, or sun shadows with the advanced lighting effects),
 //! the gameplay and cutscene aspects, the render resolution, fullscreen, the FPS limit, frame smoothing and, last, the gameplay rows
 //! Strafing and Quick Select, the ring's hold of the world, then the mouse look's direction and speed).
 //! Spec: docs/plan/menus.md "Port-only settings"; the graphics rows: docs/plan/graphics_options.md (every row's first
@@ -143,6 +143,9 @@ pub mod text {
     pub const WATER: i32 = -0x1b1;
     pub const PARTICLES: i32 = -0x1b2;
     pub const SOFT: i32 = -0x1b3;
+    pub const FOLIAGE: i32 = -0x1b4;
+    pub const MODERATE: i32 = -0x1b5;
+    pub const LUSH: i32 = -0x1b6;
     pub const STRAFING: i32 = -0x1c0;
     pub const CLASSIC: i32 = -0x1c1;
     pub const MODERN: i32 = -0x1c2;
@@ -217,6 +220,9 @@ pub mod text {
             WATER => b"Water",
             PARTICLES => b"Particles",
             SOFT => b"Soft",
+            FOLIAGE => b"Foliage",
+            MODERATE => b"Moderate",
+            LUSH => b"Lush",
             STRAFING => b"Strafing",
             QUICK_SELECT => b"Quick Select",
             MOUSE_X => b"Mouse left / right",
@@ -256,6 +262,8 @@ pub enum Setting {
     Water,
     /// Particle sprites against the world: value 0 Original (hard cut), 1 Soft.
     Particles,
+    /// Extra plants on the grassy ground: value 0 Original (the level's own only), 1 Moderate, 2 Lush.
+    Foliage,
     /// The render resolution (the engine's game frame): value 0 fits the window, 1..5 a height of 416 (the PS2's lines), 720, 1080, 1440 or 2160 (the width
     /// follows the Aspect row).
     Resolution,
@@ -324,6 +332,7 @@ pub const ENTRIES: &[Entry] = &[
     Entry { setting: Setting::Particles, label: text::PARTICLES, values: &[text::ORIGINAL, text::SOFT] },
     Entry { setting: Setting::Lighting, label: text::LIGHTING, values: &[text::ORIGINAL, text::SIMPLE, text::ENHANCED] },
     Entry { setting: Setting::Water, label: text::WATER, values: &[text::ORIGINAL, text::ENHANCED] },
+    Entry { setting: Setting::Foliage, label: text::FOLIAGE, values: &[text::ORIGINAL, text::MODERATE, text::LUSH] },
     Entry { setting: Setting::Strafing, label: text::STRAFING, values: &[text::CLASSIC, text::MODERN] },
     Entry { setting: Setting::QuickSelect, label: text::QUICK_SELECT, values: &[text::CLASSIC, text::MODERN] },
     Entry { setting: Setting::MouseX, label: text::MOUSE_X, values: &[text::NORMAL, text::INVERTED] },

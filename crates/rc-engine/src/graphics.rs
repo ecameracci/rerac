@@ -12,6 +12,7 @@
 //! | [`AmbientOcclusion`] | Original (none: the shade is the artists' baked vertex colours), On (screen-space occlusion from the depth buffer) | crate::ao_render |
 //! | [`Water`] | Original (the GS blend of the water textures), Enhanced (clear by depth, reflections, a sun glint, foam at the shore) | crate::water_render, crate::scene_copy |
 //! | [`Particles`] | Original (sprites cut where they meet the world), Soft (faded by their depth in front of it) | crate::particle_render, crate::scene_copy |
+//! | [`Foliage`] | Original (the level's own plants only), Moderate, Lush (grass clumps on the grassy ground and more of the level's small plants) | crate::foliage |
 //! | [`Lighting`] | Original (the game's shadows), Simple (sun shadows in their place), Enhanced (Simple's shadows and every advanced lighting effect) | crate::shadow_render, crate::sun_shadow, crate::tie_lod ([`Lighting::game_shadows`], [`Lighting::sun_shadows`]); crate::sun_rays, crate::gi_render, crate::post_render ([`Lighting::enhanced`]; the rays also per level, [`LightShafts`]) |
 //! | [`FrameSmoothing`] | Off (one picture per 60 Hz tick), On (the display's rate, interpolated between ticks); not in the presets | crate::frame_smooth, crate::frame_pace |
 //!
@@ -21,7 +22,7 @@
 //!
 //! Persisted in the port settings file (`crate::render_settings::save_key`); `RC_HUD`-style switches are not used here
 //! (`RC_HUD=0` already hides the HUD): `RC_GFX_ANTI_ALIASING`, `RC_GFX_HUD`, `RC_GFX_TEXTURES`, `RC_GFX_DETAIL`,
-//! `RC_GFX_DRAW_DISTANCE`, `RC_GFX_AMBIENT_OCCLUSION`, `RC_GFX_WATER`, `RC_GFX_PARTICLES`, `RC_GFX_LIGHTING`,
+//! `RC_GFX_DRAW_DISTANCE`, `RC_GFX_AMBIENT_OCCLUSION`, `RC_GFX_WATER`, `RC_GFX_PARTICLES`, `RC_GFX_FOLIAGE`, `RC_GFX_LIGHTING`,
 //! `RC_GFX_FRAME_SMOOTHING` (the keys below), `RC_MSAA=0|2|4|8` (Anti-aliasing Off or that multisampling),
 //! `RC_SHADOWS=1|dynamic` (Lighting Original / Enhanced, the older switch; `0`: crate::shadow_render) and
 //! `RC_GFX_PRESET=original|enhanced` override the file at start.
@@ -310,6 +311,29 @@ impl GfxOption for Lighting {
     }
 }
 
+/// Extra plants on the level's grassy ground (crate::foliage).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum Foliage {
+    /// The level's own shrubs only (no foliage pass).
+    #[default]
+    Original,
+    Moderate,
+    /// Denser, taller and drawn farther than Moderate.
+    Lush,
+}
+
+impl GfxOption for Foliage {
+    const ALL: &'static [Self] = &[Foliage::Original, Foliage::Moderate, Foliage::Lush];
+    const KEY: &'static str = "foliage";
+    fn key(self) -> &'static str {
+        match self {
+            Foliage::Original => "original",
+            Foliage::Moderate => "moderate",
+            Foliage::Lush => "lush",
+        }
+    }
+}
+
 /// Frames drawn between two 60 Hz ticks (crate::frame_smooth). Not part of the presets (like the FPS limit, it depends
 /// on the screen): its own resource, not a [`GraphicsSettings`] field.
 #[derive(Resource, Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -428,6 +452,7 @@ pub struct GraphicsSettings {
     pub particles: Particles,
     /// Not in the presets (module docs).
     pub lighting: Lighting,
+    pub foliage: Foliage,
 }
 
 impl GraphicsSettings {
@@ -446,6 +471,7 @@ impl GraphicsSettings {
                 water: Water::Enhanced,
                 particles: Particles::Soft,
                 lighting: self.lighting,
+                foliage: Foliage::Moderate,
             },
             Preset::Custom => self,
         }
@@ -473,6 +499,7 @@ impl GraphicsSettings {
             s.ao = file_value(s.ao);
             s.water = file_value(s.water);
             s.particles = file_value(s.particles);
+            s.foliage = file_value(s.foliage);
         }
         s.lighting = file_lighting(crate::render_settings::load_key);
         if let Ok(v) = std::env::var("RC_SHADOWS") { s.lighting = Lighting::from_shadows(&v); }
@@ -487,6 +514,7 @@ impl GraphicsSettings {
         s.ao = env_value(s.ao);
         s.water = env_value(s.water);
         s.particles = env_value(s.particles);
+        s.foliage = env_value(s.foliage);
         s
     }
 
@@ -501,6 +529,7 @@ impl GraphicsSettings {
         save(self.water);
         save(self.particles);
         save(self.lighting);
+        save(self.foliage);
     }
 }
 
@@ -580,9 +609,11 @@ mod tests {
         assert_eq!(o.preset(), Preset::Original);
         let e = o.with_preset(Preset::Enhanced);
         assert_eq!(e.preset(), Preset::Enhanced);
+        assert_eq!((o.foliage, e.foliage), (Foliage::Original, Foliage::Moderate));
         let c = GraphicsSettings { hud: Hud::SharpPixels, ..o };
         assert_eq!(c.preset(), Preset::Custom);
         assert_eq!(c.with_preset(Preset::Custom), c);
+        assert_eq!(GraphicsSettings { foliage: Foliage::Lush, ..e }.preset(), Preset::Custom);
         // Draw distance is not part of the presets: either preset keeps it and is still recognised.
         let d = GraphicsSettings { draw: DrawDistance::Farther, ..o };
         assert_eq!(d.preset(), Preset::Original);
@@ -614,6 +645,20 @@ mod tests {
     }
 
     #[test]
+    fn foliage_round_trips() {
+        let keys: Vec<&str> = Foliage::ALL.iter().map(|v| v.key()).collect();
+        assert_eq!(keys, ["original", "moderate", "lush"]);
+        for &v in Foliage::ALL {
+            assert_eq!(Foliage::parse(v.key()), Some(v));
+            assert_eq!(Foliage::from_index(v.index()), v);
+        }
+        assert_eq!(Foliage::KEY, "foliage");
+        assert_eq!(Foliage::parse(" lush "), Some(Foliage::Lush));
+        assert_eq!(Foliage::parse("dense"), None);
+        assert_eq!(Foliage::from_index(7), Foliage::Original);
+    }
+
+    #[test]
     fn keys_parse_back() {
         for &v in AntiAliasing::ALL { assert_eq!(AntiAliasing::parse(v.key()), Some(v)); }
         for &v in Hud::ALL { assert_eq!(Hud::parse(v.key()), Some(v)); }
@@ -629,6 +674,7 @@ mod tests {
         assert_eq!(Lighting::ALL.iter().map(|v| v.key()).collect::<Vec<_>>(), ["original", "simple", "enhanced"]);
         for &v in FrameSmoothing::ALL { assert_eq!(FrameSmoothing::parse(v.key()), Some(v)); }
         assert_eq!(FrameSmoothing::ALL[0], FrameSmoothing::default());
+        for &v in Foliage::ALL { assert_eq!(Foliage::parse(v.key()), Some(v)); }
         assert!(!AmbientOcclusion::Original.on() && Water::Enhanced.on());
         assert_eq!(Detail::from_index(9), Detail::Original);
         assert_eq!(AntiAliasing::from_samples(0), AntiAliasing::Off);
