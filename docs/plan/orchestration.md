@@ -63,6 +63,8 @@ Every brief carries, in this order:
   unfinished items there (new IDs) and strikes the ones it closes.
   File gaps at the system level: name the missing shared system, and list the specific object or level only as a
   consumer of it.
+- **Post-port fixes.** `docs/plan/post_port_fixes.md` lists the original game's own bugs that the port keeps on
+  purpose, to fix once the port matches the original. A faithful port of a bug goes there, not into the code.
 - **Read first**: the docs and files, with the specific facts the agent must not re-derive.
 - **Deliverables**: numbered, concrete, each with its test or verification.
 - **Report back**: the exact list of things the orchestrator needs (numbers, addresses, screenshot paths, verified vs inferred, left undone, files changed). The report is all the orchestrator sees; agents' transcripts are never read (they would flood context).
