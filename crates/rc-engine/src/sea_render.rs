@@ -50,6 +50,10 @@
 //! after-ties list go first among the effects (`TIES_BIAS`), the list-1 draws just before the other list-1 callbacks
 //! (`SEA_LIST1_BIAS`). The display-blend pass runs after the world's own translucent draws, so a translucent moby part in
 //! front of an after-ties effect draw is drawn before it instead of after (crate::display_blend).
+//!
+//! **Water Enhanced** (port-only, crate::graphics): the opaque groups of the liquid ports whose image is clear water, seen
+//! from above, go to crate::sea_water (drawn after the scene copy by `water.wgsl`'s Enhanced path, Z written) instead of
+//! the opaque pass; the effect groups, the other ports and every group with the option Original are drawn as above.
 
 use crate::display_blend::DisplayEffect;
 use crate::fx_draw::{FxPrimMaterial, FxPrimParams, PrimBuf, LIST1_BIAS};
@@ -383,6 +387,8 @@ struct SeaDraw {
     anim_images: HashMap<GridAnim, Handle<Image>>,
     drawn: Option<u64>,
     pixels: Vec<u8>,
+    /// [`clear_tex`] by texture.
+    clear: HashMap<Tex, bool>,
 }
 
 pub struct SeaRenderPlugin;
@@ -390,10 +396,28 @@ pub struct SeaRenderPlugin;
 impl Plugin for SeaRenderPlugin {
     fn build(&self, app: &mut App) {
         if !enabled() { return; }
+        crate::sea_water::build(app);
         app.init_resource::<SeaDraw>()
             .add_systems(crate::level_switch::LevelUnload, (crate::level_switch::reset::<SeaDraw>, crate::level_switch::reset::<crate::volumetric_light::SeaLevel>))
-            .add_systems(PostUpdate, draw.before(bevy::asset::AssetEventSystems));
+            .add_systems(PostUpdate, (draw, crate::sea_water::draw).chain().before(bevy::asset::AssetEventSystems));
     }
+}
+
+/// Water Enhanced's verdict on a group's texture (crate::water_render::clear_rgba; an animated image by its first frame
+/// as the module reads it), found once per texture.
+fn clear_tex(st: &mut SeaDraw, sea: &LevelSea, fx: Option<&[Option<rc_formats::texture::Texture>]>, tex: Tex) -> bool {
+    if let Some(&c) = st.clear.get(&tex) { return c; }
+    let (clear, what) = match tex {
+        Tex::Fx(i, _) => (fx.and_then(|f| f.get(i)?.as_ref()).is_some_and(|t| crate::water_render::clear_rgba(&t.rgba)), format!("fx texture {i}")),
+        Tex::Anim(a) => {
+            let mut px = Vec::new();
+            if let Some(f) = sea.anim_frames.get(&a) { grid_image(&GridFrames { frames: f.frames.iter().take(1).cloned().collect() }, 1, 0, &mut px); }
+            (!px.is_empty() && crate::water_render::clear_rgba(&px), format!("liquid image fx {}+{}", a.tex, a.frames))
+        }
+    };
+    println!("sea: {what} is {}", if clear { "clear water (Water Enhanced applies)" } else { "not clear water (kept Original)" });
+    st.clear.insert(tex, clear);
+    clear
 }
 
 type MainCamera<'w, 's> = Query<'w, 's, &'static Transform, (With<Camera3d>, Without<crate::sky_render::SkyCamera>)>;
@@ -437,6 +461,8 @@ fn draw(
     mut vis: Query<&mut Visibility>,
     particles: Option<Res<crate::particle_render::ParticleSim>>,
     mut sea_level: ResMut<crate::volumetric_light::SeaLevel>,
+    gfx: Res<crate::graphics::GraphicsSettings>,
+    mut enhanced: ResMut<crate::sea_water::SeaWaterDraw>,
 ) {
     let st = state.into_inner();
     let Some(p) = play.as_deref() else { return };
@@ -465,6 +491,8 @@ fn draw(
         sea_level.0 = ocean;
     }
     let mut groups: Vec<Group> = Vec::new();
+    // Per callback: its first group and whether its port is a liquid (crate::sea_water::liquid_port).
+    let mut liquid: Vec<(usize, bool)> = Vec::new();
     // The animated images of this tick, made once each.
     let mut made: Vec<GridAnim> = Vec::new();
     let mut anim = |a: GridAnim, st: &mut SeaDraw, images: &mut Assets<Image>| -> bool {
@@ -492,6 +520,7 @@ fn draw(
         let Some(data) = gs::data(water, port) else { continue };
         let run = &water.sea.run[port];
         let bias = if ties { TIES_BIAS } else { SEA_LIST1_BIAS } + (k * 4) as f32;
+        liquid.push((groups.len(), crate::sea_water::liquid_port(gs::PORTS[port].kind)));
         match (gs::PORTS[port].kind, data) {
             (SeaKind::Grid(gp), SeaData::Grid(g)) => {
                 if !gs::grid_draws(port, &m.pvars, &p.svc.volumes, cam) { continue; }
@@ -567,6 +596,26 @@ fn draw(
             _ => {}
         }
     }
+    // Water Enhanced: the clear liquid surfaces seen from above go to crate::sea_water instead.
+    let mut clear_seas = Vec::new();
+    if gfx.water.on() {
+        let all = std::mem::take(&mut groups);
+        for (i, g) in all.into_iter().enumerate() {
+            let is_liquid = liquid.iter().rev().find(|m| m.0 <= i).is_some_and(|m| m.1);
+            if is_liquid && g.effect.is_none() && clear_tex(st, &level.0.sea, fx, g.tex) && crate::sea_water::from_above(&g.prims, cam[2]) {
+                let img = match g.tex {
+                    Tex::Fx(i, a) => fx_handle(st, &mut images, fx, i, a),
+                    Tex::Anim(a) => st.anim_images.get(&a).cloned(),
+                };
+                if let Some(image) = img {
+                    clear_seas.push(crate::sea_water::SeaGroup { image, fog: g.fog, prims: g.prims });
+                    continue;
+                }
+            }
+            groups.push(g);
+        }
+    }
+    enhanced.pending = Some(clear_seas);
     // Show the groups in slots 0.., hide the rest.
     let n = groups.len();
     for (k, g) in groups.into_iter().enumerate() {

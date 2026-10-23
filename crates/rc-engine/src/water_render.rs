@@ -279,9 +279,12 @@ impl WaterRings {
 
 /// Whether an FX texture is clear water, by its average colour: blue over red and not far under green (lava, mud
 /// and sludge are not).
-fn clear_water(t: &rc_formats::texture::Texture) -> bool {
-    let n = (t.rgba.len() / 4).max(1) as f32;
-    let sum = t.rgba.as_chunks::<4>().0.iter().fold([0.0f32; 3], |a, p| [a[0] + p[0] as f32, a[1] + p[1] as f32, a[2] + p[2] as f32]);
+fn clear_water(t: &rc_formats::texture::Texture) -> bool { clear_rgba(&t.rgba) }
+
+/// [`clear_water`] of RGBA texels (crate::sea_render's liquid images too).
+pub fn clear_rgba(rgba: &[u8]) -> bool {
+    let n = (rgba.len() / 4).max(1) as f32;
+    let sum = rgba.as_chunks::<4>().0.iter().fold([0.0f32; 3], |a, p| [a[0] + p[0] as f32, a[1] + p[1] as f32, a[2] + p[2] as f32]);
     let [r, g, b] = sum.map(|s| s / n);
     b >= 1.15 * r && b >= 0.8 * g
 }
@@ -399,6 +402,11 @@ pub struct WaterState {
     rings_bytes: Vec<u8>,
     /// [`clear_water`] by FX index, found on first use.
     clear_fx: std::collections::HashMap<i32, bool>,
+}
+
+impl WaterState {
+    /// The [`WaterRings`] buffer (crate::sea_water's seas share the rings).
+    pub fn rings_buffer(&self) -> Handle<ShaderBuffer> { self.rings_buf.clone() }
 }
 
 pub struct WaterPlugin;
