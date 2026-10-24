@@ -25,7 +25,8 @@
 //   Ratchet meets the water (`rings`, crate::water_render::WaterRings);
 // * the bed: the scene copy at the pixel bent by the waves (refraction; unbent where the bent pixel is in front of
 //   the surface), absorbed over the water's thickness toward the water texture's own colour, with caustics (ridges of
-//   moving gradient noise, fading with the depth under the surface) where the key light reaches;
+//   moving gradient noise, fading with the depth under the surface) where the key light reaches; with the
+//   reflection, never hiding more of the bed than the original's FIX blend does;
 // * a reflection along the wave normal, traced in screen space against the scene copy (the fog colour where the ray
 //   leaves the screen), weighted by a Fresnel term, plus the key light's glint;
 // * foam along the shore. At the shore line (no thickness) the result is the scene behind, so the edge has no seam.
@@ -341,14 +342,18 @@ fn fragment(in: WaterVertexOutput) -> @location(0) vec4<f32> {
     // Absorption toward the water's own colour (the texture as the game drew it, darkened with depth).
     let tint = srgb_to_linear(rgb);
     let deep = tint * 0.55;
+    // Never less of the scene under the surface than the original's blend shows (1 − FIX/128 of it): the
+    // reflection is capped at FIX/128 and the bed's transmission kept at least `keep / (1 − f)` (a creature
+    // under a deep pool stays in sight when the camera looks along the surface).
+    let keep = clamp(1.0 - params.misc.x, 0.0, 1.0);
+    let cos_v = max(dot(n, to_eye), 0.0);
+    let f = min((0.08 + 0.92 * pow(1.0 - cos_v, 4.0)) * shore, min(1.0 - keep, 0.9));
     let absorb = vec3<f32>(0.30, 0.12, 0.07) * (0.6 + params.misc.x);
-    let trans = exp(-absorb * path);
+    let trans = max(exp(-absorb * path), vec3<f32>(keep * shore / (1.0 - f)));
     var col = bed * trans + deep * (1.0 - trans);
-    col = mix(col, tint, 0.12 * shore);
+    col = mix(col, tint, 0.12 * shore * (1.0 - keep));
 
     // Reflection (Fresnel, raised a little so the surface reads as water from above) and the key light's glint.
-    let cos_v = max(dot(n, to_eye), 0.0);
-    let f = (0.08 + 0.92 * pow(1.0 - cos_v, 4.0)) * shore;
     var r = reflection(vp, reflect(-to_eye, n), size);
     let l = normalize((view.view_from_world * vec4<f32>(look.sun.xyz, 0.0)).xyz);
     let glint = pow(max(dot(n, normalize(l + to_eye)), 0.0), 300.0) * 4.0 * smoothstep(0.0, 0.1, look.sun.y);
