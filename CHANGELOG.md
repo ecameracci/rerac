@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Water on Enhanced: deep pools are no longer opaque when the camera looks along the surface. Creatures under the water stay visible, such as Umbris' swamp fish coming for Ratchet, and so do the pool floors. The water never hides more of what is under it than Water on Original does.
+
 ## v0.4.3-alpha
 
 - Blarg: after Clank hands the hero back to Ratchet (and the Hydrodisplacer cutscene), Clank's footsteps no longer keep playing at the Clank station. The same applies to Orxon's Clank section.
