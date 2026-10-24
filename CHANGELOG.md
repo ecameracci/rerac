@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- With a completed save, ordinary moves no longer toggle cheats ("Cheat Enabled" / "Cheat Disabled") on planets other than Novalis: the cheat move sequences are read from every level's own data, so only the game's sequences turn cheats on, as in the original. The Cheats page's list and the pause menu's debug codes read the right tables on every level too.
+
 ## v0.4.3-alpha
 
 - Blarg: after Clank hands the hero back to Ratchet (and the Hydrodisplacer cutscene), Clank's footsteps no longer keep playing at the Clank station. The same applies to Orxon's Clank section.
