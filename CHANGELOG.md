@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Water on Enhanced: shallow pools with a flat floor, such as the one at the bottom of Rilgar's water slide, are no longer covered in white foam that made them look opaque. Foam now only forms where the floor rises toward the surface: along shores, walls and the edges of platforms.
+
 ## v0.4.3-alpha
 
 - Blarg: after Clank hands the hero back to Ratchet (and the Hydrodisplacer cutscene), Clank's footsteps no longer keep playing at the Clank station. The same applies to Orxon's Clank section.
