@@ -8,25 +8,28 @@
 //!    [`LENGTH`] units ([`SKY_LENGTH`] toward the sky, so it does not wash out), in [`STEPS`] steps packed toward the
 //!    camera ([`step`]) from a per-pixel dithered start (interleaved gradient noise). Each step looks the sun's
 //!    cascades up (crate::sun_shadow `SunCascades`, one comparison tap): a lit step adds `σ·T·dt` of a uniform thin
-//!    medium ([`DENSITY`] σ, extinction `T = exp(−σt)`), and the sum is weighted by the Henyey-Greenstein phase
-//!    ([`phase`], [`G`]: forward scattering, strongest looking toward the light). Into an RGBA16F target, the
-//!    sample's view distance in alpha.
+//!    medium ([`DENSITY`] σ, extinction `T = exp(−σt)`), weighted by the shadow around it ([`Shafts`]: in full
+//!    within [`EDGE`] of a long shadow along the ray, [`OPEN`] in lit air far from one, so a shaded space with a lit
+//!    opening gets bold beams and open daylight stays clear), and the sum by the Henyey-Greenstein phase ([`phase`],
+//!    [`G`]: forward scattering, strongest looking toward the light). Into an RGBA16F target, the sample's view
+//!    distance in alpha.
 //! 2. **Composite** (full resolution): a 4×4 depth-aware (bilateral) blur of the march target, upsampled and added
 //!    to the frame. The scene itself is not dimmed by the medium (the game's fog already does that).
 //!
 //! The colour is the key light's ([`VolumetricLight::tint`]: light set 0's light A, `ShadowGame::sun_color`) pulled
 //! [`FOG_MIX`] of the way toward the frame's fog colour (crate::game_camera `GameFog`), so it sits in the level's
 //! palette; its strength follows that light's brightness ([`strength`]: levels without a real sun get little or none)
-//! and fades out as the light nears the horizon. The shafts follow the shadow light (the key light raised to at least
-//! 60°, crate::sun_shadow), so they match the shadows on the ground, not the characters' shading. Nothing runs without
-//! the sun's cascades (`RC_SHADOWS=0`) or under Lighting Original or Simple.
+//! and fades out as the light nears the horizon. The shafts follow the shadow light (under Enhanced the key light's
+//! own elevation, at least 30°: crate::sun_shadow `min_elevation`), so they match the shadows on the ground.
+//! Nothing runs without the sun's cascades (`RC_SHADOWS=0`) or under Lighting Original or Simple.
 //!
-//! Tuned on Kerwan's first tunnel (`RC_LEVEL=3 RC_HERO_AT=264,116,54.5,1.5708`: the air inside it shadowed, the
-//! opening's lit air cut by the hanging vines) and Novalis' spawn (open daylight: a light veil, no wash-out).
+//! Tuned on Kerwan's first tunnel (`RC_LEVEL=3 RC_HERO_AT=264,116,54.5,1.5708`; its 35° key light does not reach
+//! inside, so the shafts are in the opening, cut by the arch and the vines; with `RC_SUN_DIR=0.4,-0.5,0.75` bold beams
+//! cross the tunnel's air), Kerwan's spawn (sunlit floor, shadowed walls: clear) and Novalis' spawn (open daylight).
 //!
 //! Dev switches: `RC_VOLUMETRIC=0` off; a number scales the strength (`2`: twice as bright).
-//! `RC_VOLUMETRIC_TUNE=steps,density,g,length,sky` overrides the march constants (an empty field keeps one);
-//! `RC_VOLUMETRIC_DEBUG=<gain>` shows the shafts alone, times the gain.
+//! `RC_VOLUMETRIC_TUNE=steps,density,g,length,sky,open,edge,shade,after_lit` overrides the constants (an empty
+//! field keeps one); `RC_VOLUMETRIC_DEBUG=<gain>` shows the shafts alone, times the gain.
 
 use crate::fx_view::{depth_defs, depth_entry, Fullscreen, FxView, Pipelines};
 use crate::game_camera::GameFog;
@@ -62,11 +65,18 @@ const LENGTH: f32 = 48.0;
 /// The ray toward the sky (no surface).
 const SKY_LENGTH: f32 = 12.0;
 /// The medium's scattering (and extinction) coefficient σ, per world unit.
-const DENSITY: f32 = 0.006;
-/// The Henyey-Greenstein asymmetry: > 0 scatters forward.
-const G: f32 = 0.5;
+const DENSITY: f32 = 0.02;
+/// The Henyey-Greenstein asymmetry: > 0 scatters forward (mild, so the shafts also show seen from the side).
+const G: f32 = 0.3;
 /// The in-scattered light's brightness at full strength.
-const INTENSITY: f32 = 0.5;
+const INTENSITY: f32 = 2.0;
+/// [`Shafts`]' weight of lit air far from shadow; the distance (world units) over which it rises to 1 near one; the
+/// length along the ray (world units) from which a shadow counts in full; the weight of a shadow behind lit air while
+/// the camera is in sunlight.
+const OPEN: f32 = 0.05;
+const EDGE: f32 = 4.0;
+const SHADE: f32 = 4.0;
+const AFTER_LIT: f32 = 0.25;
 /// How far the key light's hue is pulled toward the fog colour.
 const FOG_MIX: f32 = 0.35;
 /// The key light's luminance (1.0 = 128 on the colour byte) from which the shafts start, and at which they are full.
@@ -117,6 +127,100 @@ pub fn step(i: u32, n: u32, jitter: f32, length: f32) -> (f32, f32) {
     (length * u * u, length * 2.0 * u / n as f32)
 }
 
+/// [`Shafts`]' shape: see there.
+#[derive(Clone, Copy)]
+#[cfg_attr(not(test), allow(dead_code))]
+pub struct ShaftShape {
+    pub open: f32,
+    pub edge: f32,
+    pub shade: f32,
+    pub after_lit: f32,
+}
+
+impl Default for ShaftShape {
+    fn default() -> Self { ShaftShape { open: OPEN, edge: EDGE, shade: SHADE, after_lit: AFTER_LIT } }
+}
+
+/// A lit run along the ray: its start, its last step, `Σ s`, `Σ s·exp(−d/edge)`, `Σ s·exp(d/edge)` (`d` from its
+/// start), the weight of the shadow before it.
+#[derive(Clone, Copy)]
+#[cfg_attr(not(test), allow(dead_code))]
+struct Run(f32, f32, f32, f32, f32, f32);
+
+/// One ray's in-scattering, weighted by the shadow around each lit step (mirrored in the shader's `march`). A step
+/// weighs `open` in lit air far from shadow (open daylight, the sky), rising to 1 within about `edge` units along
+/// the ray of a shadow bounding its lit run: `1 − (1 − wb·a)(1 − wa·b)` with `a`, `b` = `exp(−d/edge)` to the run's
+/// start and end. A bounding shadow weighs by its length along the ray (`smoothstep(shade/4, shade, length)`: a
+/// character's thin shadow does not light up the air around it), the one after a run (lit air in front of a shadowed
+/// wall) also by `after_lit` while the camera is in sunlight, so open daylight stays clear and a shaded space (the
+/// ray starting in a long shadow) gets bold shafts at its lit opening and across its beams. Steps less than half lit
+/// (penumbra) count in full. A run's exponentials are summed separably (`a·b` is its constant
+/// `exp(−length/edge)`); a run ended by a shadow waits for that shadow's length.
+#[derive(Default)]
+#[cfg_attr(not(test), allow(dead_code))]
+pub struct Shafts {
+    shape: ShaftShape,
+    total: f32,
+    /// The camera's shade (the weight of a shadow the ray starts in), once known.
+    cam: Option<f32>,
+    /// The current shadow's length, while the ray is in one.
+    shadow: Option<f32>,
+    /// The weight of the last shadow (for the next run).
+    before: f32,
+    run: Option<Run>,
+    /// A run ended by the current shadow.
+    pending: Option<Run>,
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+impl Shafts {
+    pub fn new(mut shape: ShaftShape) -> Self {
+        shape.edge = shape.edge.max(1.0);
+        shape.shade = shape.shade.max(1e-3);
+        Shafts { shape, ..default() }
+    }
+
+    /// A step at distance `t`, `dt` long, scattering `s` (`σ·T·dt`) with sun visibility `vis` (0..1).
+    pub fn step(&mut self, t: f32, dt: f32, s: f32, vis: f32) {
+        let s = s * vis;
+        if vis >= 0.5 {
+            self.end_shadow();
+            if self.cam.is_none() { self.cam = Some(0.0); }
+            let Run(start, _, sum, a, b, before) = self.run.unwrap_or(Run(t, t, 0.0, 0.0, 0.0, self.before));
+            let d = ((t - start) / self.shape.edge).min(60.0);
+            self.run = Some(Run(start, t, sum + s, a + s * (-d).exp(), b + s * d.exp(), before));
+        } else {
+            if let Some(r) = self.run.take() { self.pending = Some(r); }
+            self.shadow = Some(self.shadow.unwrap_or(0.0) + dt);
+            self.total += s;
+        }
+    }
+
+    fn end_shadow(&mut self) {
+        let Some(len) = self.shadow.take() else { return };
+        let shade = self.shape.shade;
+        let w = smoothstep(0.25 * shade, shade, len);
+        if self.cam.is_none() { self.cam = Some(w); }
+        if let Some(r) = self.pending.take() { self.close(r, w); }
+        self.before = w;
+    }
+
+    fn close(&mut self, Run(start, end, sum, a, b, before): Run, after: f32) {
+        let ShaftShape { open, edge, after_lit, .. } = self.shape;
+        let after = after * (after_lit + (1.0 - after_lit) * self.cam.unwrap_or(0.0));
+        let ab = (-((end - start) / edge).min(60.0)).exp();
+        let near = before * a + after * ab * b - before * after * ab * sum;
+        self.total += open * sum + (1.0 - open) * near;
+    }
+
+    /// The ray's weighted in-scattering (the surface or the ray's end bounds a last lit run).
+    pub fn finish(mut self) -> f32 {
+        self.end_shadow();
+        if let Some(r) = self.run.take() { self.close(r, 0.0); }
+        self.total
+    }
+}
+
 /// The shafts' strength for a key light of colour `color` (1.0 = 128 on the colour byte) whose direction toward it
 /// rises `to_light_y` (unit vector's y): none from a dim light or one at or below the horizon.
 pub fn strength(color: Vec3, to_light_y: f32) -> f32 {
@@ -144,12 +248,12 @@ fn env_scale() -> f32 {
     *SCALE.get_or_init(|| std::env::var("RC_VOLUMETRIC").ok().and_then(|v| v.trim().parse::<f32>().ok()).map_or(1.0, |v| v.max(0.0)))
 }
 
-/// The march's steps, density, phase g, longest ray and sky ray: the constants, or `RC_VOLUMETRIC_TUNE=` five
-/// numbers (an empty field keeps the constant).
-fn tune() -> [f32; 5] {
-    static TUNE: OnceLock<[f32; 5]> = OnceLock::new();
+/// The march's steps, density, phase g, longest ray, sky ray and [`ShaftShape`] (open, edge, shade, after_lit):
+/// the constants, or `RC_VOLUMETRIC_TUNE=` up to nine numbers (an empty field keeps the constant).
+fn tune() -> [f32; 9] {
+    static TUNE: OnceLock<[f32; 9]> = OnceLock::new();
     *TUNE.get_or_init(|| {
-        let mut v = [STEPS as f32, DENSITY, G, LENGTH, SKY_LENGTH];
+        let mut v = [STEPS as f32, DENSITY, G, LENGTH, SKY_LENGTH, OPEN, EDGE, SHADE, AFTER_LIT];
         if let Ok(s) = std::env::var("RC_VOLUMETRIC_TUNE") {
             for (slot, f) in v.iter_mut().zip(s.split(',')) {
                 if let Ok(x) = f.trim().parse::<f32>() { *slot = x; }
@@ -195,6 +299,8 @@ struct VolParams {
     march: Vec4,
     /// The sky ray, the debug gain (`RC_VOLUMETRIC_DEBUG`), the target's width and height.
     extra: Vec4,
+    /// [`ShaftShape`]: open, edge, shade, after_lit.
+    shape: Vec4,
 }
 
 #[derive(Resource)]
@@ -300,11 +406,12 @@ fn volumetric_pass(
     let Some((sun, count)) = SunCascades::of([light], entity) else { return };
     let (Some(mut fx), Some(size)) = (FxView::of(cam, ev), cam.physical_target_size) else { return };
     fx.extra = (-light.transform.forward().as_vec3()).extend(0.0);
-    let [steps, density, g, length, sky] = tune();
+    let [steps, density, g, length, sky, open, edge, shade, after_lit] = tune();
     let params = VolParams {
         tint: (vol.tint * vol.strength).extend(count as f32),
         march: Vec4::new(steps.round().max(1.0), density, g, length),
         extra: Vec4::new(sky, debug_gain(), size.x as f32, size.y as f32),
+        shape: Vec4::new(open, edge.max(1.0), shade.max(1e-3), after_lit),
     };
     let format = target.main_texture_format();
     let ms = depth.texture.sample_count() > 1;
@@ -415,6 +522,50 @@ mod tests {
         assert!(ts.windows(2).all(|w| w[1] > w[0]) && *ts.last().unwrap() < len);
         // Denser near the camera: the first quarter of the steps covers well under a quarter of the ray.
         assert!(step(n / 4, n, 0.0, len).0 < len / 10.0);
+    }
+
+    /// A ray of `(t, dt, vis)` steps, each scattering `S` where lit.
+    fn ray(steps: &[(f32, f32, f32)]) -> f32 {
+        let mut r = Shafts::new(ShaftShape::default());
+        for &(t, dt, vis) in steps { r.step(t, dt, S, vis); }
+        r.finish()
+    }
+
+    const S: f32 = 0.01;
+
+    #[test]
+    fn shafts_stand_out_next_to_long_shadows() {
+        // Uniformly lit air (open daylight, the sky): the open weight only.
+        let lit: Vec<_> = (0..24).map(|i| (i as f32 * 2.0, 2.0, 1.0)).collect();
+        assert!((ray(&lit) - OPEN * 24.0 * S).abs() < 1e-6);
+        // In shadow throughout: nothing; a penumbra step counts in full.
+        assert_eq!(ray(&[(0.0, 1.0, 0.0), (1.0, 1.0, 0.0)]), 0.0);
+        assert!((ray(&[(0.0, 1.0, 0.0), (1.0, 1.0, 0.3)]) - 0.3 * S).abs() < 1e-7);
+        // A thin beam between long shadows (inside a tunnel): nearly in full.
+        let beam = ray(&[(0.0, SHADE, 0.0), (SHADE, 0.5, 1.0), (SHADE + 0.5, 0.5, 1.0), (SHADE + 1.0, SHADE, 0.0)]);
+        assert!(beam > 0.95 * 2.0 * S && beam <= 2.0 * S + 1e-6, "{beam}");
+        // The same lit air beside a character's thin shadow: the open weight.
+        let thin = ray(&[(0.0, 0.5, 1.0), (0.5, 0.2, 0.0), (0.7, 0.5, 1.0), (1.2, 0.5, 1.0)]);
+        assert!((thin - OPEN * 3.0 * S).abs() < 1e-6, "{thin}");
+        // Out of a long shadow into open light: in full at the edge, near the open weight five edges past it.
+        let out = ray(&[(0.0, SHADE, 0.0), (SHADE, 1.0, 1.0), (SHADE + 5.0 * EDGE, 1.0, 1.0)]);
+        let far = OPEN + (1.0 - OPEN) * (-5.0f32).exp();
+        assert!((out - S * (1.0 + far)).abs() < 1e-6, "{out}");
+        // A wide lit run between long shadows: each step by its nearer edge, never above 1.
+        let wide = ray(&[(0.0, SHADE, 0.0), (1.0, 1.0, 1.0), (1.0 + EDGE, 1.0, 1.0), (1.0 + 2.0 * EDGE, 1.0, 1.0), (2.0 + 2.0 * EDGE, SHADE, 0.0)]);
+        let mid = 1.0 - (1.0 - (-1.0f32).exp()).powi(2);
+        assert!((wide - S * (2.0 + OPEN + (1.0 - OPEN) * mid)).abs() < 1e-6, "{wide}");
+    }
+
+    #[test]
+    fn shadow_behind_lit_air_counts_less_from_sunlight() {
+        // Lit air in front of a shadowed wall: from a sunlit camera by `AFTER_LIT`, from a shaded one in full.
+        let from_sun = ray(&[(0.0, 1.0, 1.0), (5.0 * EDGE, 1.0, 1.0), (5.0 * EDGE + 1.0, SHADE, 0.0)]);
+        let w = OPEN + (1.0 - OPEN) * AFTER_LIT;
+        assert!((from_sun - S * (w + OPEN + (1.0 - OPEN) * AFTER_LIT * (-5.0f32).exp())).abs() < 1e-6, "{from_sun}");
+        let from_shade = ray(&[(0.0, SHADE, 0.0), (SHADE, 1.0, 1.0), (SHADE + 5.0 * EDGE, 1.0, 1.0), (SHADE + 5.0 * EDGE + 1.0, SHADE, 0.0)]);
+        assert!((from_shade - 2.0 * S).abs() < 1e-6, "{from_shade}");
+        assert!(from_shade > 1.5 * from_sun);
     }
 
     #[test]

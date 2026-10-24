@@ -4,8 +4,10 @@
 //!
 //! Standard cascaded shadow mapping:
 //! - **Casters:** a Bevy `DirectionalLight` with shadow maps along the level's key light (light set 0's direction A,
-//!   or B over a dim under-light A: `ShadowGame::sun_light`, fixed for the level; a fixed high sun where there is no game), raised to at least
-//!   [`MIN_ELEVATION`] on the same bearing. Bevy renders its
+//!   or B over a dim under-light A: `ShadowGame::sun_light`, fixed for the level; a fixed high sun where there is no
+//!   game), raised on the same bearing to at least [`MIN_ELEVATION`] (60°) under Simple, [`ENHANCED_FLOOR`] (30°)
+//!   under Enhanced ([`min_elevation`]: Enhanced keeps most levels' own elevation, so its shafts slant in under arches;
+//!   the canopies' long shadows are accepted there). Bevy renders its
 //!   cascades from the materials' shadow halves (the shaders' `PREPASS_PIPELINE` branch,
 //!   gs_state::specialize_shadow): tfrags and ties at their full detail whatever the camera's LOD and cull (tfrags
 //!   their LOD-0 list, ties LOD 0 unmorphed and never hidden from Bevy while the sun casts: crate::tie_lod), so the
@@ -22,13 +24,15 @@
 //! drawn, so such a moby casts nothing, and a shrub casts only within its draw distance of the camera; the blended
 //! draws (water, particles, effects) are not shadowed.
 //!
-//! Dev switches: `RC_SUN_DIR=x,y,z` (the light's travel direction, world), `RC_SUN_CASTERS` ([`casts`]),
+//! Dev switches: `RC_SUN_DIR=x,y,z` (the light's travel direction, world), `RC_SUN_FLOOR=<degrees>` (Enhanced's
+//! floor), `RC_SUN_CASTERS` ([`casts`]),
 //! `RC_SUN_DEBUG=1` (the receiver replaces the frame: cascade 0/1/2/3 red/green/blue/yellow, dark where shadowed;
 //! `2` also colours the skipped pixels: no depth blue, too far green, facing away magenta), `RC_SUN_DUMP=<n>`
 //! (the module `dump`).
 
 use crate::fx_view::{self, depth_defs, depth_entry, Fullscreen, FxView, Pipelines};
 use crate::gameplay::Play;
+use crate::graphics::Lighting;
 use crate::shadow_render::{ShadowCamera, ShadowGame, ShadowPassSet, ShadowSettings};
 use bevy::core_pipeline::core_3d::{main_opaque_pass_3d, main_transparent_pass_3d};
 use bevy::core_pipeline::{Core3d, Core3dSystems, FullscreenShader};
@@ -46,6 +50,7 @@ use bevy::render::renderer::{RenderContext, RenderDevice, ViewQuery};
 use bevy::render::view::{ExtractedView, ViewDepthTexture, ViewTarget};
 use bevy::render::{RenderApp, RenderStartup};
 use bevy::shader::Shader;
+use std::sync::OnceLock;
 
 const SHADER_PATH: &str = "shaders/sun_shadow.wgsl";
 /// The darkening of a shadowed, light-facing pixel (linear light).
@@ -53,9 +58,12 @@ const STRENGTH: f32 = 0.45;
 /// Beyond this distance from the camera (world units) nothing is shadowed; from 80 % of it the shadows fade.
 pub const MAX_DISTANCE: f32 = 150.0;
 const CASCADES: usize = 3;
-/// The sun's lowest elevation (radians). The hero's key light is often low (Novalis spawn: 33°) and set for the
-/// characters' shading; a sun that low lays the giant trees' canopies over whole areas.
+/// The sun's lowest elevation under Lighting Simple (radians). The hero's key light is often low (Novalis spawn: 33°)
+/// and set for the characters' shading; a sun that low lays the giant trees' canopies over whole areas.
 const MIN_ELEVATION: f32 = 60.0 * std::f32::consts::PI / 180.0;
+/// The sun's lowest elevation under Lighting Enhanced (radians; `RC_SUN_FLOOR=<degrees>`): the key light's own
+/// elevation down to this, so crate::volumetric_light's shafts slant in under arches and into tunnels.
+pub const ENHANCED_FLOOR: f32 = 30.0 * std::f32::consts::PI / 180.0;
 /// The light where no game runs (the title world, `RC_PLAY=0`): high, from behind the default camera's left.
 const DEFAULT_DIR: Vec3 = Vec3::new(0.35, -0.85, 0.4);
 
@@ -105,11 +113,27 @@ impl Plugin for SunShadowPlugin {
     }
 }
 
-/// A light travelling `dir`, at least [`MIN_ELEVATION`] above the horizon (same compass bearing).
-fn raised(dir: Vec3) -> Vec3 {
+/// The sun's lowest elevation (radians) under `lighting`: [`ENHANCED_FLOOR`] (or `floor_deg`, `RC_SUN_FLOOR`) under
+/// Enhanced, [`MIN_ELEVATION`] otherwise.
+pub fn min_elevation(lighting: Lighting, floor_deg: Option<f32>) -> f32 {
+    if !lighting.enhanced() { return MIN_ELEVATION; }
+    floor_deg.map_or(ENHANCED_FLOOR, |d| d.clamp(0.0, 90.0).to_radians())
+}
+
+/// `RC_SUN_FLOOR=<degrees>`: Enhanced's [`ENHANCED_FLOOR`] in its place.
+fn env_floor() -> Option<f32> {
+    static FLOOR: OnceLock<Option<f32>> = OnceLock::new();
+    *FLOOR.get_or_init(|| std::env::var("RC_SUN_FLOOR").ok().and_then(|v| v.trim().parse().ok()))
+}
+
+/// A light's elevation above the horizon (degrees) from its travel direction.
+fn elevation_deg(dir: Vec3) -> f32 { (-dir.y).clamp(-1.0, 1.0).asin().to_degrees() }
+
+/// A light travelling `dir`, at least `min` (radians) above the horizon (same compass bearing).
+fn raised(dir: Vec3, min: f32) -> Vec3 {
     let flat = Vec2::new(dir.x, dir.z);
-    if -dir.y >= MIN_ELEVATION.sin() || flat.length() < 1e-4 { return dir; }
-    let (s, c) = MIN_ELEVATION.sin_cos();
+    if -dir.y >= min.sin() || flat.length() < 1e-4 { return dir; }
+    let (s, c) = min.sin_cos();
     let f = flat.normalize() * c;
     Vec3::new(f.x, -s, f.y)
 }
@@ -122,9 +146,14 @@ fn follow(
     play: Option<Res<Play>>,
     mut key: ResMut<KeyLight>,
     mut suns: Query<(Entity, &mut Transform), With<Sun>>,
+    mut logged: Local<Option<(Vec3, Lighting)>>,
 ) {
-    let mut dir = game.filter(|_| play.is_some()).and_then(|g| g.sun_light()).unwrap_or(DEFAULT_DIR.normalize());
-    dir = raised(dir);
+    let key_dir = game.filter(|_| play.is_some()).and_then(|g| g.sun_light()).unwrap_or(DEFAULT_DIR.normalize());
+    let mut dir = raised(key_dir, min_elevation(gfx.lighting, env_floor()));
+    if gfx.lighting.sun_shadows() && *logged != Some((key_dir, gfx.lighting)) {
+        *logged = Some((key_dir, gfx.lighting));
+        println!("sun shadow: key light elevation {:.1} deg, shadow light {:.1} deg ({:?}; RC_SUN_FLOOR)", elevation_deg(key_dir), elevation_deg(dir), gfx.lighting);
+    }
     if let Some(d) = std::env::var("RC_SUN_DIR").ok().and_then(|v| {
         let n: Vec<f32> = v.split(',').filter_map(|s| s.trim().parse().ok()).collect();
         (n.len() == 3).then(|| Vec3::new(n[0], n[1], n[2]).normalize())
@@ -296,12 +325,26 @@ mod tests {
     #[test]
     fn low_key_light_is_raised_on_its_bearing() {
         let novalis = Vec3::new(-0.7774237, -0.54172873, -0.3195972);
-        let r = raised(novalis);
+        let r = raised(novalis, MIN_ELEVATION);
         assert!((r.length() - 1.0).abs() < 1e-5);
         assert!((-r.y - MIN_ELEVATION.sin()).abs() < 1e-5);
         assert!(Vec2::new(r.x, r.z).normalize().dot(Vec2::new(novalis.x, novalis.z).normalize()) > 0.9999);
         let high = Vec3::new(0.2, -1.0, 0.15).normalize();
-        assert_eq!(raised(high), high);
+        assert_eq!(raised(high, MIN_ELEVATION), high);
+    }
+
+    #[test]
+    fn enhanced_keeps_the_key_light_down_to_its_floor() {
+        assert_eq!(min_elevation(Lighting::Original, None), MIN_ELEVATION);
+        assert_eq!(min_elevation(Lighting::Simple, Some(10.0)), MIN_ELEVATION);
+        assert_eq!(min_elevation(Lighting::Enhanced, None), ENHANCED_FLOOR);
+        assert!((min_elevation(Lighting::Enhanced, Some(45.0)) - 45f32.to_radians()).abs() < 1e-6);
+        // Novalis' 33° key light is kept under Enhanced; a 20° one is raised to the floor.
+        let novalis = Vec3::new(-0.7774237, -0.54172873, -0.3195972);
+        assert_eq!(raised(novalis, min_elevation(Lighting::Enhanced, None)), novalis);
+        assert!((elevation_deg(novalis) - 32.8).abs() < 0.1, "{}", elevation_deg(novalis));
+        let low = Vec3::new(0.94, -0.342, 0.0);
+        assert!((elevation_deg(raised(low, ENHANCED_FLOOR)) - 30.0).abs() < 1e-3);
     }
 }
 

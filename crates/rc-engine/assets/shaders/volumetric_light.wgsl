@@ -1,6 +1,7 @@
 // Lighting Enhanced's volumetric light (crate::volumetric_light): in-scattering through the sun's cascaded shadow map.
 // `march` (half resolution): each pixel's view ray from the camera to the surface (or a short way toward the sky),
-// dithered steps packed toward the camera, lit steps adding σ·exp(−σt)·dt, weighted by the Henyey-Greenstein phase;
+// dithered steps packed toward the camera, lit steps adding σ·exp(−σt)·dt, each weighted by the shadow around it
+// (crate::volumetric_light::Shafts: bold next to long shadows, faint in open lit air), times the Henyey-Greenstein phase;
 // rgb = the in-scattered light, a = the sample's view distance. `composite` (full resolution): a 4×4 depth-aware blur
 // of that target, added to the frame. view.extra.xyz = toward the light (world).
 
@@ -21,6 +22,8 @@ struct VolParams {
     march: vec4<f32>,
     // The sky ray, the debug gain (> 0: the shafts alone, times it), the target's width and height.
     extra: vec4<f32>,
+    // crate::volumetric_light::ShaftShape: open, edge, shade, after_lit.
+    shape: vec4<f32>,
 }
 
 #ifdef MULTISAMPLED
@@ -46,6 +49,22 @@ fn inside_viewport(coord: vec2<f32>) -> bool {
 fn phase(cos_theta: f32, g: f32) -> f32 {
     let d = max(1.0 + g * g - 2.0 * g * cos_theta, 1.0e-4);
     return (1.0 - g * g) / (12.566371 * d * sqrt(d));
+}
+
+// crate::volumetric_light::Shafts::close: a lit run's weighted in-scattering. r = (Σ s, Σ s·exp(−d/edge),
+// Σ s·exp(d/edge), its length), d from its start; before / after: the weights of the shadows bounding it; cam: the
+// camera's shade.
+fn close_run(r: vec4<f32>, before: f32, after_shadow: f32, cam: f32) -> f32 {
+    let open = vol.shape.x;
+    let after = after_shadow * (vol.shape.w + (1.0 - vol.shape.w) * cam);
+    let ab = exp(-min(r.w / vol.shape.y, 60.0));
+    let near = before * r.y + after * ab * r.z - before * after * ab * r.x;
+    return open * r.x + (1.0 - open) * near;
+}
+
+// crate::volumetric_light::Shafts::end_shadow: a shadow's weight from its length along the ray.
+fn shadow_weight(len: f32) -> f32 {
+    return smoothstep(0.25 * vol.shape.z, vol.shape.z, len);
 }
 
 // 1 lit, 0 shadowed: one comparison tap (bilinear) in the cascade holding view depth `z`; lit outside the cascades.
@@ -82,15 +101,50 @@ fn march(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     let n = i32(vol.march.x);
     let sigma = vol.march.y;
     let jitter = fx_noise(in.position.xy);
+    // crate::volumetric_light::Shafts: the current lit run (see close_run; start < 0: none) and the weight of the
+    // shadow before it, a run ended by the current shadow (pending), the current shadow's length (< 0: lit), the
+    // weight of the last shadow, the camera's shade (< 0: not yet known).
     var sum = 0.0;
+    var run = vec4<f32>(0.0);
+    var start = -1.0;
+    var run_before = 0.0;
+    var pending = vec4<f32>(0.0);
+    var pending_before = 0.0;
+    var has_pending = false;
+    var shadow = -1.0;
+    var before = 0.0;
+    var cam = -1.0;
     for (var i = 0; i < n; i += 1) {
         // crate::volumetric_light::step.
         let u = (f32(i) + jitter) / f32(n);
         let t = len * u * u;
         let dt = len * 2.0 * u / f32(n);
         let vis = sun_visibility(eye + ray * t, t * forward);
-        sum += vis * exp(-sigma * t) * sigma * dt;
+        let s = vis * exp(-sigma * t) * sigma * dt;
+        if (vis >= 0.5) {
+            if (shadow >= 0.0) {
+                let w = shadow_weight(shadow);
+                if (cam < 0.0) { cam = w; }
+                if (has_pending) { sum += close_run(pending, pending_before, w, cam); has_pending = false; }
+                before = w;
+                shadow = -1.0;
+            }
+            if (cam < 0.0) { cam = 0.0; }
+            if (start < 0.0) { start = t; run = vec4<f32>(0.0); run_before = before; }
+            let d = min((t - start) / vol.shape.y, 60.0);
+            run = vec4<f32>(run.x + s, run.y + s * exp(-d), run.z + s * exp(d), t - start);
+        } else {
+            if (start >= 0.0) { pending = run; pending_before = run_before; has_pending = true; start = -1.0; }
+            shadow = max(shadow, 0.0) + dt;
+            sum += s;
+        }
     }
+    if (shadow >= 0.0) {
+        let w = shadow_weight(shadow);
+        if (cam < 0.0) { cam = w; }
+        if (has_pending) { sum += close_run(pending, pending_before, w, cam); }
+    }
+    if (start >= 0.0) { sum += close_run(run, run_before, 0.0, max(cam, 0.0)); }
     let light = vol.tint.rgb * sum * phase(dot(ray, view.extra.xyz), vol.march.z) * 12.566371;
     return vec4<f32>(light, dist);
 }
