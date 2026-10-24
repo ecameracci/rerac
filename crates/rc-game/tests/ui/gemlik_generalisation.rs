@@ -99,6 +99,26 @@ fn every_level_resolves_the_goodies_descriptions() {
     }
 }
 
+/// The cheat tables (`rc_game::cheats::CheatTables`: the move patterns 0x179b80, the Cheats page's list 0x20a228 /
+/// 0x20a248, the debug codes 0x1ba020) are engine data: mapped on every level and the same as level 01's. Unmapped,
+/// Umbris read other bytes at 0x179b80 and one-move patterns toggled cheats 6 and 11 in play.
+#[test]
+fn every_level_reads_the_cheat_tables() {
+    use rc_game::cheats::{label, CheatTables};
+    let Some(n) = menus(1) else { eprintln!("skipped: no extracted/"); return };
+    let t1 = CheatTables::read(&n);
+    assert_eq!(t1.patterns[0], [1, 2, 3, 3, 4, 5, 4, 6], "level 01's first pattern");
+    assert!(t1.patterns[8..].iter().all(Vec::is_empty), "slots 8..11 have no pattern");
+    assert_eq!((t1.list.len(), t1.codes.len()), (7, 256));
+    for level in 0..19 {
+        let ov = menus(level).unwrap();
+        for l in [label::PATTERNS, label::LIST_SLOTS, label::LIST_LABELS, label::CODES] {
+            assert!(ov.maps(l), "level {level:02}: {l:#x} unmapped");
+        }
+        assert_eq!(CheatTables::read(&ov), t1, "level {level:02}");
+    }
+}
+
 /// Gemlik's content gap (a queue for later, not a check): the placed classes whose update is not ported, with
 /// their instances, update address, sequence / joint counts and a kind guess (no class blob → controller / fx;
 /// ≥ 8 sequences and ≥ 8 joints → creature; else prop). `cargo xtask test-job --test ui --filter
