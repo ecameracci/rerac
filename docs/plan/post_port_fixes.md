@@ -20,3 +20,16 @@ file>" when it is fixed.
   never passes 0xf again, so the bit stays off until it dies.
 - **Port:** `rc-game` `rilgar_biter` (`waiting`, the `KNOCKED` arm of `update`), faithful.
 - **Fix idea:** set the targetable bit when the knockback lands (0xb → 4).
+
+### PPF-002: an Umbris swamp beast vanishes when its mouth brushes Ratchet outside a lunge
+
+- **Seen:** Umbris, the swamp pool by (245, 316) (session 2026-10-24_08-37-39, before marker 2). The beast that chased
+  Ratchet gives up when he jumps out of the water, its mouth touches him as he leaves, and it disappears for good.
+- **Why:** class 1059 (level07 `0x30f5f0`) has three ways into the swallow (state 5): the chase's lunge (state 4)
+  stores the lunge's start (+0x100) and clears the progress (+0x14c); idle (1) and cruise (2) go there on the mouth
+  test (`0x30f4d0`, 1.5) alone. The swallow slides the body from +0x100 toward him, and +0x100 is 0 in all 14
+  placements, so the first step puts it 2.8 % of the way from the world's origin (about (7, 9, 2)) and the world box
+  test at the end of the update deletes it.
+- **Port:** `rc-game` `umbris_swamp` (states 1 and 2 of `update`, `swallow`), faithful to the port's reading of
+  `0x30f5f0`; to recheck in the decomp that the 1 / 2 → 5 paths really leave +0x100 alone.
+- **Fix idea:** store the position in +0x100 and clear +0x14c on the 1 / 2 → 5 paths too, as the lunge does.
