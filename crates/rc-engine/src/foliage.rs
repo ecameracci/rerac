@@ -2,24 +2,29 @@
 //! grassy ground and more of its own small plants, drawn on top of the game's picture. Original adds nothing (no
 //! entity, no buffer, no planning). Written from the standard GPU grass / scatter technique.
 //!
-//! * **Placement** ([`plan`], once per level and value, on a worker thread; frame-exact runs wait for it): grass clump
+//! * **Placement** ([`plan`], once per level and value, on a worker thread; frame-exact runs wait for it): grass
 //!   points over the LOD-0 tfrag triangles where the ground as drawn reads as grass and the collision mesh agrees
-//!   (walkable, nothing overhead), and copies of the level's small plant shrub classes ([`plant_classes`]: a world
+//!   (walkable, nothing overhead), each a short blade clump, a little often a flower cluster or a fern
+//!   (`plan::Kind`), and copies of the level's small plant shrub classes ([`plant_classes`]: a world
 //!   radius of at most [`MAX_PLANT_RADIUS`], swaying or green) around their placed instances. Its inputs are copied out
 //!   of the level once ([`build_input`]) and kept for the level, so Moderate ↔ Lush only re-plans; the old plants stay
 //!   until the new ones are ready.
 //! * **Draw** (`assets/shaders/foliage.wgsl`): one record per plant in a storage buffer, grouped by [`CELL`]-unit
-//!   world cells into chunks of [`GRASS_CAP`] clumps / [`COPY_CAP`] copies; a chunk is one entity whose mesh is the
-//!   template (a clump of [`BLADES`] curved blades, or a shrub class part from crate::shrub_render `class_geometry`)
-//!   repeated once per slot, `MeshTag` = the chunk's first record, so Bevy draws every chunk of a template in one
-//!   instanced draw. Bevy culls each chunk's box against the view ([`Aabb`]); [`cull_cells`] hides the chunks past
-//!   the end distance. The shader thins with distance by each plant's rank and shrinks it to nothing before its
-//!   cut-off (`plan::thin`), sways it with the shrubs' wind (`rc_formats::shrub::wind_sway`'s terms on the 60 Hz tick),
-//!   bends it away from Ratchet (now and over the last 0.4 s, so it springs back), and fogs it as the world shaders.
+//!   world cells into chunks of [`GRASS_CAP`] clumps / [`FLOWER_CAP`] flower clusters / [`FERN_CAP`] ferns /
+//!   [`COPY_CAP`] copies; a chunk is one entity whose mesh is the template (a clump of [`BLADES`] thin curved blades,
+//!   [`FLOWER_HEADS`] stems with star heads, [`FRONDS`] serrated arching fronds, or a shrub class part from
+//!   crate::shrub_render `class_geometry`) repeated once per slot, `MeshTag` = the chunk's first record, so Bevy draws
+//!   every chunk of a template in one instanced draw. Bevy culls each chunk's box against the view ([`Aabb`]);
+//!   [`cull_cells`] hides the chunks past the end distance. The shader thins with distance by each plant's rank and
+//!   shrinks it to nothing before its cut-off (`plan::thin`), sways it with the shrubs' wind
+//!   (`rc_formats::shrub::wind_sway`'s terms on the 60 Hz tick), bends it away from Ratchet and the [`MOVERS`] − 1
+//!   drawn mobys nearest the camera ([`movers`]: each a capsule from a lagging tail to its feet, the footprint from
+//!   its bounding sphere, so the plant springs back as it passes; visual only), and fogs it as the world shaders.
 //!   Opaque and Z-writing (copies alpha-tested on their texture), so ambient occlusion and the Shadows Dynamic receiver,
 //!   both read from the depth buffer, apply to it; it casts no sun shadow.
 //! * **Colour**: grass from the ground's drawn colour under the clump (`plan::blade_colours`: the root matches the
-//!   terrain, the tip lighter); copies with their source instance's `LightShrubs` palette and class texture.
+//!   terrain, the tip lighter; ferns darker, `plan::fern_colours`); flower heads white or yellow round a yellow
+//!   centre, dimmed with the ground; copies with their source instance's `LightShrubs` palette and class texture.
 //!
 //! `RC_GFX_FOLIAGE=original|moderate|lush` sets the option at start (crate::graphics).
 
@@ -37,7 +42,7 @@ use bevy::prelude::*;
 use bevy::render::render_resource::{AsBindGroup, Extent3d, RenderPipelineDescriptor, ShaderType, SpecializedMeshPipelineError, TextureDimension, TextureFormat};
 use bevy::render::storage::ShaderBuffer;
 use bevy::shader::ShaderRef;
-use plan::{Density, Plan, PlanInput, PlantSource, Rng, Tex, Tri};
+use plan::{Density, Kind, Plan, PlanInput, PlantSource, Rng, Tex, Tri};
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
@@ -45,22 +50,45 @@ use std::thread::JoinHandle;
 const SHADER_PATH: &str = "shaders/foliage.wgsl";
 /// The world cell (game x, y) a chunk's plants share.
 pub const CELL: f32 = 8.0;
-/// Clumps per grass chunk, copies per plant chunk (the template mesh holds that many slots).
+/// Slots per chunk (the template mesh holds that many): blade clumps, flower clusters, ferns, plant copies.
 pub const GRASS_CAP: usize = 64;
+pub const FLOWER_CAP: usize = 16;
+pub const FERN_CAP: usize = 4;
 pub const COPY_CAP: usize = 16;
 /// Blades per clump and rows per blade (a tapered strip ending in a point).
-pub const BLADES: usize = 7;
-const ROWS: usize = 3;
+pub const BLADES: usize = 12;
+const ROWS: usize = 2;
+/// Heads per flower cluster; petals per head.
+pub const FLOWER_HEADS: usize = 3;
+const PETALS: usize = 5;
+/// Fronds per fern and rows per frond (alternately wide and narrow: the leaflets).
+pub const FRONDS: usize = 7;
+const FROND_ROWS: usize = 12;
 /// The largest plant shrub copied (world radius of the class's bounding sphere on its instance).
 pub const MAX_PLANT_RADIUS: f32 = 1.75;
 /// One record (foliage.wgsl `FoliageInst`).
 const RECORD: usize = 96;
 /// The grass's wind: ShrubProc's mode 1 (the halved sway).
 const GRASS_SWAY: u32 = 1;
-/// Ratchet's past positions the bend follows (every [`TRAIL_TICKS`] ticks) and their weights.
-const TRAIL: usize = 4;
-const TRAIL_TICKS: u32 = 8;
-const TRAIL_WEIGHTS: [f32; TRAIL] = [1.0, 0.7, 0.45, 0.2];
+/// Record kinds (foliage.wgsl `FoliageInst::info.w & 0xff`).
+const KIND_BLADES: u32 = 0;
+const KIND_COPY: u32 = 1;
+const KIND_FLOWER: u32 = 2;
+const KIND_FERN: u32 = 3;
+/// The characters the grass bends away from (foliage.wgsl `FoliageFrame::movers`): Ratchet and the drawn mobys nearest
+/// the camera, up to this many, with a bounding sphere of at most [`MOVER_MAX_RADIUS`].
+pub const MOVERS: usize = 48;
+const MOVER_MAX_RADIUS: f32 = 3.0;
+/// The bend's footprint: this share of the bounding sphere's radius, clamped.
+const FOOTPRINT: (f32, [f32; 2]) = (0.6, [0.3, 1.8]);
+/// Ratchet's footprint (from his moby's sphere) is at least this.
+const HERO_FOOTPRINT: f32 = 0.7;
+/// The trail: each mover's tail follows it with this time constant (seconds) and at most this far behind; Ratchet's
+/// is the longer one.
+const TAIL_TAU: [f32; 2] = [0.25, 0.12];
+const TAIL_MAX: [f32; 2] = [1.6, 0.8];
+/// A mover that jumps further than this in one frame (a respawn, a reused slot) starts without a tail.
+const TAIL_RESET: f32 = 4.0;
 
 /// Per vertex: the template slot (the record is `MeshTag + slot`).
 pub const ATTRIBUTE_FOLIAGE_SLOT: MeshVertexAttribute = MeshVertexAttribute::new("FoliageSlot", 0x464f_4c53, VertexFormat::Uint32);
@@ -142,7 +170,8 @@ struct FoliageState {
     /// Per [`PlantSource::class`]: its parts (template mesh with [`COPY_CAP`] slots, material key).
     plant_parts: HashMap<usize, Vec<PlantPart>>,
     plant_images: HashMap<(usize, u8), (Handle<Image>, u32, f32)>,
-    grass_mesh: Option<Handle<Mesh>>,
+    /// The code-made templates: blades, flowers, ferns ([`Template`]).
+    templates: [Option<Handle<Mesh>>; 3],
     white: Option<Handle<Image>>,
     palettes: Option<Handle<ShaderBuffer>>,
     frame: Option<Handle<ShaderBuffer>>,
@@ -150,8 +179,36 @@ struct FoliageState {
     shown: Option<Foliage>,
     density: Option<Density>,
     entities: Vec<Entity>,
-    trail: [Vec3; TRAIL],
-    trail_tick: Option<u32>,
+    /// Per moby slot (Ratchet's too): its trail's tail (Bevy world), for [`upload_frame`].
+    tails: HashMap<usize, Vec3>,
+    last_tick: Option<u32>,
+}
+
+/// A code-made template: its index in [`FoliageState::templates`], slots, record kind.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Template {
+    Blades,
+    Flowers,
+    Ferns,
+}
+
+impl Template {
+    fn of(k: Kind) -> Self {
+        match k {
+            Kind::Blades => Template::Blades,
+            Kind::Flower { .. } => Template::Flowers,
+            Kind::Fern => Template::Ferns,
+        }
+    }
+    fn cap(self) -> usize { [GRASS_CAP, FLOWER_CAP, FERN_CAP][self as usize] }
+    fn mesh(self) -> Mesh {
+        let (pos, uv, idx) = match self {
+            Template::Blades => clump_geometry(),
+            Template::Flowers => flower_geometry(),
+            Template::Ferns => fern_geometry(),
+        };
+        repeated(&pos, &uv, &vec![0u32; pos.len()], &idx, self.cap())
+    }
 }
 
 /// A chunk's cell, for [`cull_cells`]: its centre (Bevy x, z) and half size.
@@ -294,9 +351,10 @@ fn follow_option(
     let n = spawn_plan(&mut commands, &level.0, &plan, &mut st, &mut meshes, &mut images, &mut materials, &mut buffers);
     let s = &plan.stats;
     println!(
-        "foliage: {want:?}: {} grass clumps of {} candidates ({} steep, {} not grass, {} under a path or decal, {} no ground, {} off the \
-         collision surface, {} barren), {} plant copies of {} tries ({} source plants), {n} chunks; placement {:.1} ms",
-        s.grass, s.candidates, s.steep, s.not_grass, s.covered, s.no_ground, s.off_surface, s.barren, s.copies, s.copy_tries,
+        "foliage: {want:?}: {} grass points ({} flower clusters, {} ferns) of {} candidates ({} steep, {} not grass, {} under a path or \
+         decal, {} no ground, {} off the collision surface, {} barren), {} plant copies of {} tries ({} source plants), {n} chunks; \
+         placement {:.1} ms",
+        s.grass, s.flowers, s.ferns, s.candidates, s.steep, s.not_grass, s.covered, s.no_ground, s.off_surface, s.barren, s.copies, s.copy_tries,
         st.input.as_ref().map_or(0, |i| i.plants.len()), s.time.as_secs_f64() * 1e3
     );
     st.shown = Some(want);
@@ -332,7 +390,6 @@ fn spawn_plan(
     buffers: &mut Assets<ShaderBuffer>,
 ) -> usize {
     let Some(input) = st.input.clone() else { return 0 };
-    let grass_mesh = st.grass_mesh.get_or_insert_with(|| meshes.add(grass_template())).clone();
     let white = st
         .white
         .get_or_insert_with(|| {
@@ -353,11 +410,12 @@ fn spawn_plan(
     struct Chunk { mesh: Handle<Mesh>, mat: Option<(usize, u8)>, cell: (i32, i32), base: u32, lo: Vec3, hi: Vec3 }
     let mut bytes = Vec::new();
     let mut chunks: Vec<Chunk> = Vec::new();
-    let mut by_cell: BTreeMap<(i32, i32), Vec<usize>> = BTreeMap::new();
-    for (i, g) in plan.grass.iter().enumerate() { by_cell.entry(cell_of(g.pos)).or_default().push(i); }
+    let mut by_cell: BTreeMap<((i32, i32), Template), Vec<usize>> = BTreeMap::new();
+    for (i, g) in plan.grass.iter().enumerate() { by_cell.entry((cell_of(g.pos), Template::of(g.kind))).or_default().push(i); }
     let a = axes();
-    for (&cell, list) in &by_cell {
-        for part in list.chunks(GRASS_CAP) {
+    for (&(cell, t), list) in &by_cell {
+        let mesh = st.templates[t as usize].get_or_insert_with(|| meshes.add(t.mesh())).clone();
+        for part in list.chunks(t.cap()) {
             let base = (bytes.len() / RECORD) as u32;
             let (mut lo, mut hi) = (Vec3::MAX, Vec3::MIN);
             for &i in part {
@@ -366,10 +424,16 @@ fn spawn_plan(
                 lo = lo.min(p);
                 hi = hi.max(p);
                 let (s, c) = g.yaw.sin_cos();
-                record(&mut bytes, p, g.rank, [c, s, g.height, g.width], [rgba(g.root), rgba(g.tip), g.seed, GRASS_SWAY << 8], Mat3::IDENTITY);
+                let kind = match g.kind {
+                    Kind::Blades => KIND_BLADES,
+                    Kind::Flower { yellow } => KIND_FLOWER | (yellow as u32) << 16,
+                    Kind::Fern => KIND_FERN,
+                };
+                record(&mut bytes, p, g.rank, [c, s, g.height, g.width], [rgba(g.root), rgba(g.tip), g.seed, kind | GRASS_SWAY << 8], Mat3::IDENTITY);
             }
-            bytes.resize((base as usize + GRASS_CAP) * RECORD, 0);
-            chunks.push(Chunk { mesh: grass_mesh.clone(), mat: None, cell, base, lo, hi: hi + Vec3::Y * 1.0 });
+            bytes.resize((base as usize + t.cap()) * RECORD, 0);
+            // Ferns spread up to their width (under 1) past the root, clumps by their lean; 1 unit covers both.
+            chunks.push(Chunk { mesh: mesh.clone(), mat: None, cell, base, lo: lo - Vec3::new(1.0, 0.0, 1.0), hi: hi + Vec3::ONE });
         }
     }
     let mut by_class: BTreeMap<((i32, i32), usize), Vec<usize>> = BTreeMap::new();
@@ -377,7 +441,7 @@ fn spawn_plan(
     for (&(cell, ci), list) in &by_class {
         let parts = st.plant_parts.entry(ci).or_insert_with(|| plant_parts(level, ci, meshes)).clone();
         if parts.is_empty() { continue; }
-        let kind = 1 | ((level.shrubs.classes[ci].class.header.mode_bits as u32 & 6) >> 1) << 8;
+        let kind = KIND_COPY | ((level.shrubs.classes[ci].class.header.mode_bits as u32 & 6) >> 1) << 8;
         for part in list.chunks(COPY_CAP) {
             let base = (bytes.len() / RECORD) as u32;
             let (mut lo, mut hi) = (Vec3::MAX, Vec3::MIN);
@@ -487,20 +551,23 @@ fn repeated(pos: &[[f32; 3]], uv: &[[f32; 2]], info: &[u32], idx: &[u32], n: usi
         .with_inserted_indices(Indices::U32(i))
 }
 
-/// One grass clump at unit height and width (Bevy axes, y up): [`BLADES`] tapered blades around a 0.15-unit circle,
-/// each leaning outward on a curve. UV x = height fraction (the colour ramp, the bend), y = the blade's shade.
-fn clump_geometry() -> (Vec<[f32; 3]>, Vec<[f32; 2]>, Vec<u32>) {
+type Geometry = (Vec<[f32; 3]>, Vec<[f32; 2]>, Vec<u32>);
+
+/// One grass clump at unit height and width (Bevy axes, y up; the record scales y by its height, x / z by its
+/// width): [`BLADES`] thin tapered blades over a 0.14-unit disc, each leaning outward on a curve. UV x = height
+/// fraction (the colour ramp), y = the blade's shade (0..1).
+fn clump_geometry() -> Geometry {
     let (mut pos, mut uv, mut idx) = (Vec::new(), Vec::new(), Vec::new());
     let mut rng = Rng::new(0x67_7261_7373);
     for b in 0..BLADES {
-        let a = (b as f32 + rng.f() * 0.6) / BLADES as f32 * std::f32::consts::TAU;
-        let r = 0.02 + 0.13 * rng.f().sqrt();
+        let a = (b as f32 + rng.f() * 0.8) / BLADES as f32 * std::f32::consts::TAU;
+        let r = 0.01 + 0.13 * rng.f().sqrt();
         let base = Vec2::new(a.cos(), a.sin()) * r;
-        let lean = Vec2::new(a.cos(), a.sin()) * rng.range([0.06, 0.2]) + Vec2::new(rng.f() - 0.5, rng.f() - 0.5) * 0.06;
+        let lean = Vec2::new(a.cos(), a.sin()) * rng.range([0.02, 0.08]) + Vec2::new(rng.f() - 0.5, rng.f() - 0.5) * 0.03;
         let face = rng.f() * std::f32::consts::PI;
         let across = Vec2::new(face.cos(), face.sin());
-        let h = rng.range([0.6, 1.0]);
-        let w = rng.range([0.035, 0.055]);
+        let h = rng.range([0.5, 1.0]);
+        let w = rng.range([0.014, 0.024]);
         let shade = rng.f();
         let first = pos.len() as u32;
         for row in 0..ROWS {
@@ -526,10 +593,93 @@ fn clump_geometry() -> (Vec<[f32; 3]>, Vec<[f32; 2]>, Vec<u32>) {
     (pos, uv, idx)
 }
 
-fn grass_template() -> Mesh {
-    let (pos, uv, idx) = clump_geometry();
-    let info = vec![0u32; pos.len()];
-    repeated(&pos, &uv, &info, &idx, GRASS_CAP)
+/// One flower cluster at unit height (x / z in world units: the record's width is 1): [`FLOWER_HEADS`] thin stems
+/// within 0.12 of the root, each topped by a cupped [`PETALS`]-petal star (radius 0.035..0.05) tilted up to 40°. UV
+/// x = height fraction; y = the part: under 1 a stem (its shade), 2 a petal tip, 3 the head's centre.
+fn flower_geometry() -> Geometry {
+    let (mut pos, mut uv, mut idx) = (Vec::new(), Vec::new(), Vec::new());
+    let mut rng = Rng::new(0x666c_6f77_6572);
+    for f in 0..FLOWER_HEADS {
+        let a = (f as f32 + rng.f() * 0.7) / FLOWER_HEADS as f32 * std::f32::consts::TAU;
+        let base = Vec2::new(a.cos(), a.sin()) * rng.range([0.0, 0.12]);
+        let h = rng.range([0.75, 1.0]);
+        let top = base + Vec2::new(rng.f() - 0.5, rng.f() - 0.5) * 0.04;
+        let face = rng.f() * std::f32::consts::PI;
+        let across = Vec2::new(face.cos(), face.sin()) * 0.004;
+        let shade = rng.f();
+        // The stem: one quad, base to head.
+        let o = pos.len() as u32;
+        for (c, y) in [(base, 0.0), (top, h)] {
+            for s in [-1.0, 1.0] {
+                pos.push([c.x + across.x * s, y, c.y + across.y * s]);
+                uv.push([y, shade]);
+            }
+        }
+        idx.extend_from_slice(&[o, o + 1, o + 2, o + 1, o + 3, o + 2]);
+        // The head: a centre, an inner ring and a star rim, cupped, tilted about a random horizontal axis.
+        let radius = rng.range([0.05, 0.07]);
+        let (tilt, axis) = (rng.range([0.1, 0.7]), rng.f() * std::f32::consts::TAU);
+        let rot = Quat::from_axis_angle(Vec3::new(axis.cos(), 0.0, axis.sin()), tilt);
+        let spin = rng.f() * std::f32::consts::TAU;
+        let head = |p: Vec3| -> [f32; 3] {
+            let q = rot * p;
+            // y here is world-scaled by the record's height (about 0.2): undo it so the head keeps its shape.
+            [top.x + q.x, h + q.y * 5.0, top.y + q.z]
+        };
+        let c0 = pos.len() as u32;
+        pos.push(head(Vec3::ZERO));
+        uv.push([h, 3.0]);
+        let rim = 2 * PETALS;
+        for k in 0..rim {
+            let t = spin + k as f32 / rim as f32 * std::f32::consts::TAU;
+            let d = Vec3::new(t.cos(), 0.0, t.sin());
+            let r = if k % 2 == 0 { radius } else { radius * 0.45 };
+            pos.push(head(d * radius * 0.3 + Vec3::Y * 0.002));
+            uv.push([h, 3.0]);
+            pos.push(head(d * r + Vec3::Y * (r / radius) * 0.012));
+            uv.push([h, 2.0]);
+        }
+        for k in 0..rim as u32 {
+            let (i0, i1) = (c0 + 1 + k * 2, c0 + 1 + ((k + 1) % rim as u32) * 2);
+            idx.extend_from_slice(&[c0, i0, i1, i0, i0 + 1, i1, i1, i0 + 1, i1 + 1]);
+        }
+    }
+    (pos, uv, idx)
+}
+
+/// One fern at unit height and spread: [`FRONDS`] fronds around the root, each rising and arching out to its tip
+/// (reach 0.7..1, the peak at unit height a little past halfway), [`FROND_ROWS`] rows alternately wide and narrow
+/// (the leaflets), tapering at both ends. UV x = the distance along the frond (the colour ramp), y = its shade.
+fn fern_geometry() -> Geometry {
+    let (mut pos, mut uv, mut idx) = (Vec::new(), Vec::new(), Vec::new());
+    let mut rng = Rng::new(0x6665_726e);
+    for f in 0..FRONDS {
+        let a = (f as f32 + rng.f() * 0.6) / FRONDS as f32 * std::f32::consts::TAU;
+        let dir = Vec2::new(a.cos(), a.sin());
+        let across = Vec2::new(-dir.y, dir.x);
+        let (reach, rise, w) = (rng.range([0.7, 1.0]), rng.range([0.7, 1.0]), rng.range([0.1, 0.14]));
+        let shade = rng.f();
+        let first = pos.len() as u32;
+        for row in 0..FROND_ROWS {
+            let t = row as f32 / (FROND_ROWS - 1) as f32;
+            // y = 2.2 t − 2 t², normalised to its peak (0.605 at t = 0.55): it ends a third of the way up.
+            let y = rise * (2.2 * t - 2.0 * t * t) / 0.605;
+            let c = dir * reach * t;
+            let env = (4.0 * t * (1.0 - t)).max(0.0).powf(0.6);
+            let hw = w * env * if row % 2 == 1 { 1.0 } else { 0.3 };
+            for side in [-1.0, 1.0] {
+                // The leaflets droop a little to the sides.
+                let q = c + across * hw * side;
+                pos.push([q.x, y - hw * 0.4, q.y]);
+                uv.push([t, shade]);
+            }
+        }
+        for row in 0..FROND_ROWS as u32 - 1 {
+            let o = first + row * 2;
+            idx.extend_from_slice(&[o, o + 1, o + 2, o + 1, o + 3, o + 2]);
+        }
+    }
+    (pos, uv, idx)
 }
 
 /// Hides the chunks whose cell lies past the end distance (horizontally) from the camera; Bevy's frustum test does the
@@ -548,10 +698,67 @@ fn cull_cells(
 }
 
 /// foliage.wgsl `FoliageFrame`.
-const FRAME_BYTES: usize = 48 + 16 * TRAIL;
+const FRAME_BYTES: usize = 80 + 32 * MOVERS;
 
-/// The frame's tick (the 60 Hz fixed clock, as crate::shrub_render `update_sway`), distances, camera and Ratchet's
-/// trail into the frame buffer.
+/// One character the grass bends away from (foliage.wgsl `Mover`), Bevy world: its feet now, its trail's tail, the
+/// footprint radius and its lowest point (y).
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Mover {
+    now: Vec3,
+    tail: Vec3,
+    radius: f32,
+    bottom: f32,
+}
+
+/// The footprint of a bounding sphere of radius `r` ([`FOOTPRINT`]).
+fn footprint(r: f32) -> f32 { (r * FOOTPRINT.0).clamp(FOOTPRINT.1[0], FOOTPRINT.1[1]) }
+
+/// A tail `tail` following `now` over `dt` seconds with time constant `tau`, never more than `max` behind; a jump
+/// past [`TAIL_RESET`] starts over at `now`.
+fn follow(tail: Vec3, now: Vec3, dt: f32, tau: f32, max: f32) -> Vec3 {
+    if tail.distance(now) > TAIL_RESET { return now; }
+    let t = tail + (now - tail) * (1.0 - (-dt / tau).exp());
+    let back = t - now;
+    if back.length() > max { now + back.normalize() * max } else { t }
+}
+
+/// The movers this frame: Ratchet first (his feet, his moby's sphere), then the drawn mobys (`visible`, not deleted,
+/// a sphere of at most [`MOVER_MAX_RADIUS`]) nearest the camera within the end distance, as crate::ao_render
+/// `collect_mobys`. Their tails advance by the ticks since the last frame (frame-exact runs repeat them).
+fn movers(st: &mut FoliageState, game: &rc_game::tick::Game, eye: Vec3, end: f32, dt: f32) -> Vec<Mover> {
+    let mobys = &game.mobys.mobys;
+    let hero = game.hero_moby;
+    let sphere = |m: &rc_game::moby_runtime::Moby| (game_to_bevy([m.bsphere[0], m.bsphere[1], m.bsphere[2]].map(|v| v / 1024.0)), m.bsphere[3] / 1024.0);
+    let mut near: Vec<(f32, usize, Vec3, f32, f32)> = mobys
+        .iter()
+        .enumerate()
+        .filter(|&(i, m)| i != hero && m.visible != 0 && m.state < 0xfd)
+        .filter_map(|(i, m)| {
+            let (c, r) = sphere(m);
+            if !(r > 0.0 && r <= MOVER_MAX_RADIUS) { return None; }
+            let feet = game_to_bevy([m.position[0], m.position[1], m.position[2]]);
+            let d = c.distance(eye) - r;
+            (d < end).then_some((d, i, Vec3::new(c.x, feet.y, c.z), footprint(r), (c.y - r).min(feet.y)))
+        })
+        .collect();
+    near.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let hp = game_to_bevy(game.hero.position());
+    let hr = mobys.get(hero).map_or(0.0, |m| sphere(m).1);
+    let list = std::iter::once((hero, hp, footprint(hr).max(HERO_FOOTPRINT), hp.y, 0))
+        .chain(near.into_iter().take(MOVERS - 1).map(|(_, i, p, r, b)| (i, p, r, b, 1)));
+    let mut out = Vec::with_capacity(MOVERS);
+    let mut tails = HashMap::with_capacity(MOVERS);
+    for (i, now, radius, bottom, k) in list {
+        let tail = st.tails.get(&i).map_or(now, |&t| follow(t, now, dt, TAIL_TAU[k], TAIL_MAX[k]));
+        tails.insert(i, tail);
+        out.push(Mover { now, tail, radius, bottom });
+    }
+    st.tails = tails;
+    out
+}
+
+/// The frame's tick (the 60 Hz fixed clock, as crate::shrub_render `update_sway`), distances, camera and the movers
+/// (with the box around them, for the shader's early out) into the frame buffer.
 fn upload_frame(
     mut st: ResMut<FoliageState>,
     fixed: Res<Time<Fixed>>,
@@ -561,26 +768,27 @@ fn upload_frame(
 ) {
     let (Some(h), Some(d)) = (st.frame.clone(), st.density) else { return };
     let tick = (fixed.elapsed().as_nanos() / fixed.timestep().as_nanos().max(1)) as u32;
-    let hero = play.as_ref().map(|p| game_to_bevy(p.game.hero.position()));
-    if let Some(hp) = hero {
-        let step = tick / TRAIL_TICKS;
-        match st.trail_tick {
-            None => st.trail = [hp; TRAIL],
-            Some(t) if t != step => st.trail.rotate_right(1),
-            _ => {}
-        }
-        st.trail_tick = Some(step);
-        st.trail[0] = hp;
-    }
+    let dt = st.last_tick.map_or(0, |t| tick.wrapping_sub(t)).min(30) as f32 / 60.0;
+    st.last_tick = Some(tick);
     let eye = cams.iter().next().map_or(Vec3::ZERO, |c| c.translation);
+    let movers = play.as_ref().map_or_else(Vec::new, |p| movers(&mut st, &p.game, eye, d.end, dt));
+    let (mut lo, mut hi) = (Vec3::splat(1e9), Vec3::splat(-1e9));
+    for m in &movers {
+        let r = Vec3::new(m.radius, 0.0, m.radius);
+        lo = lo.min(m.now.min(m.tail) - r);
+        hi = hi.max(m.now.max(m.tail) + r);
+        // foliage.wgsl `push`'s height window.
+        (lo.y, hi.y) = ((m.bottom - 0.8).min(lo.y), (m.bottom + 0.6).max(hi.y));
+    }
     let sway = !std::env::var("RC_SWAY").is_ok_and(|v| v.trim() == "0");
     let mut b = Vec::with_capacity(FRAME_BYTES);
-    for v in [tick, sway as u32, 0, 0] { b.extend_from_slice(&v.to_le_bytes()); }
+    for v in [tick, sway as u32, movers.len() as u32, 0] { b.extend_from_slice(&v.to_le_bytes()); }
     for v in [d.full, d.end, plan::SHRINK_BAND, 0.0, eye.x, eye.y, eye.z, 0.0] { b.extend_from_slice(&v.to_le_bytes()); }
-    for (k, p) in st.trail.iter().enumerate() {
-        let w = if hero.is_some() { TRAIL_WEIGHTS[k] } else { 0.0 };
-        for v in [p.x, p.y, p.z, w] { b.extend_from_slice(&v.to_le_bytes()); }
+    for v in [lo.x, lo.y, lo.z, 0.0, hi.x, hi.y, hi.z, 0.0] { b.extend_from_slice(&v.to_le_bytes()); }
+    for m in &movers {
+        for v in [m.now.x, m.now.y, m.now.z, m.radius, m.tail.x, m.tail.y, m.tail.z, m.bottom] { b.extend_from_slice(&v.to_le_bytes()); }
     }
+    b.resize(FRAME_BYTES, 0);
     crate::asset_write::set_buffer(&mut buffers, &h, &b);
 }
 
@@ -595,7 +803,14 @@ mod tests {
         assert_eq!(idx.len(), BLADES * ((ROWS - 1) * 6 + 3));
         assert!(idx.iter().all(|&i| (i as usize) < pos.len()));
         // Unit height, rooted at y = 0, within the clump's radius plus the lean.
-        assert!(pos.iter().all(|p| (0.0..=1.0).contains(&p[1]) && p[0].hypot(p[2]) < 0.45));
+        assert!(pos.iter().all(|p| (0.0..=1.0).contains(&p[1]) && p[0].hypot(p[2]) < 0.25));
+        for (pos, uv, idx) in [flower_geometry(), fern_geometry()] {
+            assert!(idx.len() % 3 == 0 && idx.iter().all(|&i| (i as usize) < pos.len()) && uv.len() == pos.len());
+            assert!(pos.iter().all(|p| (-0.2..=1.4).contains(&p[1]) && p[0].hypot(p[2]) <= 1.05));
+        }
+        let (_, fuv, _) = flower_geometry();
+        assert!(fuv.iter().any(|t| t[1] == 2.0) && fuv.iter().any(|t| t[1] == 3.0) && fuv.iter().any(|t| t[1] < 1.0));
+        assert_eq!(Template::Ferns.mesh().count_vertices(), FRONDS * FROND_ROWS * 2 * FERN_CAP);
         assert!(uv.iter().zip(&pos).all(|(t, p)| (t[0] - p[1]).abs() < 1e-6));
         let m = repeated(&pos, &uv, &vec![0; pos.len()], &idx, 3);
         assert_eq!(m.count_vertices(), pos.len() * 3);
@@ -613,5 +828,20 @@ mod tests {
         assert_eq!(f32::from_le_bytes(b[48..52].try_into().unwrap()), 1.0);
         assert_eq!(cell_of([7.9, -0.1, 0.0]), (0, -1));
         assert_eq!(axes() * Vec3::new(1.0, 2.0, 3.0), game_to_bevy([1.0, 2.0, 3.0]));
+    }
+
+    #[test]
+    fn mover_tails() {
+        // The shader's array matches MOVERS.
+        assert!(include_str!("../assets/shaders/foliage.wgsl").contains(&format!("array<Mover, {MOVERS}>")));
+        let (a, b) = (Vec3::ZERO, Vec3::new(1.0, 0.0, 0.0));
+        // Closes in on the feet, never overshoots, stays within its length, restarts on a jump.
+        let t = follow(a, b, 1.0 / 60.0, 0.2, 2.0);
+        assert!(t.x > 0.0 && t.x < 0.2);
+        assert!(follow(a, b, 10.0, 0.2, 2.0).distance(b) < 1e-3);
+        assert!((follow(a, Vec3::new(3.0, 0.0, 0.0), 1.0 / 60.0, 0.2, 0.8).x - 2.2).abs() < 1e-4);
+        assert_eq!(follow(a, Vec3::new(9.0, 0.0, 0.0), 1.0 / 60.0, 0.2, 0.8), Vec3::new(9.0, 0.0, 0.0));
+        assert_eq!(follow(b, b, 0.0, 0.2, 0.8), b);
+        assert_eq!((footprint(0.1), footprint(1.0), footprint(10.0)), (FOOTPRINT.1[0], 0.6, FOOTPRINT.1[1]));
     }
 }

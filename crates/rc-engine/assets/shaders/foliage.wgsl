@@ -1,4 +1,5 @@
-// Foliage pass (port-only, the Foliage option): grass clumps and copies of the level's small plant shrubs.
+// Foliage pass (port-only, the Foliage option): grass clumps, flower clusters, ferns and copies of the level's small
+// plant shrubs.
 // Rust side: foliage.rs (the records, the chunks, the per-frame buffer); placement: foliage/plan.rs.
 //
 // A chunk entity's mesh is a template repeated once per slot (`slot`); its record is insts[mesh tag + slot]. A record
@@ -8,12 +9,16 @@
 // * Wind: the terms of ShrubProc's sway (rc_formats::shrub::wind_sway, shrub_render.rs update_sway) on the 60 Hz tick
 //   with the record's seed as the matrix block address, the same shear x += sx * h, z -= sy * h (Bevy axes, h = the
 //   vertex's height over the root), mode 1 (halved) for grass, the class's own mode for copies.
-// * Ratchet: within BEND_RADIUS of his position now and over the last 0.4 s (weights in frame.hero[k].w) the plant
-//   leans away from him and down, by the strongest of them; as he leaves it springs back.
+// * Bend: every mover (Ratchet and the drawn mobys near the camera, foliage.rs `movers`) is a capsule from its
+//   trail's tail to its feet; a root within its footprint radius of it (and from 0.8 under to 0.6 over its lowest
+//   point) is pushed away from the nearest point by (1 - d / r)^2, weighted from 1 at the feet down the tail (to 0
+//   at its end once it is TAIL_FADE long), the pushes summed and capped; the plant turns by up to BEND_MAX about its root (h sin, h (1 - cos)). The tail follows
+//   on the CPU, so the plant springs back as it passes.
 // * Fog: one F per plant from its root's depth, the tfrag slope / offset / clamps (shrub.wgsl's form).
-// * Colour (display-encoded, converted to linear at the end like every world shader): grass = its root colour
-//   blended to its tip colour up the blade, shaded per blade; copies = texture (GS mip rule, sample_world) MODULATE
-//   the source instance's palette entry, alpha-tested at 0x40.
+// * Colour (display-encoded, converted to linear at the end like every world shader): blades and ferns = the root
+//   colour blended to the tip colour up the blade / along the frond, shaded per blade; flowers = a blade-coloured
+//   stem, white or yellow petals (info.w bit 16) round a yellow centre, dimmed with the ground's brightness; copies =
+//   texture (GS mip rule, sample_world) MODULATE the source instance's palette entry, alpha-tested at 0x40.
 
 #import bevy_pbr::{
     mesh_functions,
@@ -35,9 +40,10 @@ struct FoliageParams {
 struct FoliageInst {
     // xyz = root (Bevy world), w = rank.
     pos: vec4<f32>,
-    // Grass: cos yaw, sin yaw, height, width. Copy: 1, 0, scale, 1.
+    // Grass, flowers, ferns: cos yaw, sin yaw, height, width. Copy: 1, 0, scale, 1.
     shape: vec4<f32>,
-    // Grass: root RGBA8, tip RGBA8. Copy: source shrub instance (its palette), 0. Then the seed, kind | sway mode << 8.
+    // Root RGBA8, tip RGBA8 (copy: source shrub instance (its palette), 0), the seed, kind (0 blades, 1 copy,
+    // 2 flowers, 3 fern) | sway mode << 8 | yellow flowers << 16.
     info: vec4<u32>,
     // Copy: class -> Bevy-world linear map (columns; yaw and scale included).
     m0: vec4<f32>,
@@ -45,14 +51,23 @@ struct FoliageInst {
     m2: vec4<f32>,
 }
 
+struct Mover {
+    // xyz = feet now (Bevy world), w = footprint radius.
+    now: vec4<f32>,
+    // xyz = the trail's tail, w = the lowest point (y).
+    tail: vec4<f32>,
+}
+
 struct FoliageFrame {
-    // x = 60 Hz tick, y = sway on.
+    // x = 60 Hz tick, y = sway on, z = movers.
     tick: vec4<u32>,
     // x = full-density distance, y = end distance, z = shrink band.
     dist: vec4<f32>,
     eye: vec4<f32>,
-    // xyz = Ratchet now and 8, 16, 24 ticks ago (Bevy world), w = weight (0: no Ratchet).
-    hero: array<vec4<f32>, 4>,
+    // The box around every mover's capsule, footprint and height window.
+    lo: vec4<f32>,
+    hi: vec4<f32>,
+    movers: array<Mover, 48>,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(0) var tex: texture_2d<f32>;
@@ -63,7 +78,11 @@ struct FoliageFrame {
 @group(#{MATERIAL_BIND_GROUP}) @binding(5) var<storage, read> palettes: array<u32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(6) var<storage, read> frame: FoliageFrame;
 
-const BEND_RADIUS: f32 = 0.9;
+// The most a plant turns about its root (radians), at a full push.
+const BEND_MAX: f32 = 1.2;
+// The tail length (world units) from which the push fades to nothing at the tail's end (foliage.rs TAIL_MAX's
+// shorter one).
+const TAIL_FADE: f32 = 0.8;
 
 // As shrub.wgsl / tfrag.wgsl (the texture option, `fog.tex_mode.x`).
 fn sample_world(uv: vec2<f32>, l: f32, mxl: f32, duv: vec4<f32>) -> vec4<f32> {
@@ -97,24 +116,37 @@ fn wind(mode: u32, block: u32, root: vec3<f32>) -> vec2<f32> {
     return s;
 }
 
-// The lean away from Ratchet of a vertex `h` over a root at `root`.
-fn bend(root: vec3<f32>, h: f32) -> vec3<f32> {
-    var best = 0.0;
-    var dir = vec2<f32>(1.0, 0.0);
-    for (var k = 0u; k < 4u; k += 1u) {
-        let hp = frame.hero[k];
-        if (hp.w <= 0.0 || abs(root.y - hp.y) > 1.5) { continue; }
-        let v = root.xz - hp.xz;
+// The push on a root from every mover (header): its direction (Bevy x, z) times its strength 0..1.
+fn push(root: vec3<f32>) -> vec2<f32> {
+    if (any(root < frame.lo.xyz) || any(root > frame.hi.xyz)) { return vec2<f32>(0.0); }
+    var sum = vec2<f32>(0.0);
+    for (var k = 0u; k < frame.tick.z; k += 1u) {
+        let m = frame.movers[k];
+        let dy = root.y - m.tail.w;
+        if (dy < -0.8 || dy > 0.6) { continue; }
+        let a = m.tail.xz;
+        let ab = m.now.xz - a;
+        let l2 = dot(ab, ab);
+        let t = select(1.0, clamp(dot(root.xz - a, ab) / l2, 0.0, 1.0), l2 > 1e-6);
+        let v = root.xz - (a + ab * t);
         let d = length(v);
-        if (d >= BEND_RADIUS) { continue; }
-        let a = (1.0 - d / BEND_RADIUS) * (1.0 - d / BEND_RADIUS) * hp.w;
-        if (a > best) {
-            best = a;
-            dir = select(vec2<f32>(1.0, 0.0), v / d, d > 1e-3);
-        }
+        if (d >= m.now.w) { continue; }
+        let f = 1.0 - d / m.now.w;
+        // 1 at the feet, down to 0 at the tail once the tail is TAIL_FADE long (continuous as it grows from 0).
+        let w = 1.0 - (1.0 - t) * min(sqrt(l2) / TAIL_FADE, 1.0);
+        sum += select(vec2<f32>(1.0, 0.0), v / d, d > 1e-3) * f * f * w;
     }
-    let lean = best * h;
-    return vec3<f32>(dir.x * lean * 0.9, -lean * 0.45, dir.y * lean * 0.9);
+    let s = length(sum);
+    return select(sum, sum / s, s > 1.0);
+}
+
+// The offset of a vertex `h` over its root under the push `p`: a turn about the root, away from the mover.
+fn bend(p: vec2<f32>, h: f32) -> vec3<f32> {
+    let s = length(p);
+    if (s <= 0.0) { return vec3<f32>(0.0); }
+    let a = s * BEND_MAX;
+    let dir = p / s;
+    return vec3<f32>(dir.x * h * sin(a), -h * (1.0 - cos(a)), dir.y * h * sin(a));
 }
 
 struct FoliageVertex {
@@ -154,17 +186,25 @@ fn vertex(v: FoliageVertex) -> FoliageVertexOutput {
     var off: vec3<f32>;
     var color: vec4<f32>;
     var out: FoliageVertexOutput;
-    if (kind == 0u) {
+    if (kind != 1u) {
         let p = v.position;
         let c = inst.shape.x;
         let sn = inst.shape.y;
         // Thinned clumps a little wider, so the far field keeps its cover.
-        let w = inst.shape.w * (1.0 + 0.4 * (1.0 - f));
+        let w = inst.shape.w * select(1.0, 1.0 + 0.4 * (1.0 - f), kind == 0u);
         off = vec3<f32>((c * p.x + sn * p.z) * w, p.y * inst.shape.z, (-sn * p.x + c * p.z) * w) * s;
         let root_c = unpack4x8unorm(inst.info.x);
         let tip_c = unpack4x8unorm(inst.info.y);
-        let shade = 0.88 + 0.24 * v.uv.y;
-        color = vec4<f32>(min(mix(root_c.rgb, tip_c.rgb, pow(clamp(v.uv.x, 0.0, 1.0), 0.8)) * mix(1.0, shade, clamp(v.uv.x * 2.0, 0.0, 1.0)), vec3<f32>(1.0)), 1.0);
+        let shade = 0.88 + 0.24 * fract(v.uv.y);
+        let ramp = select(pow(clamp(v.uv.x, 0.0, 1.0), 0.8), v.uv.x, kind == 3u);
+        var rgb = min(mix(root_c.rgb, tip_c.rgb, ramp) * mix(1.0, shade, clamp(v.uv.x * 2.0, 0.0, 1.0)), vec3<f32>(1.0));
+        if (kind == 2u && v.uv.y > 1.5) {
+            // The ground's brightness against Novalis-like grass (luma about 0.34), so heads do not glow in shade.
+            let light = clamp(dot(root_c.rgb, vec3<f32>(0.3, 0.59, 0.11)) / 0.3, 0.45, 1.0);
+            let petal = select(vec3<f32>(0.96, 0.95, 0.9), vec3<f32>(1.0, 0.86, 0.22), ((inst.info.w >> 16u) & 1u) != 0u);
+            rgb = mix(petal, vec3<f32>(0.98, 0.72, 0.14), clamp(v.uv.y - 2.0, 0.0, 1.0)) * light;
+        }
+        color = vec4<f32>(rgb, 1.0);
     } else {
         off = mat3x3<f32>(inst.m0.xyz, inst.m1.xyz, inst.m2.xyz) * v.position * s;
         let entry = (v.info & 0xfffu) % 24u;
@@ -174,7 +214,7 @@ fn vertex(v: FoliageVertex) -> FoliageVertexOutput {
     }
     let h = max(off.y, 0.0);
     let sw = wind((inst.info.w >> 8u) & 3u, inst.info.z, root);
-    off = vec3<f32>(off.x + sw.x * h, off.y, off.z - sw.y * h) + bend(root, h);
+    off = vec3<f32>(off.x + sw.x * h, off.y, off.z - sw.y * h) + bend(push(root), h);
     let world = root + off;
     out.position = position_world_to_clip(world);
     out.uv = v.uv;

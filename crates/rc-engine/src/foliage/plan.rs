@@ -7,7 +7,9 @@
 //!   the ground as drawn there reads as grass (the level-0 texel average under it times the baked vertex colour, the
 //!   GS MODULATE of tfrag.wgsl, opaque: [`is_grass`]), no other opaque, non-green tfrag lies just over it (a path or a
 //!   decal: [`Grid::covered`]), and a `coll_line` from [`RAY_ABOVE`] above to [`RAY_BELOW`] below first meets
-//!   walkable collision within [`GROUND_TOLERANCE`] of the drawn surface ([`ground_check`], [`walkable`]).
+//!   walkable collision within [`GROUND_TOLERANCE`] of the drawn surface ([`ground_check`], [`walkable`]). A kept
+//!   point is a blade clump, or with the chances [`Density::ferns`] / [`Density::flowers`] a fern or a flower cluster
+//!   ([`Kind`]).
 //! * **Plant copies**: around each placed instance of the level's small plant shrub classes (crate::foliage
 //!   `plant_classes`), [`Density::copies`] more at a random yaw and scale on a ring, each on walkable collision
 //!   whose drawn surface there reads as grass.
@@ -43,6 +45,13 @@ pub const BARREN_SURFACES: [i32; 11] = [0, 1, 2, 3, 4, 7, 8, 0xb, 0xc, 0xd, 0xe]
 pub const SHRINK_BAND: f32 = 0.15;
 /// The horizontal cell of the cover grid (world units).
 const GRID_CELL: f32 = 4.0;
+/// A flower cluster's height over the clump height it replaces (its heads show just over the blades).
+pub const FLOWER_RISE: f32 = 1.2;
+/// A fern's height and spread (frond reach) ranges, world units.
+pub const FERN_HEIGHT: [f32; 2] = [0.22, 0.34];
+pub const FERN_SPREAD: [f32; 2] = [0.4, 0.7];
+/// The share of flower clusters with yellow heads (the others white).
+pub const YELLOW_FLOWERS: f32 = 0.4;
 
 /// One option value's numbers.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -60,15 +69,47 @@ pub struct Density {
     pub copies: f32,
     /// The ring the copies land on around their plant (world units).
     pub ring: [f32; 2],
+    /// The chance a kept grass point is a fern, and a flower cluster.
+    pub ferns: f32,
+    pub flowers: f32,
 }
 
-/// The numbers of an option value; None for Original (no foliage pass).
+/// The numbers of an option value; None for Original (no foliage pass). Both keep the blades about ankle-high on
+/// Ratchet (his knee is about 0.35 units up); Lush is denser, reaches further and is a little taller.
 pub fn density(f: Foliage) -> Option<Density> {
     match f {
         Foliage::Original => None,
-        Foliage::Moderate => Some(Density { clumps: 1.6, height: [0.26, 0.46], width: 1.0, full: 16.0, end: 34.0, copies: 1.5, ring: [0.9, 3.0] }),
-        Foliage::Lush => Some(Density { clumps: 4.0, height: [0.36, 0.66], width: 1.15, full: 30.0, end: 60.0, copies: 3.5, ring: [0.8, 4.0] }),
+        Foliage::Moderate => Some(Density {
+            clumps: 6.0,
+            height: [0.09, 0.18],
+            width: 1.0,
+            full: 14.0,
+            end: 30.0,
+            copies: 1.0,
+            ring: [0.9, 3.0],
+            ferns: 0.003,
+            flowers: 0.006,
+        }),
+        Foliage::Lush => Some(Density {
+            clumps: 14.0,
+            height: [0.12, 0.24],
+            width: 1.1,
+            full: 22.0,
+            end: 48.0,
+            copies: 2.5,
+            ring: [0.8, 4.0],
+            ferns: 0.003,
+            flowers: 0.006,
+        }),
     }
+}
+
+/// What a grass point grows (crate::foliage's template per kind).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Kind {
+    Blades,
+    Flower { yellow: bool },
+    Fern,
 }
 
 /// The size factor of an instance of rank `rank` (0..1) at distance `d`: with the density f = `(end − d) / (end − full)`
@@ -171,10 +212,11 @@ pub struct PlanInput {
     pub plants: Vec<PlantSource>,
 }
 
-/// A grass clump: its root on the drawn ground, yaw, height, width factor, rank (0..1, the distance thinning), the
-/// root and tip colours (display-encoded) and its sway / blade seed.
+/// A grass point: its kind, root on the drawn ground, yaw, height, width factor (a fern: its spread), rank (0..1, the
+/// distance thinning), the root and tip colours (display-encoded) and its sway / blade seed.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Grass {
+    pub kind: Kind,
     pub pos: [f32; 3],
     pub yaw: f32,
     pub height: f32,
@@ -207,6 +249,9 @@ pub struct PlanStats {
     pub off_surface: usize,
     pub barren: usize,
     pub grass: usize,
+    /// Of `grass`: the flower clusters and the ferns.
+    pub flowers: usize,
+    pub ferns: usize,
     pub copy_tries: usize,
     pub copies: usize,
     pub time: Duration,
@@ -222,6 +267,8 @@ impl PlanStats {
         self.off_surface += o.off_surface;
         self.barren += o.barren;
         self.grass += o.grass;
+        self.flowers += o.flowers;
+        self.ferns += o.ferns;
     }
 }
 
@@ -298,8 +345,15 @@ pub fn opaque(texel_alpha: u8, vertex_alpha: f32) -> bool { texel_alpha >= OPAQU
 /// The grass root colour (the ground's, a touch darker where the blades meet it) and tip colour (lighter, warmer).
 pub fn blade_colours(ground: [u8; 3]) -> ([u8; 3], [u8; 3]) {
     let root = ground.map(|c| (c as f32 * 0.88) as u8);
-    let warm = [10.0, 14.0, 0.0];
-    let tip = std::array::from_fn(|k| (ground[k] as f32 * 1.3 + warm[k]).min(255.0) as u8);
+    let warm = [22.0, 24.0, 0.0];
+    let tip = std::array::from_fn(|k| (ground[k] as f32 * 1.45 + warm[k]).min(255.0) as u8);
+    (root, tip)
+}
+
+/// A fern's root and frond-tip colours: the ground's green, darker and deeper at the root.
+pub fn fern_colours(ground: [u8; 3]) -> ([u8; 3], [u8; 3]) {
+    let root = ground.map(|c| (c as f32 * 0.5) as u8);
+    let tip = [ground[0] as f32 * 0.8, ground[1] as f32 * 1.05 + 6.0, ground[2] as f32 * 0.85].map(|c| c.min(255.0) as u8);
     (root, tip)
 }
 
@@ -426,6 +480,7 @@ fn grass_range(input: &PlanInput, grid: &Grid, d: &Density, seed: u64, range: st
             let w = [1.0 - r1, r1 * (1.0 - r2), r1 * r2];
             let (p, uv, col) = t.at(w);
             let (yaw, height, width, rank, bseed) = (rng.f() * std::f32::consts::TAU, rng.range(d.height), d.width * rng.range([0.8, 1.2]), rng.f(), rng.next_u64() as u32);
+            let (pick, size) = (rng.f(), rng.f());
             let (rgb, a) = tex.sample(uv);
             let ground = modulate(rgb, col);
             if !opaque(a, col[3]) || !is_grass(ground) { st.not_grass += 1; continue; }
@@ -437,8 +492,26 @@ fn grass_range(input: &PlanInput, grid: &Grid, d: &Density, seed: u64, range: st
                 Ground::OffSurface => { st.off_surface += 1; continue; }
                 Ground::Barren => { st.barren += 1; continue; }
             }
-            let (root, tip) = blade_colours(ground);
-            out.push(Grass { pos: p, yaw, height, width, rank, root, tip, seed: bseed });
+            let g = if pick < d.ferns {
+                let (root, tip) = fern_colours(ground);
+                let lerp = |r: [f32; 2]| r[0] + (r[1] - r[0]) * size;
+                // Larger than a clump, so kept further out.
+                Grass { kind: Kind::Fern, pos: p, yaw, height: lerp(FERN_HEIGHT), width: lerp(FERN_SPREAD), rank: rank * 0.6, root, tip, seed: bseed }
+            } else {
+                let (root, tip) = blade_colours(ground);
+                let mut g = Grass { kind: Kind::Blades, pos: p, yaw, height, width, rank, root, tip, seed: bseed };
+                if pick < d.ferns + d.flowers {
+                    g.kind = Kind::Flower { yellow: size < YELLOW_FLOWERS };
+                    (g.height, g.width) = (height * FLOWER_RISE, 1.0);
+                }
+                g
+            };
+            match g.kind {
+                Kind::Flower { .. } => st.flowers += 1,
+                Kind::Fern => st.ferns += 1,
+                Kind::Blades => {}
+            }
+            out.push(g);
             st.grass += 1;
         }
     }
@@ -512,9 +585,11 @@ mod tests {
         assert!(opaque(0xff, 128.0) && opaque(0xc0, 96.0));
         assert!(!opaque(0xbf, 128.0) && !opaque(0xff, 95.0));
         assert_eq!(modulate([100, 200, 255], [128.0, 64.0, 255.0, 128.0]), [100, 100, 255]);
-        let (root, tip) = blade_colours([60, 110, 40]);
-        assert!(root.iter().zip(&[60, 110, 40]).all(|(r, g)| r <= g));
-        assert!(tip.iter().zip(&root).all(|(t, r)| t > r) && is_grass(root) && is_grass(tip));
+        for f in [blade_colours, fern_colours] {
+            let (root, tip) = f([60, 110, 40]);
+            assert!(root.iter().zip(&[60, 110, 40]).all(|(r, g)| r <= g));
+            assert!(tip.iter().zip(&root).all(|(t, r)| t > r) && is_grass(root) && is_grass(tip));
+        }
     }
 
     #[test]
@@ -524,6 +599,9 @@ mod tests {
         assert!(l.clumps > 2.0 * m.clumps && l.height[1] > m.height[1] && l.full > m.full && l.end > m.end && l.copies > m.copies);
         for d in [m, l] {
             assert!(d.full < d.end && d.height[0] < d.height[1] && d.ring[0] < d.ring[1]);
+            // Below Ratchet's knee, flowers included; ferns and flowers a sparse share.
+            assert!(d.height[1] * FLOWER_RISE < 0.3 && FERN_HEIGHT[1] < 0.35);
+            assert!(d.ferns + d.flowers < 0.02 && d.ferns > 0.0 && d.flowers > 0.0);
             // Within the full distance everything is whole; at the end nothing is left; in between it only shrinks.
             assert_eq!(thin(0.999, d.full, d.full, d.end), 1.0);
             assert_eq!(thin(0.0, d.end, d.full, d.end), 0.0);
