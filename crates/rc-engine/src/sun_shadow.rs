@@ -10,7 +10,8 @@
 //!   gs_state::specialize_shadow): tfrags and ties at their full detail whatever the camera's LOD and cull (tfrags
 //!   their LOD-0 list, ties LOD 0 unmorphed and never hidden from Bevy while the sun casts: crate::tie_lod), so the
 //!   world's shadows do not change with the view; shrubs (cut out by their texture's alpha) and mobys as drawn. The
-//!   metal pass and every blended or effect draw cast nothing. Under Enhanced, crate::sun_rays shows the same sun's rays.
+//!   metal pass and every blended or effect draw cast nothing. Under Enhanced, crate::sun_rays shows the same sun's rays
+//!   and crate::volumetric_light its shafts through these cascades.
 //! - **Receiver:** the port's shaders compute no Bevy lighting, so after the opaque world a full-screen pass
 //!   (`assets/shaders/sun_shadow.wgsl`) rebuilds each pixel's world position and normal from the depth buffer,
 //!   looks it up in its cascade (normal-offset bias, 3×3 PCF on a comparison sampler) and multiplies the frame by
@@ -161,14 +162,29 @@ fn follow(
     ));
 }
 
-/// `rerac::sun_shadow::SunCascades`.
+/// `rerac::sun_shadow::SunCascades` (crate::volumetric_light binds it too).
 #[derive(Clone, Copy, Default, ShaderType)]
-struct SunCascades {
+pub struct SunCascades {
     clip_from_world: [Mat4; 4],
     /// The cascades' far bounds (view distance), 0 past the last.
     far: Vec4,
     /// World size of a shadow-map texel per cascade.
     texel: Vec4,
+}
+
+impl SunCascades {
+    /// The sun's cascades for a view and their count (None while the sun casts no shadows there).
+    pub fn of<'a>(lights: impl IntoIterator<Item = &'a ExtractedDirectionalLight>, view: Entity) -> Option<(Self, usize)> {
+        let light = lights.into_iter().find(|l| l.shadow_maps_enabled)?;
+        let cascades = light.cascades.get(&view)?;
+        let mut sun = SunCascades::default();
+        for (i, (c, bound)) in cascades.iter().zip(&light.cascade_shadow_config.bounds).take(4).enumerate() {
+            sun.clip_from_world[i] = c.clip_from_world;
+            sun.far[i] = *bound;
+            sun.texel[i] = c.texel_size;
+        }
+        Some((sun, cascades.len().min(4)))
+    }
 }
 
 #[derive(Resource)]
@@ -222,16 +238,10 @@ fn receiver_pass(
     let entity = view.entity();
     let (cam, ev, target, depth, shadows) = view.into_inner();
     let Some(light) = lights.iter().find(|l| l.shadow_maps_enabled) else { return };
-    let Some(cascades) = light.cascades.get(&entity) else { return };
+    let Some((sun, count)) = SunCascades::of([light], entity) else { return };
     let Some(mut fx) = FxView::of(cam, ev) else { return };
-    let mut sun = SunCascades::default();
-    for (i, (c, bound)) in cascades.iter().zip(&light.cascade_shadow_config.bounds).take(4).enumerate() {
-        sun.clip_from_world[i] = c.clip_from_world;
-        sun.far[i] = *bound;
-        sun.texel[i] = c.texel_size;
-    }
     let to_light = -light.transform.forward().as_vec3();
-    fx.params = Vec4::new(STRENGTH, cascades.len().min(4) as f32, MAX_DISTANCE, 0.8 * MAX_DISTANCE);
+    fx.params = Vec4::new(STRENGTH, count as f32, MAX_DISTANCE, 0.8 * MAX_DISTANCE);
     let debug = std::env::var("RC_SUN_DEBUG").ok().and_then(|v| v.trim().parse::<f32>().ok()).unwrap_or(0.0);
     fx.extra = to_light.extend(debug);
 
