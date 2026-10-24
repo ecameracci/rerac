@@ -706,6 +706,7 @@ fn menu_frame(
     gs: Option<ResMut<Persistent>>,
     sess: Option<ResMut<Session>>,
     pad: Res<PadFrame>,
+    mut slot_key: Option<ResMut<crate::input_map::QuickSlotKey>>,
     source: Res<crate::game_camera::CameraSource>,
     supported: Option<Res<SupportedMsaa>>,
     (mut vr, mut feed, mut view, mut audio): InteractParams,
@@ -718,6 +719,7 @@ fn menu_frame(
     let (gs, sess) = (&mut gs.0, &mut sess.0);
     // The front end (crate::saves): the boot flow instead of the level's modes.
     if fer.fe.is_some() {
+        if let Some(k) = slot_key.as_deref_mut() { k.0 = None; }
         let busy = movies.as_deref().is_some_and(|m| m.busy());
         let fer = &mut *fer;
         let mut port = PortSettings { shadows: shadows.as_mut(), display: &mut display, gfx: &mut gfx, fps: fps.as_mut(), qs: qs.as_mut(), supported: supported.as_deref().cloned().unwrap_or_default(), mods: mods.as_mut(), strafing: strafing.as_mut() };
@@ -731,6 +733,9 @@ fn menu_frame(
     let ticked = (counter, play.qs_held);
     if mode == Mode::Gameplay && rt.last_counter == Some(ticked) { return; }
     rt.last_counter = Some(ticked);
+    // Port-only: a number-row / numpad slot key (crate::input_map::quick_slot), for this tick's gameplay frame only; the
+    // devices count only while the game camera plays and no script drives the pad.
+    let slot_key = slot_key.as_deref_mut().and_then(|k| k.0.take()).filter(|_| rt.script.is_none() && *source == crate::game_camera::CameraSource::Play);
     if mode != Mode::Gameplay { mm.ring_open = false; }
     mm.state.begin_frame();
     let frame = mm.loop_frame;
@@ -766,6 +771,10 @@ fn menu_frame(
                 let h = qs.hero(&inp, &gate, &mut gs.global, sess);
                 let u = qs.update(&inp, &gate, &mut gs.global, sess, vsync, listeners);
                 if u.lock_pad { play.game.pad.lock = 2; }
+                if let Some(k) = slot_key {
+                    let d = qs.direct(k, &gate, &mut gs.global, sess);
+                    if trace || d.request.is_some() { println!("menus: frame {frame}: quick select key: slot {k} → hand request {:?}", d.request); }
+                }
                 // Clank's command menu: 0x141610 for the gadgetbots and HeroUpdateAlt (next tick).
                 if let Some(c) = u.command { play.game.hero.bodies.command = c; }
                 // 0x242930: the ring's △ also keeps health and bolts up (`HudShowHealth` + the bolt counter, ScaleTicks(180)).

@@ -36,7 +36,7 @@ pub const ADC_ADD: f32 = 3072.0;
 
 /// Which camera moves the main view's transform; both feed the same projection and fog.
 /// Absent (`RC_PLAY=0`) = the fly camera only. `Play` = the game's follow camera (crate::play_camera; the fly
-/// camera is frozen), `Fly` = the debug fly camera while the game keeps ticking. Tab switches (crate::gameplay).
+/// camera is frozen), `Fly` = the debug fly camera while the game keeps ticking. F7 switches (crate::gameplay).
 #[derive(Resource, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CameraSource {
     Fly,

@@ -95,7 +95,7 @@
 //!   `wrench_held`), and a hit sink on the services' hit log ([`CellHits`]); after the tick the HUD's weapon slot
 //!   ([`HeldWeapon`]) is derived from the held item.
 //!
-//! `RC_PLAY_FLY=1` starts on the fly camera (`RC_CAM`) with the game ticking (Tab switches as usual).
+//! `RC_PLAY_FLY=1` starts on the fly camera (`RC_CAM`) with the game ticking (F7 switches as usual).
 
 use crate::determinism::Deterministic;
 use crate::fly_cam::FlyCam;
@@ -270,6 +270,7 @@ impl Plugin for GameplayPlugin {
         app.insert_resource(if fly { CameraSource::Fly } else { CameraSource::Play })
             .insert_resource(PlayScript(script))
             .init_resource::<PadFrame>()
+            .init_resource::<input_map::QuickSlotKey>()
             .init_resource::<TickBudget>()
             .add_systems(
                 PreUpdate,
@@ -1735,21 +1736,21 @@ fn set_budget(det: Res<Deterministic>, time: Res<Time<Real>>, mut budget: ResMut
     budget.0 = if det.0 { 1 } else { ticks_for_frame(rcnt1) };
 }
 
-/// Tab: fly ↔ game camera (the fly camera resumes from the current view). R: respawn.
+/// F7: fly ↔ game camera (the fly camera resumes from the current view; Tab is Select, crate::input_map). R: respawn.
 fn keys(
     keys: Res<ButtonInput<KeyCode>>,
     mut source: ResMut<CameraSource>,
     play: Option<ResMut<Play>>,
     mut cams: Query<(&Transform, &mut FlyCam)>,
 ) {
-    if keys.just_pressed(KeyCode::Tab) {
+    if keys.just_pressed(KeyCode::F7) {
         *source = match *source {
             CameraSource::Play => {
                 for (t, mut c) in &mut cams {
                     let (yaw, pitch, _) = t.rotation.to_euler(EulerRot::YXZ);
                     (c.yaw, c.pitch) = (yaw, pitch);
                 }
-                println!("camera: fly (Tab: back to the game camera; the pad is neutral meanwhile)");
+                println!("camera: fly (F7: back to the game camera; the pad is neutral meanwhile)");
                 CameraSource::Fly
             }
             CameraSource::Fly => {

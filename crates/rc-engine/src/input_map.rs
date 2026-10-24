@@ -6,8 +6,13 @@
 //! zone (|b − 127| < 48) and scale (/76) are applied by `PadState`, not here. A gamepad stick is scaled per
 //! axis by [`STICK_SCALE`] and clamped, then mapped linearly (`round(127.5 + 127.5·v)`, Bevy's y up → PS2 y
 //! down): the DualShock 2's range, which reads full on both axes at a full diagonal; keys give full deflection
-//! (0 / 255), or half deflection (`PadInput::axis_byte(±0.5)`) with Shift held. Buttons are digital: pressure
+//! (0 / 255), or half deflection (`PadInput::axis_byte(±0.5)`) with Alt held. Buttons are digital: pressure
 //! 0xff while held (`PadInput::press`).
+//!
+//! Keyboard and mouse (port-only layout): WASD the left stick, the mouse (the cursor locked while the game camera
+//! plays, crate::fly_cam) and the arrow keys the right stick, Space ✕, left click □, right click ○, middle click △,
+//! Ctrl R1, Shift L1, Esc Start, Tab Select. The number row 1..8 and the numpad (8 up, then clockwise round 5) pick a
+//! quick-select slot at once ([`quick_slot`], `QuickSelect::direct`).
 //!
 //! Scripted input (`RC_PLAY_SCRIPT`), for deterministic runs: see [`Script`]. With a script the devices are
 //! ignored.
@@ -17,13 +22,16 @@ use bevy::prelude::*;
 use rc_game::pad::{button, PadInput};
 
 pub const CONTROLS: &str = "\
-play controls (PS2 pad):  left stick = WASD / arrow keys (Shift: half stick = walk) | X = Space | [] = J | O = K | /\\ = L
-                          L1 = Q | R1 = E or Ctrl (crouch) | L2 = Z | R2 = C | Start = Enter | Select = Backspace
-                          d-pad = T/F/G/H | right stick = mouse with the right button held, or , and . | R3 = V or middle mouse
+play controls (PS2 pad):  left stick = WASD (Alt: half stick = walk) | right stick = mouse, arrow keys, or , and .
+                          X = Space | [] = left click or J | O = right click or K | /\\ = middle click or L
+                          L1 = Shift or Q | R1 = Ctrl or E (crouch) | L2 = Z | R2 = C | Start = Esc or Enter
+                          Select = Tab or Backspace | d-pad = T/F/G/H | R3 = V
+                          quick select: 1..8 (1 the top slot, then clockwise) or the numpad (8 up, 9 up-right, ...)
                           gamepad: sticks, South = X, East = O, West = [], North = /\\, bumpers L1/R1, triggers L2/R2,
                           Start/Select, stick clicks L3/R3, d-pad
-engine keys:              Tab = fly camera <-> game camera (the fly camera takes the keys; the pad is neutral) |
-                          R = respawn at the level's uid-0 moby | P = print the camera | Esc releases the cursor
+engine keys:              F7 = fly camera <-> game camera (the fly camera takes the keys; the pad is neutral) |
+                          R = respawn at the level's uid-0 moby | P = print the camera | the cursor is locked while the
+                          game camera plays (free in menus and when the window loses focus)
                           F8 = bug marker (crate::session) | F9 = dump the hero and the mobys near him | F10 = the respawn state (compare with work/scratch/respawn_probe.py) | N = noclip (dev builds)";
 
 /// A gamepad stick's scale per axis before the byte, clamped (PCSX2's DualShock 2 default, 133 %). A DualShock 2
@@ -72,32 +80,49 @@ pub struct PadFrame(pub PadInput);
 /// A Bevy stick value in [−1, 1] (y up) → the raw libpad2 byte (y down).
 fn raw_axis(v: f32) -> u8 { (127.5 + 127.5 * v.clamp(-1.0, 1.0)).round().clamp(0.0, 255.0) as u8 }
 
-/// Keyboard + mouse + every gamepad → one pad read. Gamepads are merged (buttons ORed, a deflected stick wins)
-/// rather than taking the first: on Linux, gilrs also lists non-pads with axes (e.g. a wireless keyboard
-/// receiver), which can come first and would leave the real pad unread.
+/// The number row's 1..8 and the numpad's 8, 9, 6, 3, 2, 1, 4, 7: the quick-select slots 0..7 (0 the top, clockwise).
+pub(crate) const QUICK_SLOT_KEYS: [[KeyCode; 2]; 8] = {
+    use KeyCode::*;
+    [[Digit1, Numpad8], [Digit2, Numpad9], [Digit3, Numpad6], [Digit4, Numpad3], [Digit5, Numpad2], [Digit6, Numpad1], [Digit7, Numpad4], [Digit8, Numpad7]]
+};
+
+/// The quick-select slot a key pressed this frame picks (the first in slot order), for `QuickSelect::direct`.
+pub fn quick_slot(keys: &ButtonInput<KeyCode>) -> Option<usize> { QUICK_SLOT_KEYS.iter().position(|ks| keys.any_just_pressed(*ks)) }
+
+/// The slot of this frame's [`quick_slot`] key, until the first gameplay tick takes it (crate::menu_render).
+#[derive(Resource, Clone, Copy, Debug, Default)]
+pub struct QuickSlotKey(pub Option<usize>);
+
+/// Keyboard + mouse + every gamepad → one pad read; `look` = the cursor is locked (the mouse's motion turns the
+/// right stick). Gamepads are merged (buttons ORed, a deflected stick wins) rather than taking the first: on Linux,
+/// gilrs also lists non-pads with axes (e.g. a wireless keyboard receiver), which can come first and would leave the
+/// real pad unread.
 pub fn sample<'a>(
     keys: &ButtonInput<KeyCode>,
     mouse: &ButtonInput<MouseButton>,
     motion: &AccumulatedMouseMotion,
+    look: bool,
     gamepads: impl IntoIterator<Item = &'a Gamepad>,
 ) -> PadInput {
     let mut p = PadInput::neutral();
     let mut buttons = 0u32;
 
     // Keyboard left stick (per axis full or half deflection).
-    let k = |a: KeyCode, b: KeyCode| keys.pressed(a) || keys.pressed(b);
-    let x = k(KeyCode::KeyD, KeyCode::ArrowRight) as i32 - k(KeyCode::KeyA, KeyCode::ArrowLeft) as i32;
-    let y = k(KeyCode::KeyS, KeyCode::ArrowDown) as i32 - k(KeyCode::KeyW, KeyCode::ArrowUp) as i32;
+    let x = keys.pressed(KeyCode::KeyD) as i32 - keys.pressed(KeyCode::KeyA) as i32;
+    let y = keys.pressed(KeyCode::KeyS) as i32 - keys.pressed(KeyCode::KeyW) as i32;
     if x != 0 || y != 0 {
-        let walk = keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
+        let walk = keys.any_pressed([KeyCode::AltLeft, KeyCode::AltRight]);
         let byte = |v: i32| if v == 0 { 0x7f } else if walk { PadInput::axis_byte(0.5 * v as f32) } else if v < 0 { 0 } else { 0xff };
         p.lx = byte(x);
         p.ly = byte(y);
     }
-    // Right stick: mouse while the right button is held (the fly camera's grab locks the cursor), or , and .
-    let rkx = keys.pressed(KeyCode::Period) as i32 - keys.pressed(KeyCode::Comma) as i32;
-    if rkx != 0 { p.rx = if rkx < 0 { 0 } else { 0xff }; }
-    if mouse.pressed(MouseButton::Right) && motion.delta != Vec2::ZERO {
+    // Right stick: the arrow keys or , and . (full deflection), the mouse's motion over them (the cursor is locked while
+    // the game camera plays, crate::fly_cam; in the fly camera the pad is neutral).
+    let rx = keys.any_pressed([KeyCode::ArrowRight, KeyCode::Period]) as i32 - keys.any_pressed([KeyCode::ArrowLeft, KeyCode::Comma]) as i32;
+    let ry = keys.pressed(KeyCode::ArrowDown) as i32 - keys.pressed(KeyCode::ArrowUp) as i32;
+    if rx != 0 { p.rx = if rx < 0 { 0 } else { 0xff }; }
+    if ry != 0 { p.ry = if ry < 0 { 0 } else { 0xff }; }
+    if look && motion.delta != Vec2::ZERO {
         p.rx = raw_axis(motion.delta.x / MOUSE_FULL);
         p.ry = raw_axis(-motion.delta.y / MOUSE_FULL);
     }
@@ -106,12 +131,17 @@ pub fn sample<'a>(
         (KeyCode::KeyJ, button::SQUARE),
         (KeyCode::KeyK, button::CIRCLE),
         (KeyCode::KeyL, button::TRIANGLE),
+        (KeyCode::ShiftLeft, button::L1),
+        (KeyCode::ShiftRight, button::L1),
         (KeyCode::KeyQ, button::L1),
-        (KeyCode::KeyE, button::R1),
         (KeyCode::ControlLeft, button::R1),
+        (KeyCode::ControlRight, button::R1),
+        (KeyCode::KeyE, button::R1),
         (KeyCode::KeyZ, button::L2),
         (KeyCode::KeyC, button::R2),
+        (KeyCode::Escape, button::START),
         (KeyCode::Enter, button::START),
+        (KeyCode::Tab, button::SELECT),
         (KeyCode::Backspace, button::SELECT),
         (KeyCode::KeyV, button::R3),
         (KeyCode::KeyT, button::UP),
@@ -121,7 +151,9 @@ pub fn sample<'a>(
     ] {
         if keys.pressed(key) { buttons |= b; }
     }
-    if mouse.pressed(MouseButton::Middle) { buttons |= button::R3; }
+    for (mb, b) in [(MouseButton::Left, button::SQUARE), (MouseButton::Right, button::CIRCLE), (MouseButton::Middle, button::TRIANGLE)] {
+        if mouse.pressed(mb) { buttons |= b; }
+    }
 
     for g in gamepads {
         let (l, r) = (g.left_stick(), g.right_stick());
@@ -157,15 +189,19 @@ pub fn sample<'a>(
     p.press(buttons)
 }
 
-/// Samples the devices into [`PadFrame`] (after Bevy's input systems).
+/// Samples the devices into [`PadFrame`] and [`QuickSlotKey`] (after Bevy's input systems).
 pub fn sample_system(
     keys: Res<ButtonInput<KeyCode>>,
     mouse: Res<ButtonInput<MouseButton>>,
     motion: Res<AccumulatedMouseMotion>,
     gamepads: Query<&Gamepad>,
+    cursor: Option<Single<&bevy::window::CursorOptions, With<bevy::window::PrimaryWindow>>>,
     mut frame: ResMut<PadFrame>,
+    mut slot: ResMut<QuickSlotKey>,
 ) {
-    frame.0 = sample(&keys, &mouse, &motion, &gamepads);
+    let look = cursor.is_some_and(|c| c.grab_mode != bevy::window::CursorGrabMode::None);
+    frame.0 = sample(&keys, &mouse, &motion, look, &gamepads);
+    if let Some(k) = quick_slot(&keys) { slot.0 = Some(k); }
 }
 
 /// `RC_PLAY_SCRIPT`: pad input per gameplay tick, `item,item,...` with `item = range:action`.
@@ -288,15 +324,51 @@ mod tests {
         let mut keys = ButtonInput::<KeyCode>::default();
         keys.press(KeyCode::KeyW);
         keys.press(KeyCode::Space);
-        let p = sample(&keys, &ButtonInput::default(), &AccumulatedMouseMotion::default(), []);
+        let p = sample(&keys, &ButtonInput::default(), &AccumulatedMouseMotion::default(), false, []);
         let mut pad = PadState::default();
         pad.update(Some(&p.bytes()), false);
         assert_eq!((pad.lx.to_f32(), pad.ly.to_f32()), (0.0, -1.0));
         assert!(pad.pressed & button::CROSS != 0);
-        // Shift: half stick.
-        keys.press(KeyCode::ShiftLeft);
-        let p = sample(&keys, &ButtonInput::default(), &AccumulatedMouseMotion::default(), []);
+        // Alt: half stick.
+        keys.press(KeyCode::AltLeft);
+        let p = sample(&keys, &ButtonInput::default(), &AccumulatedMouseMotion::default(), false, []);
         pad.update(Some(&p.bytes()), false);
         assert!((pad.ly.to_f32() + 0.5).abs() < 0.01);
+    }
+
+    #[test]
+    fn keyboard_and_mouse_layout() {
+        let pad_of = |keys: &[KeyCode], mouse: &[MouseButton], delta: Vec2, look: bool| {
+            let (mut k, mut m) = (ButtonInput::<KeyCode>::default(), ButtonInput::<MouseButton>::default());
+            for &x in keys { k.press(x); }
+            for &x in mouse { m.press(x); }
+            let p = sample(&k, &m, &AccumulatedMouseMotion { delta }, look, []);
+            let mut pad = PadState::default();
+            pad.update(Some(&p.bytes()), false);
+            pad
+        };
+        use KeyCode::*;
+        for (key, b) in [(ShiftLeft, button::L1), (ControlLeft, button::R1), (Escape, button::START), (Tab, button::SELECT), (Space, button::CROSS)] {
+            assert_eq!(pad_of(&[key], &[], Vec2::ZERO, false).held, b, "{key:?}");
+        }
+        for (mb, b) in [(MouseButton::Left, button::SQUARE), (MouseButton::Right, button::CIRCLE), (MouseButton::Middle, button::TRIANGLE)] {
+            assert_eq!(pad_of(&[], &[mb], Vec2::ZERO, false).held, b, "{mb:?}");
+        }
+        // The arrows turn the camera (right stick), not Ratchet.
+        let p = pad_of(&[ArrowLeft, ArrowUp], &[], Vec2::ZERO, false);
+        assert_eq!((p.rx.to_f32(), p.ry.to_f32(), p.lx.to_f32(), p.ly.to_f32()), (-1.0, -1.0, 0.0, 0.0));
+        // The mouse turns it only with the cursor locked.
+        let p = pad_of(&[], &[], Vec2::new(MOUSE_FULL, 0.0), true);
+        assert_eq!(p.rx.to_f32(), 1.0);
+        assert_eq!(pad_of(&[], &[], Vec2::new(MOUSE_FULL, 0.0), false).rx.to_f32(), 0.0);
+        // The quick-select keys: 1 and numpad 8 the top slot, clockwise.
+        let slot = |key: KeyCode| {
+            let mut k = ButtonInput::<KeyCode>::default();
+            k.press(key);
+            quick_slot(&k)
+        };
+        assert_eq!([Digit1, Digit3, Digit8].map(slot), [Some(0), Some(2), Some(7)]);
+        assert_eq!([Numpad8, Numpad9, Numpad6, Numpad3, Numpad2, Numpad1, Numpad4, Numpad7].map(slot), std::array::from_fn(Some));
+        assert_eq!([Numpad5, Digit9].map(slot), [None, None]);
     }
 }
