@@ -258,6 +258,21 @@ pub fn detail_fade(f: f32, d: f32, scale: f32) -> f32 {
     if fs >= d - 24.0 { -1.0 } else { fs }
 }
 
+/// Whether a part entity can draw at view depth `z` (the shader's rules with [`CULL_MARGIN`]): `scale` the Detail
+/// distance factor, `draw` the Draw distance factor (D' = D × draw, the 8-unit fade × draw; 1 = the game's).
+fn cull_shows(c: &ShrubCull, z: f32, scale: f32, draw: f32) -> bool {
+    let d = c.d * draw;
+    let mut show = z <= d + CULL_MARGIN;
+    let f = detail_fade(c.f, d, scale);
+    if f >= 0.0 {
+        show &= z < f + 8.0 + CULL_MARGIN;
+        if c.variant == 2 { show &= z > f - CULL_MARGIN; }
+    } else if c.variant == 2 {
+        show &= z > d - 8.0 * draw - CULL_MARGIN;
+    }
+    show
+}
+
 fn cull_system(
     cams: Query<&Transform, (With<Camera3d>, Without<crate::sky_render::SkyCamera>)>,
     mut q: Query<(&ShrubCull, &mut Visibility)>,
@@ -265,17 +280,9 @@ fn cull_system(
 ) {
     let Some(cam) = cams.iter().next() else { return };
     let (eye, fwd) = (cam.translation, *cam.forward());
-    let scale = gfx.detail.lod_scale();
+    let (scale, draw) = (gfx.detail.lod_scale(), gfx.draw.scale());
     for (c, mut vis) in &mut q {
-        let z = (c.centre - eye).dot(fwd);
-        let mut show = z <= c.d + CULL_MARGIN;
-        let f = detail_fade(c.f, c.d, scale);
-        if f >= 0.0 {
-            show &= z < f + 8.0 + CULL_MARGIN;
-            if c.variant == 2 { show &= z > f - CULL_MARGIN; }
-        } else if c.variant == 2 {
-            show &= z > c.d - 8.0 - CULL_MARGIN;
-        }
+        let show = cull_shows(c, (c.centre - eye).dot(fwd), scale, draw);
         vis.set_if_neq(if show { Visibility::Inherited } else { Visibility::Hidden });
     }
 }
@@ -723,4 +730,26 @@ pub(crate) fn mip_image(levels: &[Texture], sampler: ImageSamplerDescriptor) -> 
     img.data = Some(rgba);
     img.sampler = ImageSampler::Descriptor(sampler);
     (img, range)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The CPU cull under the Draw distance factor: D and the non-billboard fade band scale; ×1 is the game's rule.
+    #[test]
+    fn cull_follows_the_draw_distance() {
+        let plain = |variant| ShrubCull { centre: Vec3::ZERO, d: 40.0, f: -1.0, variant };
+        let m = CULL_MARGIN;
+        assert!(cull_shows(&plain(1), 40.0 + m, 1.0, 1.0) && !cull_shows(&plain(1), 40.1 + m, 1.0, 1.0));
+        assert!(cull_shows(&plain(1), 80.0 + m, 1.0, 2.0) && !cull_shows(&plain(1), 80.1 + m, 1.0, 2.0));
+        // The fading list: the last 8 units, 16 at ×2.
+        assert!(!cull_shows(&plain(2), 32.0 - m, 1.0, 1.0) && cull_shows(&plain(2), 32.1 - m, 1.0, 1.0));
+        assert!(!cull_shows(&plain(2), 64.0 - m, 1.0, 2.0) && cull_shows(&plain(2), 64.1 - m, 1.0, 2.0));
+        // A billboard class keeps its mesh to F (and its cross-fade), whatever the draw distance.
+        let bb = ShrubCull { centre: Vec3::ZERO, d: 60.0, f: 30.0, variant: 1 };
+        assert!(cull_shows(&bb, 37.9 + m, 1.0, 4.0) && !cull_shows(&bb, 38.0 + m, 1.0, 4.0));
+        // Detail Far (F' = 60) within 24 of D = 60 makes it a plain class; with D' = 240 the billboard stays.
+        assert_eq!((detail_fade(30.0, 60.0, 2.0), detail_fade(30.0, 240.0, 2.0)), (-1.0, 60.0));
+    }
 }

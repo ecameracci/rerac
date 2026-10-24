@@ -1,6 +1,6 @@
 //! **Port-only** (not in the game): the "Port Options" page, for settings the PS2 never had (the graphics options and
-//! their preset, anti-aliasing, ambient occlusion, water, particles, the lighting (the game's shadows, sun shadows,
-//! or sun shadows with the advanced lighting effects),
+//! their preset, anti-aliasing, detail and draw distance, ambient occlusion, water, particles, the lighting (the game's
+//! shadows, sun shadows, or sun shadows with the advanced lighting effects),
 //! the gameplay and cutscene aspects, the render resolution, fullscreen, the FPS limit and, last, the gameplay rows
 //! Strafing and Quick Select, the ring's hold of the world, then the mouse look's direction and speed).
 //! Spec: docs/plan/menus.md "Port-only settings"; the graphics rows: docs/plan/graphics_options.md (every row's first
@@ -131,6 +131,7 @@ pub mod text {
     pub const FAR: i32 = -0x191;
     pub const FARTHER: i32 = -0x192;
     pub const MAXIMUM: i32 = -0x193;
+    pub const DRAW_DISTANCE: i32 = -0x194;
     pub const FPS_LIMIT: i32 = -0x1a0;
     pub const FPS_30: i32 = -0x1a1;
     pub const FPS_60: i32 = -0x1a2;
@@ -203,6 +204,7 @@ pub mod text {
             FAR => b"Far",
             FARTHER => b"Farther",
             MAXIMUM => b"Maximum",
+            DRAW_DISTANCE => b"Draw distance",
             FPS_LIMIT => b"FPS limit",
             FPS_30 => b"30",
             FPS_60 => b"60",
@@ -271,6 +273,9 @@ pub enum Setting {
     /// How far away models keep their full detail: value 0 Original (the game's distances), 1 Far (×2), 2 Farther (×4),
     /// 3 Maximum (always).
     Detail,
+    /// How far the world is drawn: value 0 Original (the game's draw distances), 1 Far (×1.5), 2 Farther (×2),
+    /// 3 Maximum (×4).
+    DrawDistance,
     /// The most frames drawn a second: value 0 30, 1 60 (the default, the game's tick rate), 2 120, 3 unlimited
     /// (no vsync). The game still ticks at 60 Hz.
     FrameLimit,
@@ -306,6 +311,7 @@ pub const ENTRIES: &[Entry] = &[
     Entry { setting: Setting::FrameLimit, label: text::FPS_LIMIT, values: &[text::FPS_30, text::FPS_60, text::FPS_120, text::UNLIMITED] },
     Entry { setting: Setting::AntiAliasing, label: text::ANTI_ALIASING, values: &[text::ORIGINAL, text::OFF, text::X2, text::X4, text::X8] },
     Entry { setting: Setting::Detail, label: text::DETAIL, values: &[text::ORIGINAL, text::FAR, text::FARTHER, text::MAXIMUM] },
+    Entry { setting: Setting::DrawDistance, label: text::DRAW_DISTANCE, values: &[text::ORIGINAL, text::FAR, text::FARTHER, text::MAXIMUM] },
     Entry { setting: Setting::Textures, label: text::TEXTURES, values: &[text::ORIGINAL, text::SMOOTH, text::SHARP] },
     Entry { setting: Setting::Hud, label: text::HUD, values: &[text::ORIGINAL, text::SHARP_PIXELS] },
     Entry { setting: Setting::AmbientOcclusion, label: text::AMBIENT_OCCLUSION, values: &[text::ORIGINAL, text::ON] },

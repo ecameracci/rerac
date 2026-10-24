@@ -13,6 +13,7 @@
 - Lighting Enhanced: the sun's rays now stream from the sun painted in each planet's sky (Veldin's sunset, the bright sky over Novalis and Eudora, Gemlik's red sun) and turn with it; skies without a sun (night, space, storms) have no rays. They are gentler where a big sun fills the view (Gemlik): a warm tint, no longer an orange wash over everything. Where the sky paints a sun disc (Veldin's sunset, Gemlik's red sun), the sun shadows (Lighting Simple and Enhanced) now fall away from it too: on Gemlik they no longer run across the red sun's light.
 - Port Options: Lighting Enhanced adds global illumination: light bounces once between nearby surfaces, so a coloured wall tints the ground beside it and lit ground brightens the shaded side of what stands over it.
 - Port Options: Lighting Enhanced also polishes the 3D picture: lamps, glows and explosions get a soft bloom, a gentle film-like grade adds a little contrast and colour without clipping the whites, and a light sharpening brings out detail. The HUD, menus and movies are unchanged.
+- Port Options has a new graphics row, Draw distance, below Detail distance: Far, Farther and Maximum draw the level's scenery, buildings and plants farther away (×1.5, ×2, ×4), and fade it out at the new limit instead of popping. Characters, objects and particles keep the original distance. Original still looks like the PS2 game; the presets leave the row as it is.
 
 ## v0.4.3-alpha
 

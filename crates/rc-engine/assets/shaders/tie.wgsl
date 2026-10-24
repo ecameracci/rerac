@@ -6,8 +6,8 @@
 // not used for positions), the bounding-sphere centre (Bevy world) with the draw distance in w, the radius,
 // and 64 packed RGBA8 colours (0x80 = 1.0).
 //
-// Per-frame TieProc decision (`lods[2 * mesh tag]`, tie_lod.rs): x = LOD (3 = culled) | F << 8, y = k,
-// z = VU qw4.w = 256k, w = qw4.z = 256 - 256k (f32 bits). The next word is the wind shear
+// Per-frame TieProc decision (`lods[2 * mesh tag]`, tie_lod.rs): x = LOD (3 = culled) | F << 8 | end fade << 16,
+// y = k, z = VU qw4.w = 256k, w = qw4.z = 256 - 256k (f32 bits). The next word is the wind shear
 // (`lods[2 * mesh tag + 1].xy` = sx, sy, f32 bits; 0 without sway): TieProc shears the instance columns
 // `x += sx·z, y += sy·z` (world Z up, about the origin), applied here to the morphed position. Vertices of the
 // other LODs are dropped; VU1 program 13507 writes the same F for every vertex of an instance (qw 5.w).
@@ -17,6 +17,9 @@
 // 0x4b000000 + byte. Dinky vertices: the slot colour as is (`lq vf11, 838(vi09)`).
 // Texture: same GS rules as tfrag.wgsl (MODULATE, raw display-encoded bytes, As = At * Af >> 7, mip level
 // round(log2(z / 32) + K) clamped to 0..MXL).
+// End fade (the Draw distance option above Original, tie_lod.rs `record`): 128 - the visibility over the last
+// 16 units x the factor of the instance's draw distance; the fragments a 4x4 ordered dither leaves out are discarded
+// (`end_fade_shown`, crate::graphics::end_fade_shown). 0 (Original): every fragment, the game's pop.
 // Point lights (`LightTies`' third light, crate::world_lights): when the instance's nibble list names any, each slot
 // colour the vertex reads (c0, and c1 / c2 of a fat vertex, before the VU blend) gets the merged light on its class
 // normal added, clamped at 243. With an empty list (0xffff) nothing changes. The class normals ride in the
@@ -32,7 +35,7 @@
 struct TieFog {
     color: vec4<f32>,
     params: vec4<f32>,
-    // x: the texture option (crate::graphics; sample_world).
+    // x: the texture option (crate::graphics; sample_world). (The Draw distance end fade comes per instance.)
     tex_mode: vec4<f32>,
 }
 
@@ -113,6 +116,16 @@ struct TieVertexOutput {
     @location(4) @interpolate(flat) k: f32,
     // Debug tint: 0 none, 1 LOD 1, 2 LOD 2.
     @location(5) @interpolate(flat) tint: u32,
+    // The end fade (0 = drawn whole).
+    @location(6) @interpolate(flat) fade: u32,
+}
+
+// The end fade's dither (crate::graphics::end_fade_shown): pixel `p` is drawn at visibility `vis` (0..128).
+fn end_fade_shown(vis: u32, p: vec2<f32>) -> bool {
+    let q = vec2<u32>(p);
+    let e = q.x ^ q.y;
+    let b = ((e & 1u) << 3u) | ((q.y & 1u) << 2u) | (e & 2u) | ((q.y >> 1u) & 1u);
+    return vis > 8u * b + 4u;
 }
 
 // VU FMAC product of two non-negative floats, truncated (rc_formats ps2::mul; tie_lod::vu_mul).
@@ -273,7 +286,8 @@ fn vertex(v: TieVertex) -> TieVertexOutput {
     }
     out.color = unpack4x8unorm(rgba) * (255.0 / 128.0);
     out.depth = -position_world_to_view(world).z * 1024.0;
-    out.fog = f32(lod.x >> 8u) / 255.0;
+    out.fog = f32((lod.x >> 8u) & 0xffu) / 255.0;
+    out.fade = (lod.x >> 16u) & 0xffu;
     out.k = f32(bitcast<i32>(v.info) >> 20u) / 16.0;
     out.tint = select(0u, vlod, params.misc.z > 0.5);
     return out;
@@ -303,6 +317,7 @@ fn fragment(in: TieVertexOutput) -> @location(0) vec4<f32> {
 #ifdef GS_ATEST_FAIL
     if (a_s >= f32(#{GS_AREF})) { discard; }
 #endif
+    if (in.fade != 0u && !end_fade_shown(128u - in.fade, in.position.xy)) { discard; }
     return vec4<f32>(srgb_to_linear(rgb), a_s / 128.0);
 }
 #endif

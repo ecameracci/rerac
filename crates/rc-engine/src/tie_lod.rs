@@ -6,7 +6,8 @@
 //! Per instance and frame (`update_tie_lods`) two `vec4<u32>` go into a storage buffer every tie
 //! material binds (index = instance index = `MeshTag`). The occlusion test (tie +0x18/+0x19 against the
 //! frame mask, crate::occlusion) comes first; an occluded instance gets the culled record:
-//! x = LOD (0..2, [`LOD_CULLED`] = not drawn) | F << 8 (the GS fog value `TieProc` puts in qw 5.w),
+//! x = LOD (0..2, [`LOD_CULLED`] = not drawn) | F << 8 (the GS fog value `TieProc` puts in qw 5.w) | the Draw distance
+//! option's end fade << 16 (0 under Original: the game's draw distance and its pop),
 //! y = k (f32 bits), z = qw4.w = 256·k, w = qw4.z = 256 − 256·k (the VU colour weights, f32 bits); the
 //! second word is the wind shear (x, y = sx, sy, f32 bits; 0 without sway). The vertex shader drops the
 //! vertices of the other LODs, draws fat vertices at `position + k·delta` and blends their colour with the
@@ -235,19 +236,26 @@ impl TieLodState {
 /// `RC_TIE_LOD_TINT=1`.
 pub fn tint_enabled() -> bool { std::env::var("RC_TIE_LOD_TINT").is_ok_and(|v| v.trim() == "1") }
 
-/// One instance's record: (LOD | F << 8, k, w, z). `scale`: the Detail distance option on the class LOD distances
-/// (crate::graphics; 1 = the game's, the draw distance is never scaled).
-fn record(inp: &TieLodInput, eye: Vec3, rows: [Vec3; 3], fog: &LevelFog, force_lod0: bool, tans: (f32, f32), scale: f32) -> ([u32; 4], usize) {
+/// One instance's record: (LOD | F << 8 | fade << 16, k, w, z). `scale`: the Detail distance option on the class LOD
+/// distances; `draw`: the Draw distance option on the draw distance (crate::graphics; 1 = the game's for both). Above
+/// 1 the instance fades out over the last 16 units × `draw` of its distance ([`crate::graphics::end_fade`] of its
+/// centre depth; fade = 128 − visibility, 0 = drawn whole, tie.wgsl dithers by it) instead of the game's pop.
+#[allow(clippy::too_many_arguments)]
+fn record(inp: &TieLodInput, eye: Vec3, rows: [Vec3; 3], fog: &LevelFog, force_lod0: bool, tans: (f32, f32), scale: f32, draw: f32) -> ([u32; 4], usize) {
     let [x, y, z, r] = inp.sphere;
     let d = Vec3::new(x, y, z) - eye;
     let p = Vec3::new(rows[0].dot(d), rows[1].dot(d), rows[2].dot(d));
-    // The cap 0x160fe0 (720, already in `inp.dist`): 144 in the Visibomb's view (crate::visibomb_view::SHORT_FAR).
-    let dist = if crate::visibomb_view::SHORT_FAR.load(std::sync::atomic::Ordering::Relaxed) { inp.dist.min(crate::visibomb_view::SHORT_TIE_CAP) } else { inp.dist };
+    // The cap 0x160fe0 (720, already in `inp.dist`): 144 in the Visibomb's view (crate::visibomb_view::SHORT_FAR), which
+    // keeps the game's distances.
+    let short = crate::visibomb_view::SHORT_FAR.load(std::sync::atomic::Ordering::Relaxed);
+    let draw = if short { 1.0 } else { draw };
+    let dist = if short { inp.dist.min(crate::visibomb_view::SHORT_TIE_CAP) } else { inp.dist * draw };
     let Some(depth) = tie_cull(p, r, dist, tans) else { return ([LOD_CULLED, 0, 0, 0], 0) };
     let dists = if scale == 1.0 { inp.dists } else { inp.dists.map(|d| d * scale) };
     let pick = if force_lod0 { TieLodPick::fixed(0) } else { tie_lod(depth, dists) };
     let bin = match (pick.lod, pick.w != 0.0) { (0, false) => 1, (0, true) => 2, (1, _) => 3, _ => 4 };
-    ([pick.lod | fog_value(depth, fog) << 8, pick.k.to_bits(), pick.w.to_bits(), pick.z.to_bits()], bin)
+    let fade = if draw > 1.0 { 128 - crate::graphics::end_fade(p.z, dist, draw) } else { 0 };
+    ([pick.lod | fog_value(depth, fog) << 8 | fade << 16, pick.k.to_bits(), pick.w.to_bits(), pick.z.to_bits()], bin)
 }
 
 /// `RC_SWAY` (default on; the shrub renderer reads the same switch).
@@ -269,7 +277,7 @@ pub fn update_tie_lods(
     mut vis: Query<&mut Visibility>,
 ) {
     let hide = sun.is_none_or(|s| !s.sun_shadows);
-    let scale = gfx.detail.lod_scale();
+    let (scale, draw) = (gfx.detail.lod_scale(), gfx.draw.scale());
     let (Some(mut state), Some((cam, proj))) = (state, cams.iter().next()) else { return };
     let tans = game_camera::projection_tans(proj);
     let (eye, [fwd, left, up]) = (game_camera::game_eye(cam), game_camera::game_rows(cam));
@@ -288,7 +296,7 @@ pub fn update_tie_lods(
             words.extend_from_slice(&[LOD_CULLED, 0, 0, 0, 0, 0, 0, 0]);
             continue;
         }
-        let (rec, bin) = record(inp, eye, rows, &state.fog, state.force_lod0, tans, scale);
+        let (rec, bin) = record(inp, eye, rows, &state.fog, state.force_lod0, tans, scale, draw);
         hist[bin + 1] += 1;
         words.extend_from_slice(&rec);
         // `TieProc`'s sway block: the same shear as `ShrubProc`'s, phased by the matrix block's 512-byte page.
@@ -381,6 +389,26 @@ mod tests {
         assert_eq!(tie_cull(Vec3::new(0.0, 0.0, -2.0), 5.0, 720.0, crate::game_camera::default_tans()), Some(0.0)); // straddles the camera: depth 0
         assert_eq!(tie_cull(Vec3::new(100.0, 0.0, 50.0), 5.0, 720.0, crate::game_camera::default_tans()), None); // right of the frustum
         assert!(tie_cull(Vec3::new(33.0, 0.0, 50.0), 5.0, 720.0, crate::game_camera::default_tans()).is_some()); // overlaps the side plane
+    }
+
+    /// The Draw distance factor on the record: ×1 is the game's (no fade bits, the cut at the distance); ×2 draws to
+    /// twice the distance and fades over its last 32 units.
+    #[test]
+    fn draw_distance_scales_and_fades() {
+        let fog = LevelFog { color: [0; 3], near_dist: 0.0, far_dist: 245760.0, near_intensity: 255.0, far_intensity: 102.0 };
+        let inp = TieLodInput { sphere: [0.0, 100.0, 0.0, 2.0], dist: 120.0, dists: D, sway: None };
+        let rows = [Vec3::new(1.0, 0.0, 0.0), Vec3::new(0.0, 0.0, -1.0), Vec3::Y]; // camera looks along +y
+        let at = |y: f32, draw: f32| record(&TieLodInput { sphere: [0.0, y, 0.0, 2.0], ..inp }, Vec3::ZERO, rows, &fog, false, game_camera::default_tans(), 1.0, draw).0[0];
+        let lod = |x: u32| x & 0xff;
+        assert_eq!(lod(at(100.0, 1.0)), 2);
+        assert_eq!(at(100.0, 1.0) >> 16, 0);
+        assert_eq!(lod(at(121.0, 1.0)), LOD_CULLED);
+        assert_eq!((lod(at(121.0, 2.0)), at(121.0, 2.0) >> 16), (2, 0));
+        assert_eq!(at(224.0, 2.0) >> 16, 64); // 16 of the last 32 units
+        assert_eq!(at(239.9, 2.0) >> 16, 128);
+        assert_eq!(lod(at(240.5, 2.0)), LOD_CULLED);
+        // The fog byte stays clean of the fade bits.
+        assert_eq!((at(224.0, 2.0) >> 8) & 0xff, fog_value(224.0, &fog));
     }
 
     #[test]

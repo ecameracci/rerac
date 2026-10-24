@@ -48,6 +48,11 @@
 // blends, as VU1 reads the relit RGBA block. With an empty list (0xffff) nothing changes. The lists (one u32 per
 // tfrag) and the bank (8 × 8 f32 as u32 bits) follow the draw modes in `modes`; a slot's normal is packed in its
 // last word. (No bindings of their own: a changed material layout reorders draws and changes lightless frames.)
+//
+// End fade (the Draw distance option above Original, `fog.tex_mode.z` = its factor s; tfrag_lod.rs DRAW_DISTANCE): the
+// cull at 500·s units is per tfrag, so each pixel fades by its own depth over the last 16·s units before it
+// (crate::graphics::end_fade), dithered 4x4 (`end_fade_shown`); nothing past 500·s is drawn, so the cull never pops.
+// s = 1 (Original): no fade, the game's cut.
 
 #import bevy_pbr::view_transformations::{position_world_to_clip, position_world_to_view}
 #import rerac::world_lights::{WorldLight, NO_LIGHTS}
@@ -57,7 +62,7 @@ struct TfragFog {
     color: vec4<f32>,
     // (slope per integer unit of depth, offset qw661.w, lower clamp qw656.y, upper clamp qw656.z).
     params: vec4<f32>,
-    // x: the texture option (crate::graphics; sample_world).
+    // x: the texture option (crate::graphics; sample_world), z: the Draw distance factor (the end fade).
     tex_mode: vec4<f32>,
 }
 
@@ -333,6 +338,20 @@ fn srgb_to_linear(c: vec3<f32>) -> vec3<f32> {
     return select(hi, lo, c <= vec3<f32>(0.04045));
 }
 
+// The end fade's dither (crate::graphics::end_fade_shown): pixel `p` is drawn at visibility `vis` (0..128).
+fn end_fade_shown(vis: u32, p: vec2<f32>) -> bool {
+    let q = vec2<u32>(p);
+    let e = q.x ^ q.y;
+    let b = ((e & 1u) << 3u) | ((q.y & 1u) << 2u) | (e & 2u) | ((q.y >> 1u) & 1u);
+    return vis > 8u * b + 4u;
+}
+
+// crate::graphics::end_fade at raw depth `depth` for the cull at 500·s units (512000 raw).
+fn end_fade(depth: f32, s: f32) -> u32 {
+    let steps = (512000.0 * s - depth) * (8.0 / (1024.0 * s));
+    return select(min(u32(steps), 128u), 0u, steps <= 0.0);
+}
+
 @fragment
 fn fragment(in: TfragVertexOutput) -> @location(0) vec4<f32> {
     let duv = vec4<f32>(dpdx(in.uv), dpdy(in.uv));
@@ -354,6 +373,8 @@ fn fragment(in: TfragVertexOutput) -> @location(0) vec4<f32> {
 #ifdef GS_ATEST_FAIL
     if (a_s >= f32(#{GS_AREF})) { discard; }
 #endif
+    let s = fog.tex_mode.z;
+    if (s > 1.0 && !end_fade_shown(end_fade(in.depth, s), in.position.xy)) { discard; }
     return vec4<f32>(srgb_to_linear(rgb), a_s / 128.0);
 }
 #endif

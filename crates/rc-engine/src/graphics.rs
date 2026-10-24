@@ -8,6 +8,7 @@
 //! | [`Hud`] | Original (the 512×416 HUD scaled up smoothly, as the TV showed it), Sharp pixels | crate::hud_render composite |
 //! | [`Textures`] | Original (the GS mip rule, one level per pixel), Smooth (blended levels), Sharp (the GPU's own choice, anisotropic) | the world shaders, through crate::game_camera's shared fog buffer |
 //! | [`Detail`] | Original (the game's LOD distances), Far (×2), Farther (×4), Maximum (the full model whenever it is drawn) | crate::tfrag_lod, crate::tie_lod, crate::moby_render, crate::shrub_render (drawing only: the game logic keeps its own decisions) |
+//! | [`DrawDistance`] | Original (the game's draw distances), Far (×1.5), Farther (×2), Maximum (×4), the new end faded | crate::tfrag_lod, crate::tie_lod, crate::shrub_render, crate::game_camera (the far plane); not mobys or particles (their drawn flags are game state) |
 //! | [`AmbientOcclusion`] | Original (none: the shade is the artists' baked vertex colours), On (screen-space occlusion from the depth buffer) | crate::ao_render |
 //! | [`Water`] | Original (the GS blend of the water textures), Enhanced (clear by depth, reflections, a sun glint, foam at the shore) | crate::water_render, crate::scene_copy |
 //! | [`Particles`] | Original (sprites cut where they meet the world), Soft (faded by their depth in front of it) | crate::particle_render, crate::scene_copy |
@@ -19,9 +20,10 @@
 //!
 //! Persisted in the port settings file (`crate::render_settings::save_key`); `RC_HUD`-style switches are not used here
 //! (`RC_HUD=0` already hides the HUD): `RC_GFX_ANTI_ALIASING`, `RC_GFX_HUD`, `RC_GFX_TEXTURES`, `RC_GFX_DETAIL`,
-//! `RC_GFX_AMBIENT_OCCLUSION`, `RC_GFX_WATER`, `RC_GFX_PARTICLES`, `RC_GFX_LIGHTING` (the keys below),
-//! `RC_MSAA=0|2|4|8` (Anti-aliasing Off or that multisampling), `RC_SHADOWS=1|dynamic` (Lighting Original / Enhanced,
-//! the older switch; `0`: crate::shadow_render) and `RC_GFX_PRESET=original|enhanced` override the file at start.
+//! `RC_GFX_DRAW_DISTANCE`, `RC_GFX_AMBIENT_OCCLUSION`, `RC_GFX_WATER`, `RC_GFX_PARTICLES`, `RC_GFX_LIGHTING` (the keys
+//! below), `RC_MSAA=0|2|4|8` (Anti-aliasing Off or that multisampling), `RC_SHADOWS=1|dynamic` (Lighting Original /
+//! Enhanced, the older switch; `0`: crate::shadow_render) and `RC_GFX_PRESET=original|enhanced` override the file at
+//! start.
 
 use bevy::prelude::*;
 
@@ -164,6 +166,62 @@ impl GfxOption for Detail {
             Detail::Maximum => "maximum",
         }
     }
+}
+
+/// How far the world is drawn (docs/plan/graphics_options.md "Draw distance").
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum DrawDistance {
+    #[default]
+    Original,
+    Far,
+    Farther,
+    Maximum,
+}
+
+impl DrawDistance {
+    /// The factor on the game's draw distances (tfrag 500, tie ≤ 720, shrub ≤ 500 units) and the far plane (728):
+    /// ×1.5 puts every tfrag pixel the game could draw (to the far plane) inside the new 750; ×4 covers the
+    /// longest views across a level.
+    pub fn scale(self) -> f32 {
+        match self {
+            DrawDistance::Original => 1.0,
+            DrawDistance::Far => 1.5,
+            DrawDistance::Farther => 2.0,
+            DrawDistance::Maximum => 4.0,
+        }
+    }
+}
+
+impl GfxOption for DrawDistance {
+    const ALL: &'static [Self] = &[DrawDistance::Original, DrawDistance::Far, DrawDistance::Farther, DrawDistance::Maximum];
+    const KEY: &'static str = "draw_distance";
+    fn key(self) -> &'static str {
+        match self {
+            DrawDistance::Original => "original",
+            DrawDistance::Far => "far",
+            DrawDistance::Farther => "farther",
+            DrawDistance::Maximum => "maximum",
+        }
+    }
+}
+
+/// The fade at the end of a draw range under Draw distance above Original (Original keeps the game's hard cut): the
+/// visibility 0..=128 at view depth `z` of a range ending at `end` (world units), over its last 16 units × `scale` (the
+/// band the game fades mobys and shrub billboards over), in the moby fade's steps. crate::tie_lod (per instance) and
+/// tfrag.wgsl (per pixel) use it; the shaders dither by it ([`end_fade_shown`]).
+pub fn end_fade(z: f32, end: f32, scale: f32) -> u32 {
+    let steps = (end - z) * (8.0 / scale);
+    if steps <= 0.0 { 0 } else { (steps as u32).min(128) }
+}
+
+/// The 4×4 ordered dither of the end fade (tie.wgsl / tfrag.wgsl `end_fade_shown`): pixel (x, y) is drawn at
+/// visibility `vis` when `vis > 8·B(x, y) + 4`, B the 4×4 Bayer index (0..15, the bits of x ⊕ y and y interleaved), so
+/// 0 draws none and 128 every pixel.
+#[cfg_attr(not(test), allow(dead_code))] // CPU reference for the shaders, exercised by the tests
+pub fn end_fade_shown(vis: u32, x: u32, y: u32) -> bool {
+    let e = x ^ y;
+    let b = (e & 1) << 3 | (y & 1) << 2 | (e & 2) | (y >> 1) & 1;
+    vis > 8 * b + 4
 }
 
 /// Two-valued options: `Original`, then the one modern alternative.
@@ -333,6 +391,8 @@ pub struct GraphicsSettings {
     pub hud: Hud,
     pub textures: Textures,
     pub detail: Detail,
+    /// Not part of the presets yet: every preset keeps it.
+    pub draw: DrawDistance,
     pub ao: AmbientOcclusion,
     pub water: Water,
     pub particles: Particles,
@@ -341,16 +401,17 @@ pub struct GraphicsSettings {
 }
 
 impl GraphicsSettings {
-    /// The options of a preset (`Custom` keeps `self`); Lighting stays `self`'s.
+    /// The options of a preset (`Custom` keeps `self`); Lighting and Draw distance stay `self`'s.
     pub fn with_preset(self, p: Preset) -> Self {
         match p {
-            Preset::Original => GraphicsSettings { lighting: self.lighting, ..GraphicsSettings::default() },
+            Preset::Original => GraphicsSettings { lighting: self.lighting, draw: self.draw, ..GraphicsSettings::default() },
             // 4x: the best count every GPU offers (crate::render_settings clamps a count a device lacks).
             Preset::Enhanced => GraphicsSettings {
                 aa: AntiAliasing::X4,
                 hud: Hud::Original,
                 textures: Textures::Smooth,
                 detail: Detail::Far,
+                draw: self.draw,
                 ao: AmbientOcclusion::On,
                 water: Water::Enhanced,
                 particles: Particles::Soft,
@@ -360,7 +421,7 @@ impl GraphicsSettings {
         }
     }
 
-    /// The preset these options are (whatever the Lighting).
+    /// The preset these options are (whatever the Lighting and the Draw distance).
     pub fn preset(&self) -> Preset {
         [Preset::Original, Preset::Enhanced].into_iter().find(|&p| self.with_preset(p) == *self).unwrap_or(Preset::Custom)
     }
@@ -378,6 +439,7 @@ impl GraphicsSettings {
             s.hud = file_value(s.hud);
             s.textures = file_value(s.textures);
             s.detail = file_value(s.detail);
+            s.draw = file_value(s.draw);
             s.ao = file_value(s.ao);
             s.water = file_value(s.water);
             s.particles = file_value(s.particles);
@@ -391,6 +453,7 @@ impl GraphicsSettings {
         s.hud = env_value(s.hud);
         s.textures = env_value(s.textures);
         s.detail = env_value(s.detail);
+        s.draw = env_value(s.draw);
         s.ao = env_value(s.ao);
         s.water = env_value(s.water);
         s.particles = env_value(s.particles);
@@ -403,6 +466,7 @@ impl GraphicsSettings {
         save(self.hud);
         save(self.textures);
         save(self.detail);
+        save(self.draw);
         save(self.ao);
         save(self.water);
         save(self.particles);
@@ -446,8 +510,17 @@ impl Plugin for GraphicsPlugin {
             .init_resource::<LightShafts>()
             .add_plugins(bevy::render::extract_resource::ExtractResourcePlugin::<GraphicsSettings>::default())
             .add_plugins(bevy::render::extract_resource::ExtractResourcePlugin::<LightShafts>::default())
-            .add_systems(PreUpdate, (apply_detail, apply_samples))
+            .add_systems(PreUpdate, (apply_detail, apply_samples, apply_draw_distance))
             .add_systems(PostUpdate, update_shafts);
+    }
+}
+
+/// The Draw distance factor onto the main camera's far plane (crate::game_camera `GameProjection::draw_scale`); the
+/// tfrag, tie and shrub systems and the shaders read the resource or the shared fog buffer.
+fn apply_draw_distance(g: Res<GraphicsSettings>, mut cams: Query<&mut Projection, With<crate::fly_cam::FlyCam>>) {
+    let s = g.draw.scale();
+    for mut p in &mut cams {
+        if crate::game_camera::draw_scale(&p) != Some(s) { crate::game_camera::set_draw_scale(&mut p, s); }
     }
 }
 
@@ -480,6 +553,34 @@ mod tests {
         let c = GraphicsSettings { hud: Hud::SharpPixels, ..o };
         assert_eq!(c.preset(), Preset::Custom);
         assert_eq!(c.with_preset(Preset::Custom), c);
+        // Draw distance is not part of the presets: either preset keeps it and is still recognised.
+        let d = GraphicsSettings { draw: DrawDistance::Farther, ..o };
+        assert_eq!(d.preset(), Preset::Original);
+        assert_eq!(d.with_preset(Preset::Enhanced).draw, DrawDistance::Farther);
+        assert_eq!(GraphicsSettings { draw: DrawDistance::Maximum, ..e }.preset(), Preset::Enhanced);
+    }
+
+    #[test]
+    fn draw_distance_factors() {
+        assert_eq!(DrawDistance::ALL.iter().map(|d| d.scale()).collect::<Vec<_>>(), [1.0, 1.5, 2.0, 4.0]);
+        assert_eq!(DrawDistance::KEY, "draw_distance");
+        assert_eq!(DrawDistance::default(), DrawDistance::Original);
+        // Far reaches past the far plane the game could draw a tfrag pixel to (728 units).
+        assert!(500.0 * DrawDistance::Far.scale() > crate::game_camera::FAR / crate::game_camera::UNITS);
+    }
+
+    #[test]
+    fn end_fade_band_and_dither() {
+        // ×1: the last 16 units; ×4: the last 64.
+        assert_eq!((end_fade(484.0, 500.0, 1.0), end_fade(492.0, 500.0, 1.0), end_fade(500.0, 500.0, 1.0), end_fade(501.0, 500.0, 1.0)), (128, 64, 0, 0));
+        assert_eq!((end_fade(1936.0, 2000.0, 4.0), end_fade(1968.0, 2000.0, 4.0), end_fade(10.0, 2000.0, 4.0)), (128, 64, 128));
+        // The dither draws every pixel at 128, none at 0, and vis / 128 of a 4×4 block between.
+        let block = |v: u32| (0..16).filter(|&i| end_fade_shown(v, i % 4, i / 4)).count();
+        // The Bayer order: one more pixel of the block for every 8 steps, the classic matrix's.
+        let order: Vec<u32> = (0..16).map(|i| (0..=128).find(|&v| end_fade_shown(v, i % 4, i / 4)).unwrap()).collect();
+        assert_eq!(order, [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5].map(|b| 8 * b + 5));
+        assert_eq!((block(128), block(0), block(64), block(4), block(5)), (16, 0, 8, 0, 1));
+        assert!((0..=128).all(|v| block(v) as u32 == (v + 3) / 8));
     }
 
     #[test]
@@ -488,6 +589,9 @@ mod tests {
         for &v in Hud::ALL { assert_eq!(Hud::parse(v.key()), Some(v)); }
         for &v in Textures::ALL { assert_eq!(Textures::parse(v.key()), Some(v)); }
         for &v in Detail::ALL { assert_eq!(Detail::parse(v.key()), Some(v)); }
+        for &v in DrawDistance::ALL { assert_eq!(DrawDistance::parse(v.key()), Some(v)); }
+        assert_eq!(DrawDistance::parse(" far "), Some(DrawDistance::Far));
+        assert_eq!(DrawDistance::from_index(DrawDistance::Maximum.index()), DrawDistance::Maximum);
         for &v in AmbientOcclusion::ALL { assert_eq!(AmbientOcclusion::parse(v.key()), Some(v)); }
         for &v in Water::ALL { assert_eq!(Water::parse(v.key()), Some(v)); }
         for &v in Particles::ALL { assert_eq!(Particles::parse(v.key()), Some(v)); }
