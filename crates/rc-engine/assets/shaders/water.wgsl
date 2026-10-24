@@ -31,7 +31,8 @@
 //   moving gradient noise, fading with the depth under the surface) where the key light reaches;
 // * a reflection along the wave normal, traced in screen space against the scene copy (the fog colour where the ray
 //   leaves the screen), weighted by a Fresnel term, plus the key light's glint;
-// * foam along the shore. At the shore line (no thickness) the result is the scene behind, so the edge has no seam.
+// * foam along the shore: thin water where the bed rises toward the surface (not over a flat shallow floor). At the
+//   shore line (no thickness) the result is the scene behind, so the edge has no seam.
 
 #import bevy_pbr::view_transformations::{position_world_to_clip, position_world_to_view, depth_ndc_to_view_z, position_ndc_to_view, frag_coord_to_ndc, ndc_to_frag_coord}
 #import bevy_pbr::mesh_view_bindings::{view, globals}
@@ -316,6 +317,15 @@ fn fragment(in: WaterVertexOutput) -> @location(0) vec4<f32> {
     let wp_d = (view.world_from_view * vec4<f32>(position_ndc_to_view(frag_coord_to_ndc(in.position)), 1.0)).xyz;
     var n_geo = normalize(cross(dpdy(wp_d), dpdx(wp_d)));
     if (n_geo.y < 0.0) { n_geo = -n_geo; }
+    // How steeply the bed rises under the surface (vertical depth per world unit along it), from the screen-space
+    // derivatives before any branch: the foam's shore. A flat shallow floor (Rilgar's pool under its slide) has none.
+    let size0 = vec2<i32>(textureDimensions(scene_depth));
+    let ndc0 = frag_coord_to_ndc(in.position);
+    let wp0 = (view.world_from_view * vec4<f32>(position_ndc_to_view(ndc0), 1.0)).xyz;
+    let d0 = textureLoad(scene_depth, clamp(vec2<i32>(floor(in.position.xy)), vec2<i32>(0), max(size0 - 1, vec2<i32>(0))), 0).r;
+    let bed0 = (view.world_from_view * vec4<f32>(position_ndc_to_view(vec3<f32>(ndc0.xy, max(d0, 1e-7))), 1.0)).xyz;
+    let under0 = select(1e4, wp0.y - bed0.y, d0 > 0.0);
+    let rise = max(abs(dpdx(under0)) / max(length(dpdx(wp0)), 1e-5), abs(dpdy(under0)) / max(length(dpdy(wp0)), 1e-5));
     let t = textureSample(tex, tex_sampler, in.uv);
     // MODULATE on the display bytes: floor(Ct·Cv / 128), clamped to 255.
     let ct = round(t.rgb * 255.0);
@@ -402,9 +412,9 @@ fn fragment(in: WaterVertexOutput) -> @location(0) vec4<f32> {
     col = mix(col, r, clamp(f, 0.0, select(0.9, 0.55, chute))) + vec3<f32>(1.0, 0.96, 0.88) * glint * shore;
 
     if (chute) { return vec4<f32>(col, in.fade); }
-    // Foam along the shore, broken up by drifting noise.
+    // Foam along the shore (thin water over a rising bed), broken up by drifting noise.
     let foam_n = smoothstep(0.1, 0.5, gnoise(wp.xz * 3.0 + vec2<f32>(t_now * 0.2, -t_now * 0.15)) + 0.35);
-    let foam = (1.0 - smoothstep(0.05, 0.45, thickness)) * smoothstep(0.02, 0.1, thickness) * foam_n;
+    let foam = (1.0 - smoothstep(0.05, 0.45, thickness)) * smoothstep(0.02, 0.1, thickness) * smoothstep(0.02, 0.1, rise) * foam_n;
     col = mix(col, vec3<f32>(0.92, 0.96, 1.0), foam * 0.55);
     return vec4<f32>(col, 1.0);
 }
