@@ -9,6 +9,7 @@
 - Water on Enhanced: shallow pools with a flat floor, such as the one at the bottom of Rilgar's water slide, are no longer covered in white foam that made them look opaque. Foam now only forms where the floor rises toward the surface: along shores, walls and the edges of platforms.
 - Water on Enhanced: in Rilgar's flooded sewer at the bottom of the water slide, the round grates just under the surface are no longer outlined in white foam. The water there is drawn a little higher (it still rises and falls with the game's water, which is unchanged for Ratchet and everything else).
 - Water on Enhanced: water no longer turns into an opaque deep-blue sheet when the window or render size changes after the level loads (for example at startup, or on a resolution or aspect change). The floor and platforms of Rilgar's slide pool and the bed of Novalis's cave pool now show through again, with refraction and caustics.
+- Port Options: the Shadows row is now Lighting. Original draws the game's own shadows, as on the PS2. Simple draws shadows from the sun in their place, cast by everything (the level, plants, characters and objects). Enhanced adds the sun's rays, and will hold the other advanced lighting effects. Shadows Off is gone; a saved Off becomes Original and a saved Dynamic becomes Enhanced. The presets leave Lighting as it is.
 
 ## v0.4.3-alpha
 

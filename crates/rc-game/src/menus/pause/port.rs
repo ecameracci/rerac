@@ -1,5 +1,6 @@
 //! **Port-only** (not in the game): the "Port Options" page, for settings the PS2 never had (the graphics options and
-//! their preset, anti-aliasing, ambient occlusion, water, particles, sun rays, the moby shadows off or as sun shadows,
+//! their preset, anti-aliasing, ambient occlusion, water, particles, the lighting (the game's shadows, sun shadows,
+//! or sun shadows with the advanced lighting effects),
 //! the gameplay and cutscene aspects, the render resolution, fullscreen, the FPS limit and, last, the gameplay rows
 //! Strafing and Quick Select, the ring's hold of the world, then the mouse look's direction and speed).
 //! Spec: docs/plan/menus.md "Port-only settings"; the graphics rows: docs/plan/graphics_options.md (every row's first
@@ -102,7 +103,7 @@ pub mod text {
     pub const X2: i32 = -0x111;
     pub const X4: i32 = -0x112;
     pub const X8: i32 = -0x113;
-    pub const SHADOWS: i32 = -0x120;
+    pub const LIGHTING: i32 = -0x120;
     pub const RESOLUTION: i32 = -0x130;
     pub const RES_WINDOW: i32 = -0x131;
     pub const RES_416: i32 = -0x132;
@@ -135,7 +136,7 @@ pub mod text {
     pub const FPS_60: i32 = -0x1a2;
     pub const FPS_120: i32 = -0x1a3;
     pub const UNLIMITED: i32 = -0x1a5;
-    pub const DYNAMIC: i32 = -0x121;
+    pub const SIMPLE: i32 = -0x121;
     pub const AMBIENT_OCCLUSION: i32 = -0x1b0;
     pub const WATER: i32 = -0x1b1;
     pub const PARTICLES: i32 = -0x1b2;
@@ -174,7 +175,7 @@ pub mod text {
             X2 => b"2x",
             X4 => b"4x",
             X8 => b"8x",
-            SHADOWS => b"Shadows",
+            LIGHTING => b"Lighting",
             RESOLUTION => b"Resolution",
             RES_WINDOW => b"Window",
             RES_416 => b"416p",
@@ -207,7 +208,7 @@ pub mod text {
             FPS_60 => b"60",
             FPS_120 => b"120",
             UNLIMITED => b"Unlimited",
-            DYNAMIC => b"Dynamic",
+            SIMPLE => b"Simple",
             AMBIENT_OCCLUSION => b"Ambient occlusion",
             WATER => b"Water",
             PARTICLES => b"Particles",
@@ -241,9 +242,10 @@ pub enum Setting {
     Preset,
     /// Anti-aliasing: value 0 Original (the game's own softening passes), 1 off, 2 2x, 3 4x, 4 8x multisampling.
     AntiAliasing,
-    /// The moby shadows (docs/plan/shadows.md): value 0 on (the game's look, the default), 1 off, 2 dynamic (every
-    /// object casts a shadow from the level's key light, in place of the game's volumes, and the sun shows its rays).
-    Shadows,
+    /// The lighting (docs/plan/graphics_options.md, docs/plan/shadows.md): value 0 Original (the game's shadows, the
+    /// default), 1 Simple (every object casts a shadow from the level's key light, in place of the game's), 2 Enhanced
+    /// (Simple's shadows and every advanced lighting effect, e.g. the sun's rays).
+    Lighting,
     /// Ambient occlusion: value 0 Original (none), 1 on.
     AmbientOcclusion,
     /// The level-code water: value 0 Original, 1 Enhanced.
@@ -308,7 +310,7 @@ pub const ENTRIES: &[Entry] = &[
     Entry { setting: Setting::Hud, label: text::HUD, values: &[text::ORIGINAL, text::SHARP_PIXELS] },
     Entry { setting: Setting::AmbientOcclusion, label: text::AMBIENT_OCCLUSION, values: &[text::ORIGINAL, text::ON] },
     Entry { setting: Setting::Particles, label: text::PARTICLES, values: &[text::ORIGINAL, text::SOFT] },
-    Entry { setting: Setting::Shadows, label: text::SHADOWS, values: &[text::ON, text::OFF, text::DYNAMIC] },
+    Entry { setting: Setting::Lighting, label: text::LIGHTING, values: &[text::ORIGINAL, text::SIMPLE, text::ENHANCED] },
     Entry { setting: Setting::Water, label: text::WATER, values: &[text::ORIGINAL, text::ENHANCED] },
     Entry { setting: Setting::Strafing, label: text::STRAFING, values: &[text::CLASSIC, text::MODERN] },
     Entry { setting: Setting::QuickSelect, label: text::QUICK_SELECT, values: &[text::CLASSIC, text::MODERN] },

@@ -243,7 +243,7 @@ rc-engine    shadow_render.rs    per view (GPU): count target (+1/−1, depth-te
   - The alternative is to read the colour and write `srgb_to_linear(0.75·linear_to_srgb(c))` exactly. That needs a copy of the target; see
     decision 2.
   - With MSAA, the pass runs per sample (`sample_index`, `textureLoad` of the MSAA count target).
-- **Toggles.** `RC_SHADOWS=0` turns the pass off; `RC_SHADOW_DEBUG=1` shows the count target. The pass is skipped when the list is empty.
+- **Toggles.** The pass runs under Lighting Original (graphics_options.md); `RC_SHADOWS=0` turns it off; `RC_SHADOW_DEBUG=1` shows the count target. The pass is skipped when the list is empty.
 
 ### 6.3 Casters after the resolve
 
@@ -390,7 +390,7 @@ and rules, a fixed multiply blend, casters drawn after the pass, the game's quir
 | S3 volumes | `crates/rc-game/src/shadows/volume.rs`, `tests/world/shadow_volume_novalis.rs` + `tests/fixtures/shadow_ratchet_novalis_idle.tsv` (numbers only) | posing, `ShadowSetDir`, sphere / capsule outlines, slab prisms, size by distance, budget |
 | S4 GPU pass | `crates/rc-engine/src/shadow_render.rs`, `assets/shaders/shadow_{volume,resolve}.wgsl`, `main.rs` (plugin line) | per tick (after `GameTick`): Ratchet's shadow and direction 0; per frame (`Last`): MobyProc's shadow deferral, cull, size, budget and the volumes; render world: `Core3d` system between `main_opaque_pass_3d` and `main_transparent_pass_3d` |
 | S5 casters | `crates/rc-engine/src/moby_render.rs` (`caster_pass`, `CASTER_BAND`), `gs_state.rs` (`GsPass::LateOpaque`) | a class with a shadow block has its Z-writing draws at the start of Transparent3d (after the shadow pass), its metal next; everything else unchanged |
-| Setting | `crates/rc-game/src/menus/pause/port.rs` (row "Shadows", the game's own On / Off strings 20314 / 20315), `menu_render.rs`, `render_settings.rs` (`load_key` / `save_key`) | on by default; `shadows = on/off/dynamic` in the port settings file; `RC_SHADOWS=0/1/dynamic` overrides at start. Dynamic (port-only) replaces these shadows with a sun shadow map every object casts, plus the sun's rays: `sun_shadow.rs`, `sun_rays.rs`, docs/plan/graphics_options.md |
+| Setting | `crates/rc-engine/src/graphics.rs` (`Lighting`), `crates/rc-game/src/menus/pause/port.rs` (row "Lighting": Original / Simple / Enhanced, 2026-10-23; it replaced the row "Shadows" On / Off / Dynamic), `menu_render.rs`, `render_settings.rs` (`load_key` / `save_key`) | these shadows under Lighting Original (the default; `Lighting::game_shadows`); `lighting = original/simple/enhanced` in the port settings file (an older `shadows = on/off` reads as Original, `dynamic` as Enhanced); `RC_GFX_LIGHTING` and the older `RC_SHADOWS=1/dynamic` override at start; `RC_SHADOWS=0` (developer switch) draws no shadows at all. Simple and Enhanced (port-only) replace these shadows with a sun shadow map every object casts, Enhanced adds the sun's rays: `sun_shadow.rs`, `sun_rays.rs`, docs/plan/graphics_options.md |
 
 **The pass in native terms.** The prisms (Bevy axes) are drawn into an `R16Float` target (cleared to 0, the view's
 size and sample count) with the scene depth attached read only, `GreaterEqual` (reverse Z), no culling, additive

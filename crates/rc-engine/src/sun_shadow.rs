@@ -1,5 +1,6 @@
-//! **Port-only: Shadows Dynamic** (crate::shadow_render `ShadowMode::Dynamic`): every opaque object casts a shadow
-//! along the level's key light, in place of the game's shadow volumes under mobys.
+//! **Port-only: the sun shadows of Lighting Simple and Enhanced** (crate::graphics `Lighting::sun_shadows`; off under
+//! `RC_SHADOWS=0`, crate::shadow_render `ShadowSettings::sun`): every opaque object casts a shadow along the level's
+//! key light, in place of the game's shadow volumes under mobys.
 //!
 //! Standard cascaded shadow mapping:
 //! - **Casters:** a Bevy `DirectionalLight` with shadow maps along the level's key light (light set 0's direction A:
@@ -9,7 +10,7 @@
 //!   gs_state::specialize_shadow): tfrags and ties at their full detail whatever the camera's LOD and cull (tfrags
 //!   their LOD-0 list, ties LOD 0 unmorphed and never hidden from Bevy while the sun casts: crate::tie_lod), so the
 //!   world's shadows do not change with the view; shrubs (cut out by their texture's alpha) and mobys as drawn. The
-//!   metal pass and every blended or effect draw cast nothing. crate::sun_rays shows the same sun's rays.
+//!   metal pass and every blended or effect draw cast nothing. Under Enhanced, crate::sun_rays shows the same sun's rays.
 //! - **Receiver:** the port's shaders compute no Bevy lighting, so after the opaque world a full-screen pass
 //!   (`assets/shaders/sun_shadow.wgsl`) rebuilds each pixel's world position and normal from the depth buffer,
 //!   looks it up in its cascade (normal-offset bias, 3×3 PCF on a comparison sampler) and multiplies the frame by
@@ -63,7 +64,7 @@ pub fn casts(renderer: &str) -> bool {
     std::env::var("RC_SUN_CASTERS").map_or(true, |v| v.split(',').any(|r| r.trim() == renderer))
 }
 
-/// The sun light entity (one while Shadows is Dynamic).
+/// The sun light entity (one while the sun casts shadows).
 #[derive(Component)]
 struct Sun;
 
@@ -71,12 +72,12 @@ struct Sun;
 #[derive(Resource, Clone, Copy, ExtractResource)]
 pub struct KeyLight {
     pub to_light: Vec3,
-    /// Shadows is Dynamic: the sun casts shadows and shows its rays.
-    pub dynamic: bool,
+    /// The sun casts shadows (crate::shadow_render `ShadowSettings::sun`).
+    pub sun_shadows: bool,
 }
 
 impl Default for KeyLight {
-    fn default() -> Self { KeyLight { to_light: -DEFAULT_DIR.normalize(), dynamic: false } }
+    fn default() -> Self { KeyLight { to_light: -DEFAULT_DIR.normalize(), sun_shadows: false } }
 }
 
 /// The render-world set of the receiver pass (after the game's shadow volumes, before the ambient occlusion).
@@ -112,10 +113,10 @@ fn raised(dir: Vec3) -> Vec3 {
     Vec3::new(f.x, -s, f.y)
 }
 
-/// The key light, and the sun while Shadows is Dynamic along it.
+/// The key light, and the sun along it while it casts shadows.
 fn follow(
     mut commands: Commands,
-    settings: Res<ShadowSettings>,
+    (settings, gfx): (Res<ShadowSettings>, Res<crate::graphics::GraphicsSettings>),
     game: Option<Res<ShadowGame>>,
     play: Option<Res<Play>>,
     mut key: ResMut<KeyLight>,
@@ -130,8 +131,9 @@ fn follow(
         dir = d;
     }
     if key.to_light != -dir { key.to_light = -dir; }
-    if key.dynamic != settings.sun() { key.dynamic = settings.sun(); }
-    if !settings.sun() {
+    let sun = settings.sun(gfx.lighting);
+    if key.sun_shadows != sun { key.sun_shadows = sun; }
+    if !sun {
         for (e, _) in &suns { commands.entity(e).despawn(); }
         return;
     }
@@ -150,7 +152,7 @@ fn follow(
     }
     .build();
     commands.spawn((
-        Name::new("Sun (Shadows Dynamic)"),
+        Name::new("Sun (Lighting Simple / Enhanced)"),
         Sun,
         DirectionalLight { shadow_maps_enabled: true, illuminance: 0.0, ..default() },
         cascades,

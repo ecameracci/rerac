@@ -1,4 +1,4 @@
-// Shadows Dynamic, the receiver (crate::sun_shadow): each pixel's world position from the depth buffer, looked up in
+// Lighting Simple / Enhanced's sun shadows, the receiver (crate::sun_shadow): each pixel's world position from the depth buffer, looked up in
 // the sun's cascaded shadow map; the frame is multiplied by 1 − strength where a light-facing surface is shadowed.
 // view.params = (strength, cascade count, maximum distance, fade start), view.extra.xyz = toward the light (world).
 
