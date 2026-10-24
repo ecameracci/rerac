@@ -1,19 +1,26 @@
 //! **Port-only: the sun's rays of Lighting Enhanced** (gated on crate::graphics `GraphicsSettings::lighting.enhanced()`,
-//! the gate of every advanced lighting effect; with crate::sun_shadow): light shafts from the sky around the key light.
+//! the gate of every advanced lighting effect; with crate::sun_shadow): light shafts from the sun the level's sky
+//! paints.
 //!
 //! Standard screen-space radial blur (`assets/shaders/sun_rays.wgsl`), after the 3D passes and before the screen tints
 //! and the anti-aliasing blit:
-//! 1. **Mask** (half resolution): the sky's pixels (depth 0) near the sun's screen position, weighted by their
-//!    brightness; geometry in front of the sky masks it, which makes the shafts.
+//! 1. **Mask** (half resolution): the sky's pixels (depth 0) around the sun's screen position (a falloff of
+//!    [`SPOT_SCALE`] × the sun spot's radius), keyed on their luminance between the sky's median and the sun's peak,
+//!    so the sun disc and its glow make the mask and the plain sky adds nothing; geometry in front of the sky masks
+//!    it, which makes the shafts.
 //! 2. **Composite:** [`TAPS`] samples of the mask along the line to the sun, each fainter, added to the frame.
 //!
-//! The sun is the key light ([`KeyLight`], crate::sun_shadow). The rays fade as it leaves the screen or nears the
-//! horizon and are skipped while it is behind the camera. With Lighting Original or Simple nothing runs, nor on the
-//! levels and in the space scenes crate::graphics [`LightShafts`] turns the shafts off (`SHAFT_LEVELS`).
+//! The sun is the sky's ([`SkySun`], crate::sky_sun: found in the shells at level load, turning with its shell),
+//! not the shadows' key light (crate::sun_shadow, raised to 60° and rarely where the sky shows its sun; the shadows
+//! keep it). The rays' strength follows the sun's brightness; they fade as it leaves the screen or nears the horizon
+//! and are skipped while it is behind the camera, and on a sky without a sun. With Lighting Original or Simple nothing
+//! runs, nor under `RC_SHADOWS=0` ([`KeyLight::sun_shadows`] false: no sun at all), nor on the levels and in the
+//! space scenes crate::graphics [`LightShafts`] turns the shafts off (`SHAFT_LEVELS`).
 
 use crate::fx_view::{depth_defs, depth_entry, Fullscreen, FxView, Pipelines};
 use crate::graphics::{GraphicsSettings, LightShafts};
 use crate::shadow_render::ShadowCamera;
+use crate::sky_sun::{SkySun, SkySunPlugin};
 use crate::sun_shadow::KeyLight;
 use bevy::core_pipeline::{Core3d, Core3dSystems, FullscreenShader};
 use bevy::prelude::*;
@@ -34,8 +41,13 @@ const SHADER_PATH: &str = "shaders/sun_rays.wgsl";
 const MASK_FORMAT: TextureFormat = TextureFormat::Rgba16Float;
 /// Samples along each ray.
 const TAPS: u32 = 40;
-/// The shafts' brightness.
+/// The shafts' brightness at full strength.
 const INTENSITY: f32 = 0.6;
+/// The mask's falloff radius, in sun spot radii (crate::sky_sun `Sun::radius`), and its range (target UV heights):
+/// a dome's wide glow (Novalis: 21°) would otherwise let every bright cloud on screen into the shafts.
+const SPOT_SCALE: f32 = 2.0;
+const MIN_SPOT: f32 = 0.08;
+const MAX_SPOT: f32 = 0.3;
 
 /// The view's half-resolution mask this frame (only while the option is on).
 #[derive(Component)]
@@ -45,6 +57,7 @@ pub struct SunRaysPlugin;
 
 impl Plugin for SunRaysPlugin {
     fn build(&self, app: &mut App) {
+        app.add_plugins(SkySunPlugin);
         let Some(render_app) = app.get_sub_app_mut(RenderApp) else { return };
         render_app
             .add_systems(RenderStartup, init_pipelines)
@@ -106,11 +119,14 @@ fn prepare(
     mut commands: Commands,
     gfx: Option<Res<GraphicsSettings>>,
     shafts: Option<Res<LightShafts>>,
+    key: Option<Res<KeyLight>>,
+    sun: Option<Res<SkySun>>,
     device: Res<RenderDevice>,
     mut textures: ResMut<TextureCache>,
     views: Query<(Entity, &ExtractedCamera), With<ShadowCamera>>,
 ) {
-    let on = gfx.is_some_and(|g| g.lighting.enhanced()) && shafts.is_some_and(|s| s.0);
+    let on = gfx.is_some_and(|g| g.lighting.enhanced()) && shafts.is_some_and(|s| s.0) && sun.is_some_and(|s| s.to_sun.is_some());
+    let on = on && key.is_some_and(|k| k.sun_shadows);
     for (e, cam) in &views {
         let Some(size) = cam.physical_target_size.filter(|_| on) else {
             commands.entity(e).remove::<RaysMask>();
@@ -154,18 +170,21 @@ fn smoothstep(e0: f32, e1: f32, x: f32) -> f32 {
 
 fn rays_pass(
     view: ViewQuery<(&ExtractedCamera, &ExtractedView, &ViewTarget, &ViewDepthTexture, &RaysMask), With<ShadowCamera>>,
-    key: Option<Res<KeyLight>>,
+    sky: Option<Res<SkySun>>,
     pipes: Option<Res<RaysPipelines>>,
     cache: Res<PipelineCache>,
     mut ctx: RenderContext,
 ) {
-    let (Some(pipes), Some(key)) = (pipes, key) else { return };
+    let (Some(pipes), Some(sky)) = (pipes, sky) else { return };
+    let Some(to_sun) = sky.to_sun else { return };
     let (cam, ev, target, depth, mask) = view.into_inner();
     let (Some(mut fx), Some(size)) = (FxView::of(cam, ev), cam.physical_target_size) else { return };
-    let Some((sun, k)) = sun_on_screen(&fx, size, key.to_light) else { return };
+    let Some((sun, k)) = sun_on_screen(&fx, size, to_sun) else { return };
     let aspect = size.x as f32 / size.y.max(1) as f32;
-    fx.params = Vec4::new(sun.x, sun.y, INTENSITY * k, aspect);
-    fx.extra = Vec4::new(size.x as f32, size.y as f32, TAPS as f32, 0.0);
+    fx.params = Vec4::new(sun.x, sun.y, INTENSITY * sky.strength * k, aspect);
+    let spot = (sky.radius.tan() * fx.clip_from_view.y_axis.y * 0.5 * fx.viewport.w / size.y.max(1) as f32 * SPOT_SCALE).clamp(MIN_SPOT, MAX_SPOT);
+    let (lo, hi) = (sky.median + 0.25 * (sky.peak - sky.median), sky.median + 0.75 * (sky.peak - sky.median));
+    fx.extra = Vec4::new(TAPS as f32, spot, lo, hi);
     let format = target.main_texture_format();
     let ms = depth.texture.sample_count() > 1;
     let mask_pipe = pipes.pipes.get(&cache, (false, ms, MASK_FORMAT), || Fullscreen {
@@ -261,5 +280,24 @@ mod tests {
         // Below the horizon: no rays.
         let low = Vec3::new(0.0, -0.2, -1.0).normalize();
         assert!(sun_on_screen(&view_looking(low), UVec2::new(1600, 900), low).is_none());
+    }
+
+    #[test]
+    fn rays_fade_past_the_screen_edge_and_near_the_horizon() {
+        let ahead = Vec3::new(0.0, 0.5, -1.0).normalize();
+        let view = view_looking(ahead);
+        let k = |to_sun: Vec3| sun_on_screen(&view, UVec2::new(1600, 900), to_sun).map_or(0.0, |(_, k)| k);
+        // At NDC x = `ndc` on the view's centre row: just past the right edge it fades, its point off the target;
+        // past 1.6, none.
+        let tan_x = 1.0 / view.clip_from_view.x_axis.x;
+        let side = |ndc: f32| (view.world_from_view * Vec4::new(ndc * tan_x, 0.0, -1.0, 0.0)).truncate().normalize();
+        let (uv, edge) = sun_on_screen(&view, UVec2::new(1600, 900), side(1.2)).unwrap();
+        assert!(uv.x > 1.0 && edge > 0.0 && edge < 1.0, "{uv} {edge}");
+        assert!(k(side(0.9)) > 0.99);
+        assert_eq!(k(side(2.0)), 0.0);
+        // A sun 3° up fades by the horizon smoothstep (0..0.15 of its height).
+        let low = Vec3::new(0.0, 3f32.to_radians().sin(), -1.0).normalize();
+        let k_low = sun_on_screen(&view_looking(low), UVec2::new(1600, 900), low).unwrap().1;
+        assert!(k_low > 0.2 && k_low < 0.35, "{k_low}");
     }
 }

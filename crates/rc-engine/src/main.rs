@@ -108,6 +108,7 @@ mod shrub_light;
 mod shrub_render;
 mod sky_render;
 mod sky_stars;
+mod sky_sun;
 mod text_render;
 mod tfrag_light;
 mod tfrag_lod;

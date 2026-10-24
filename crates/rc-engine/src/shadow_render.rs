@@ -73,7 +73,8 @@ pub const COUNT_FORMAT: TextureFormat = TextureFormat::R16Float;
 /// The shadows' developer switches; which shadows are drawn is the Lighting option (crate::graphics `Lighting`).
 #[derive(Resource, Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub struct ShadowSettings {
-    /// `RC_SHADOWS=0`: no shadows at all, neither the game's nor the sun's (the Lighting row has no Off).
+    /// `RC_SHADOWS=0`: no shadows at all, neither the game's nor the sun's, nor the sun's rays (crate::sun_rays; the
+    /// Lighting row has no Off).
     pub off: bool,
     /// `RC_SHADOW_DEBUG=1`: show the count target.
     pub debug: bool,

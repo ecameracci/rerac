@@ -12,8 +12,8 @@
 //!   gs_state::specialize_shadow): tfrags and ties at their full detail whatever the camera's LOD and cull (tfrags
 //!   their LOD-0 list, ties LOD 0 unmorphed and never hidden from Bevy while the sun casts: crate::tie_lod), so the
 //!   world's shadows do not change with the view; shrubs (cut out by their texture's alpha) and mobys as drawn. The
-//!   metal pass and every blended or effect draw cast nothing. Under Enhanced, crate::sun_rays shows the same sun's rays
-//!   and crate::volumetric_light its shafts through these cascades.
+//!   metal pass and every blended or effect draw cast nothing. Under Enhanced, crate::sun_rays draws rays from the sky's own
+//!   sun (crate::sky_sun), not from this light, and crate::volumetric_light its shafts through these cascades.
 //! - **Receiver:** the port's shaders compute no Bevy lighting, so after the opaque world a full-screen pass
 //!   (`assets/shaders/sun_shadow.wgsl`) rebuilds each pixel's world position and normal from the depth buffer,
 //!   looks it up in its cascade (normal-offset bias, 3×3 PCF on a comparison sampler) and multiplies the frame by
