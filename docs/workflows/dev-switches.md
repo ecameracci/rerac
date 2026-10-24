@@ -100,6 +100,7 @@ module that reads it: `grep -rn '"RC_' crates/` lists them all.
 | `RC_TIE_LOD` | `0`: force tie LOD 0 with morph k = 0 (culling unchanged) |
 | `RC_TIE_LOD_TINT` | `1`: tint tie LOD 1 red, LOD 2 blue |
 | `RC_SEA` | `0`: do not draw the seas and liquid surfaces of the draw callbacks (crate::sea_render) |
+| `RC_WATER_MIRROR` | Water Enhanced's planar reflection (crate::water_mirror): `0` no mirror view (the screen-space reflection everywhere); `debug` the mirror target as an inset at the top right (flipped as the water reads it) and a log line whenever the chosen plane or the count of flat regions changes; default on |
 | `RC_NO_TIES` | `1`: do not draw ties |
 | `RC_NO_SHRUBS` | `1`: do not draw shrubs |
 | `RC_SWAY` | `0`: no wind sway on shrubs or ties (their per-frame shear stays zero) |

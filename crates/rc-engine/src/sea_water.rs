@@ -16,7 +16,9 @@
 //! * with the far fade ([`FAR_FADE`], `look.misc.yz`): the depth behind distant water is thin and the bent bed seen
 //!   through it flickered from frame to frame, so from the fade's start to its end the bed, the shore and the foam give
 //!   way to the water's own colour (the original's opaque sea) under the reflection and the glint;
-//! * the contact rings of crate::water_render (its buffer while the level has strip or ripple water, else none).
+//! * the contact rings of crate::water_render (its buffer while the level has strip or ripple water, else none);
+//! * the planar reflection (crate::water_mirror): each flat group's plane ([`SeaWaterDraw`]`::planes`, Rilgar's 879
+//!   grid at one height) is a candidate for the mirror view, read on the surface instead of the screen-space trace.
 
 use crate::fx_draw::PrimBuf;
 use crate::game_camera::TfragFog;
@@ -87,6 +89,11 @@ pub struct SeaWaterMaterial {
     pub look: WaterLook,
     #[storage(10, read_only, visibility(fragment))]
     pub rings: Handle<ShaderBuffer>,
+    #[storage(11, read_only, visibility(fragment))]
+    pub mirror: Handle<ShaderBuffer>,
+    #[texture(12)]
+    #[sampler(13)]
+    pub mirror_color: Handle<Image>,
     pub order: f32,
 }
 
@@ -137,6 +144,8 @@ type Slot = (Entity, Handle<Mesh>, Handle<SeaWaterMaterial>, bool);
 #[derive(Resource, Default)]
 pub struct SeaWaterDraw {
     pub pending: Option<Vec<SeaGroup>>,
+    /// The flat regions of the last tick's groups (crate::water_mirror's plane choice).
+    pub planes: Vec<crate::water_mirror::FlatWater>,
     slots: Vec<Option<Slot>>,
     /// The `frame` record and an empty buffer (the unread `ripple`, the `rings` without strip water).
     buffers: Option<(Handle<ShaderBuffer>, Handle<ShaderBuffer>)>,
@@ -156,6 +165,7 @@ pub fn draw(
     mut commands: Commands,
     state: ResMut<SeaWaterDraw>,
     copy: Res<crate::scene_copy::SceneCopy>,
+    mirror: Res<crate::water_mirror::WaterMirror>,
     key: Option<Res<crate::sun_shadow::KeyLight>>,
     water: Option<Res<crate::water_render::WaterState>>,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -184,6 +194,8 @@ pub fn draw(
         })
         .clone();
     let rings = water.map_or_else(|| empty.clone(), |w| w.rings_buffer());
+    // Bevy (x, y, z) = game (x, z, −y).
+    st.planes = groups.iter().filter_map(|g| crate::water_mirror::flat_region(g.prims.parts().0.iter().map(|p| [p[0], -p[2], p[1]]))).collect();
     let n = groups.len();
     for (k, g) in groups.into_iter().enumerate() {
         if st.slots.len() <= k { st.slots.push(None); }
@@ -220,6 +232,8 @@ pub fn draw(
             scene_color: copy.color.clone(),
             look,
             rings: rings.clone(),
+            mirror: mirror.params.clone(),
+            mirror_color: mirror.image.clone(),
             order: SEA_BAND + k as f32,
         });
         let e = commands.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(mat.clone()), Transform::IDENTITY, NoFrustumCulling, Visibility::Inherited, Name::new(format!("sea water {k}")))).id();

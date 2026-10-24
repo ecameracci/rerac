@@ -30,7 +30,8 @@
 //   the surface), absorbed over the water's thickness toward the water texture's own colour, with caustics (ridges of
 //   moving gradient noise, fading with the depth under the surface) where the key light reaches;
 // * a reflection along the wave normal, traced in screen space against the scene copy (the fog colour where the ray
-//   leaves the screen), weighted by a Fresnel term, plus the key light's glint;
+//   leaves the screen), on the mirrored plane the planar reflection instead (`planar`, crate::water_mirror),
+//   weighted by a Fresnel term, plus the key light's glint;
 // * foam along the shore: thin water where the bed rises toward the surface (not over a flat shallow floor). At the
 //   shore line (no thickness) the result is the scene behind, so the edge has no seam.
 // A ripple water draw may sit params.misc.w over the game's height (water_render::SURFACE_LIFT), on Enhanced only.
@@ -86,6 +87,15 @@ struct WaterRings {
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(10) var<storage, read> rings: WaterRings;
+
+struct WaterMirror {
+    // x = 1 while the mirror view is drawn, y = its plane's world y.
+    state: vec4<f32>,
+}
+
+@group(#{MATERIAL_BIND_GROUP}) @binding(11) var<storage, read> mirror: WaterMirror;
+@group(#{MATERIAL_BIND_GROUP}) @binding(12) var mirror_color: texture_2d<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(13) var mirror_sampler: sampler;
 
 // Grid vertices per patch side (rc_game::water::VG).
 const VG: u32 = 17u;
@@ -236,6 +246,20 @@ fn reflection(vp: vec3<f32>, rd: vec3<f32>, size: vec2<i32>) -> vec3<f32> {
         }
     }
     return miss;
+}
+
+// The planar reflection on the mirrored plane (crate::water_mirror): the mirror view at this pixel (drawn mirrored
+// left to right: read at −x), bent by the wave normal; `ssr` off the plane and where the bent sample leaves the view.
+fn planar(ssr: vec3<f32>, wp: vec3<f32>, n_world: vec3<f32>, frag: vec4<f32>, dist: f32) -> vec3<f32> {
+    if (mirror.state.x < 0.5) { return ssr; }
+    let on = 1.0 - smoothstep(0.5, 1.0, abs(wp.y - mirror.state.y));
+    if (on <= 0.0) { return ssr; }
+    let tilt = (view.view_from_world * vec4<f32>(n_world.x, 0.0, n_world.z, 0.0)).xy;
+    let ndc = frag_coord_to_ndc(frag).xy + tilt * (0.22 / (1.0 + dist * 0.06));
+    let uv = vec2<f32>(0.5 - 0.5 * ndc.x, 0.5 - 0.5 * ndc.y);
+    let inside = min(min(uv.x, 1.0 - uv.x), min(uv.y, 1.0 - uv.y));
+    let m = textureSampleLevel(mirror_color, mirror_sampler, clamp(uv, vec2<f32>(0.0), vec2<f32>(1.0)), 0.0).rgb;
+    return mix(ssr, m, on * smoothstep(0.0, 0.04, inside));
 }
 
 // The surface's height gradient over world xz from travelling sine waves: (direction, wavenumber, amplitude·wavenumber).
@@ -413,6 +437,7 @@ fn fragment(in: WaterVertexOutput) -> @location(0) vec4<f32> {
     let cos_v = max(dot(n, to_eye), 0.0);
     let f = (0.08 + 0.92 * pow(1.0 - cos_v, 4.0)) * shore;
     var r = reflection(vp, reflect(-to_eye, n), size);
+    r = planar(r, wp, n_world, in.position, dist);
     let l = normalize((view.view_from_world * vec4<f32>(look.sun.xyz, 0.0)).xyz);
     let glint = pow(max(dot(n, normalize(l + to_eye)), 0.0), 300.0) * 4.0 * smoothstep(0.0, 0.1, look.sun.y);
     // A chute is seen along its slope at grazing angles: its reflection is capped so the bed shows through.
