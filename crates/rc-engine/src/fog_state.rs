@@ -131,6 +131,12 @@ impl FogState {
 
     /// The underwater flag 0x167494 as the last camera update left it (the sound layer reads it: crate::audio_out).
     pub fn underwater_flag(&self) -> bool { self.underwater.flag }
+
+    /// The underwater colours as this frame's camera update left them (crate::underwater_render reads the fog colour).
+    pub fn look(&self) -> &UnderwaterLook { &self.look }
+
+    /// The level collision mesh of the underwater test (crate::underwater_render probes the water plane with it).
+    pub fn mesh(&self) -> Option<&Collision> { self.mesh.as_ref() }
 }
 
 /// The underwater full-screen tint (`DrawDebugProfiler`, 0x161200..03): GS RGBA bytes, A = 0x80 → 1.0.

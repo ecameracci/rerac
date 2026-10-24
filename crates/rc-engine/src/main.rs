@@ -138,6 +138,7 @@ mod scene_copy;
 mod sun_rays;
 mod sun_shadow;
 mod thruster_render;
+mod underwater_render;
 mod volumetric_light;
 mod world_lights;
 
@@ -245,6 +246,8 @@ fn main() -> anyhow::Result<()> {
     // The port's modern options (crate::graphics, Lighting Simple / Enhanced): sun shadows, ambient occlusion, the scene copy
     // the soft particles and the water read, sun rays, volumetric light, the image post-process, the water's mirror view.
     .add_plugins((fx_view::FxViewPlugin, sun_shadow::SunShadowPlugin, ao_render::AoPlugin, gi_render::GiPlugin, scene_copy::SceneCopyPlugin, sun_rays::SunRaysPlugin, volumetric_light::VolumetricLightPlugin, post_render::PostPlugin, water_mirror::WaterMirrorPlugin))
+    // Water Enhanced under water: the fog, light, caustics and shafts over the 3D picture (crate::underwater_render).
+    .add_plugins(underwater_render::UnderwaterPlugin)
     .add_plugins(frame_log::FrameLogPlugin)
     .add_plugins(session::SessionPlugin)
     .insert_resource(spawn)

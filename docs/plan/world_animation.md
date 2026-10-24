@@ -477,6 +477,11 @@ in game mode (2026-09-29: the earlier "uses the fly camera (no camera modes)" wa
   / `=0` force the flag. Not done: the 751 zone colour choice (hook `UnderwaterLook::set_from_ripple_zone`,
   fed `None` until rc_game::water exposes the highest active zone), the camera-mode-6 / 0x15f5c4 clears and
   the other flag writers, voice release.
+- Port-only, Water Enhanced (`underwater_render.rs`, docs/plan/graphics_options.md Water row): while the flag is set,
+  a full-screen pass over the 3D picture before the tint (absorption along the in-water ray, light by depth,
+  caustics, shafts, a wobble), on top of this section's fog swap and tint, which stay. Its water plane is probed
+  upward from the camera with the test's own line query (flags 0x12) and `SetWaterLevel`; Water Original never runs
+  it.
 
 ## 7. Other per-frame world animation on Novalis
 
