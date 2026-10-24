@@ -466,7 +466,9 @@ to before this wiring at frame 120).
   South, □ left click or J / West, ○ right click or K / East, △ middle click or L / North, L1 Shift or Q / left bumper,
   R1 Ctrl or E / right bumper, L2 Z, R2 C (triggers), Start Esc or Enter, Select Tab or Backspace, R3 V / right stick
   click, d-pad T/F/G/H. Right stick: mouse motion while the cursor is locked (the game camera in mode 0 with the window
-  focused, `fly_cam::grab_cursor`; 12 px per frame = full), the arrow keys, `,` / `.`, or the gamepad right stick. Buttons
+  focused, `fly_cam::grab_cursor`; summed until a tick runs, per tick linear past the game's dead zone to full at
+  `MouseSettings::full_px`, the Port Options' mouse rows: direction per axis, sensitivity 1..10), the arrow keys, or the
+  gamepad right stick. Buttons
   are digital (pressure 0xff). Port-only: the number row 1..8 and the numpad (8 up, then clockwise round 5) pick a
   quick-select slot at once (`QuickSelect::direct`: the ring's gate and confirm, no ring). The fly camera toggles on F7.
   Gamepads come from Bevy's default `bevy_gilrs` feature (on in Bevy 0.19's defaults; nothing enabled here).

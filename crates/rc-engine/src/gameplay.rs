@@ -271,10 +271,11 @@ impl Plugin for GameplayPlugin {
             .insert_resource(PlayScript(script))
             .init_resource::<PadFrame>()
             .init_resource::<input_map::QuickSlotKey>()
+            .insert_resource(input_map::MouseSettings::startup())
             .init_resource::<TickBudget>()
             .add_systems(
                 PreUpdate,
-                (setup, input_map::sample_system, set_budget, crate::session::pad_frame, keys).chain().after(bevy::input::InputSystems),
+                (setup, set_budget, input_map::sample_system, crate::session::pad_frame, keys).chain().after(bevy::input::InputSystems),
             )
             .add_systems(FixedUpdate, tick.in_set(GameTick).before(crate::particle_render::tick))
             .add_systems(FixedUpdate, elapsed_frame.after(GameTick).after(crate::menu_render::MenuFrameSet))

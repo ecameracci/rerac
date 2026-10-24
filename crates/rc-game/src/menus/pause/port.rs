@@ -1,7 +1,7 @@
 //! **Port-only** (not in the game): the "Port Options" page, for settings the PS2 never had (the graphics options and
 //! their preset, anti-aliasing, ambient occlusion, water, particles, sun rays, the moby shadows off or as sun shadows,
 //! the gameplay and cutscene aspects, the render resolution, fullscreen, the FPS limit and, last, the gameplay rows
-//! Strafing and Quick Select, the ring's hold of the world).
+//! Strafing and Quick Select, the ring's hold of the world, then the mouse look's direction and speed).
 //! Spec: docs/plan/menus.md "Port-only settings"; the graphics rows: docs/plan/graphics_options.md (every row's first
 //! value is the game's own look).
 //!
@@ -140,6 +140,13 @@ pub mod text {
     pub const CLASSIC: i32 = -0x1c1;
     pub const MODERN: i32 = -0x1c2;
     pub const QUICK_SELECT: i32 = -0x1c3;
+    pub const MOUSE_X: i32 = -0x1d0;
+    pub const MOUSE_Y: i32 = -0x1d1;
+    pub const MOUSE_SPEED: i32 = -0x1d2;
+    pub const NORMAL: i32 = -0x1d3;
+    pub const INVERTED: i32 = -0x1d4;
+    /// "1".."10" (the mouse sensitivity's values).
+    pub const LEVELS: [i32; 10] = [-0x1e1, -0x1e2, -0x1e3, -0x1e4, -0x1e5, -0x1e6, -0x1e7, -0x1e8, -0x1e9, -0x1ea];
     /// The main menu's Mods page (super::super::mods).
     pub const MODS: i32 = -0x200;
     pub const MODS_NONE: i32 = -0x201;
@@ -203,6 +210,15 @@ pub mod text {
             SOFT => b"Soft",
             STRAFING => b"Strafing",
             QUICK_SELECT => b"Quick Select",
+            MOUSE_X => b"Mouse left / right",
+            MOUSE_Y => b"Mouse up / down",
+            MOUSE_SPEED => b"Mouse sensitivity",
+            NORMAL => b"Normal",
+            INVERTED => b"Inverted",
+            _ if (LEVELS[9]..=LEVELS[0]).contains(&id) => {
+                const N: [&[u8]; 10] = [b"1", b"2", b"3", b"4", b"5", b"6", b"7", b"8", b"9", b"10"];
+                N[(LEVELS[0] - id) as usize]
+            }
             CLASSIC => b"Classic",
             MODERN => b"Modern",
             MODS => b"Mods",
@@ -258,6 +274,12 @@ pub enum Setting {
     /// The quick-select ring (docs/plan/quick_select_pause.md): value 0 Classic (the game's: the world runs under the
     /// ring), 1 Modern (the world holds while △ keeps the ring open: `crate::tick::quick_select_hold`).
     QuickSelect,
+    /// The mouse's camera turn (the engine's mouse look): value 0 Normal, 1 Inverted.
+    MouseX,
+    /// The mouse's camera tilt: value 0 Normal, 1 Inverted.
+    MouseY,
+    /// The mouse's speed: values 0..9 shown as 1..10.
+    MouseSpeed,
 }
 
 /// One row: the setting, its label and the ids of its values (✕ cycles through them).
@@ -286,6 +308,9 @@ pub const ENTRIES: &[Entry] = &[
     Entry { setting: Setting::Water, label: text::WATER, values: &[text::ORIGINAL, text::ENHANCED] },
     Entry { setting: Setting::Strafing, label: text::STRAFING, values: &[text::CLASSIC, text::MODERN] },
     Entry { setting: Setting::QuickSelect, label: text::QUICK_SELECT, values: &[text::CLASSIC, text::MODERN] },
+    Entry { setting: Setting::MouseX, label: text::MOUSE_X, values: &[text::NORMAL, text::INVERTED] },
+    Entry { setting: Setting::MouseY, label: text::MOUSE_Y, values: &[text::NORMAL, text::INVERTED] },
+    Entry { setting: Setting::MouseSpeed, label: text::MOUSE_SPEED, values: &text::LEVELS },
 ];
 
 /// The list's run-time state: cursor, each row's value index and each row's selectable values (bit k = value k;
