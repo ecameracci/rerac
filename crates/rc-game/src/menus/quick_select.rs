@@ -424,6 +424,41 @@ impl QuickSelect {
         ev
     }
 
+    /// Port-only: slot `k` (0 top, clockwise) picked at once (a keyboard's number row and numpad), as when the ring
+    /// opens under [`Self::hero`]'s gate on foot and closes on `k`: [`Self::confirm`]'s request, no ring drawn. Nothing
+    /// while the ring is open, outside the gate, in Clank's body (his command page) or on an empty slot.
+    pub fn direct(&mut self, k: usize, gate: &HeroGate, g: &mut Global, s: &mut SessionState) -> QsEvents {
+        let mut ev = QsEvents::default();
+        let base = !gate.early_exit
+            && gate.swap_state != 2
+            && gate.f594 == 0
+            && (gate.b13fc == 0 || gate.b13f4 == 1 || gate.s3f502 != 0)
+            && (gate.b13f7 == 0 || gate.b13f4 == 1 || gate.s3f502 != 0);
+        if self.open || !base || !(gate.b13f4 == 0 || gate.b13f4 == 3) || k >= SLOTS { return ev; }
+        let item = g.quick_select[k];
+        if item != 0 { self.confirm(item, gate, g, s, &mut ev); }
+        ev
+    }
+
+    /// The release's confirm in `QuickSelectUpdate` 0x24d238 (an item selected): the stats record 20, the Drone Device's
+    /// flag (its request the hand item kept), the hand request 0x141408 and the ammo clamped to the item's max.
+    fn confirm(&mut self, item: i32, gate: &HeroGate, g: &mut Global, s: &mut SessionState, ev: &mut QsEvents) {
+        stat(&mut g.move_help[20], gate.held_item != item, g.play_time, g.level);
+        let req = if item == DRONE {
+            ev.drone = true;
+            s.drone = true;
+            s.temp_hand
+        } else {
+            item
+        };
+        s.temp_hand = req;
+        ev.request = Some(req);
+        if let Some(max) = self.items.ammo_of(item) {
+            let a = &mut g.ammo[item as usize];
+            if (max as i32) < *a { *a = max as i32; }
+        }
+    }
+
     /// The command menu's init (L00 `0x238b18`): 4 entries, the page 0, the box, cursor −2, `ticks(30)` to arm.
     fn init_commands(&mut self) {
         self.sel = -2;
@@ -510,22 +545,7 @@ impl QuickSelect {
         if inp.held_u & button::TRIANGLE == 0 {
             if let Ok(i) = usize::try_from(self.sel) {
                 let item = self.entries.get(i).map_or(0, |e| e.item);
-                if item != 0 {
-                    stat(&mut g.move_help[20], gate.held_item != item, g.play_time, g.level);
-                    let req = if item == DRONE {
-                        ev.drone = true;
-                        s.drone = true;
-                        s.temp_hand
-                    } else {
-                        item
-                    };
-                    s.temp_hand = req;
-                    ev.request = Some(req);
-                    if let Some(max) = self.items.ammo_of(item) {
-                        let a = &mut g.ammo[item as usize];
-                        if (max as i32) < *a { *a = max as i32; }
-                    }
-                }
+                if item != 0 { self.confirm(item, gate, g, s, &mut ev); }
             }
             if self.fade == 0 {
                 self.close(vsync, &mut ev);
@@ -966,6 +986,22 @@ mod tests {
         assert_eq!(s.temp_hand, 10);
         assert_eq!(g.ammo[10], 40, "ammo clamped to the max");
         assert_eq!(g.move_help[20].count, 8, "the stats count rises on every fade-out tick");
+    }
+
+    #[test]
+    fn direct_pick_requests_the_slot_like_the_ring() {
+        let (mut q, mut g, mut s) = (ring(), global([10, 0, 12, 0, 0, 0, 0, 17]), SessionState::default());
+        g.ammo[10] = 55;
+        let gate = HeroGate::default();
+        assert_eq!(q.direct(0, &gate, &mut g, &mut s).request, Some(10));
+        assert_eq!((s.temp_hand, g.ammo[10], g.move_help[20].count), (10, 40, 1));
+        assert_eq!(q.direct(7, &gate, &mut g, &mut s).request, Some(17));
+        assert!(q.direct(1, &gate, &mut g, &mut s).request.is_none(), "empty slot");
+        assert!(!q.open, "no ring");
+        assert!(q.direct(2, &HeroGate { b13f4: 1, ..gate }, &mut g, &mut s).request.is_none(), "Clank's body");
+        assert!(q.direct(2, &HeroGate { f594: 1, ..gate }, &mut g, &mut s).request.is_none(), "a prompt owner");
+        q.open = true;
+        assert!(q.direct(2, &gate, &mut g, &mut s).request.is_none(), "the ring open");
     }
 
     #[test]

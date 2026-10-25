@@ -54,6 +54,7 @@ const KEYS: &[KeyCode] = {
         KeyT, KeyU, KeyV, KeyW, KeyX, KeyY, KeyZ, Digit0, Digit1, Digit2, Digit3, Digit4, Digit5, Digit6, Digit7, Digit8,
         Digit9, F1, F2, F3, F4, F5, F6, F7, F8, F9, F10, F11, F12, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Space, Enter,
         Backspace, Tab, Escape, ShiftLeft, ShiftRight, ControlLeft, ControlRight, AltLeft, AltRight, Comma, Period,
+        Numpad1, Numpad2, Numpad3, Numpad4, Numpad6, Numpad7, Numpad8, Numpad9,
     ]
 };
 
@@ -494,5 +495,10 @@ mod tests {
     #[test]
     fn every_key_name_parses() {
         for &k in KEYS { assert_eq!(key_named(&format!("{k:?}")), Some(k)); }
+    }
+
+    #[test]
+    fn the_quick_select_keys_are_recorded() {
+        for k in crate::input_map::QUICK_SLOT_KEYS.into_iter().flatten() { assert!(KEYS.contains(&k), "{k:?}"); }
     }
 }

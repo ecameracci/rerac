@@ -52,20 +52,31 @@ pub const CONTROLS: &str = "\
 controls: hold right mouse (or press Tab to toggle) to look | WASD move | Space/E up, Ctrl/Q down
           Shift fast | mouse wheel changes speed | Esc releases the cursor | P prints the game camera (RC_CAM + VU matrix)";
 
-/// Right mouse held or Tab toggles a locked, hidden cursor; Esc releases it. With gameplay on
-/// (`CameraSource` present, crate::gameplay) Tab switches cameras instead and only the right button grabs. The cursor
-/// is also hidden whenever the window has focus, and shows again when it loses it.
+/// Right mouse held or Tab toggles a locked, hidden cursor; Esc releases it. With gameplay on (`CameraSource`
+/// present, crate::gameplay): the game camera locks it while the window has focus in mode 0 outside the front end (the
+/// mouse is the right stick, crate::input_map), the fly camera while the right button is held. The cursor is also
+/// hidden whenever the window has focus, and shows again when it loses it.
 fn grab_cursor(
     mouse: Res<ButtonInput<MouseButton>>,
     keys: Res<ButtonInput<KeyCode>>,
     source: Option<Res<CameraSource>>,
+    (menu, front): (Option<Res<crate::menu_render::MenuMode>>, Option<Res<crate::saves::FrontEndRt>>),
     window: Single<(&Window, &mut CursorOptions), With<PrimaryWindow>>,
     mut toggled: Local<bool>,
 ) {
     let (window, mut cursor) = window.into_inner();
     if keys.just_pressed(KeyCode::Tab) && source.is_none() { *toggled = !*toggled; }
     if keys.just_pressed(KeyCode::Escape) { *toggled = false; }
-    let grab = *toggled || mouse.pressed(MouseButton::Right);
+    let playing = || {
+        window.focused
+            && menu.as_ref().is_some_and(|m| m.state.mode == rc_game::menus::mode::Mode::Gameplay)
+            && !front.as_ref().is_some_and(|f| f.fe.is_some())
+    };
+    let grab = match source.as_deref() {
+        Some(CameraSource::Play) => playing(),
+        Some(CameraSource::Fly) => mouse.pressed(MouseButton::Right),
+        None => *toggled || mouse.pressed(MouseButton::Right),
+    };
     let mode = if grab { CursorGrabMode::Locked } else { CursorGrabMode::None };
     if cursor.grab_mode != mode { cursor.grab_mode = mode; }
     let visible = !grab && !window.focused;

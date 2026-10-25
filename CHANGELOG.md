@@ -3,6 +3,7 @@
 ## Unreleased
 
 - With a completed save, ordinary moves no longer toggle cheats ("Cheat Enabled" / "Cheat Disabled") on planets other than Novalis: the cheat move sequences are read from every level's own data, so only the game's sequences turn cheats on, as in the original. The Cheats page's list and the pause menu's debug codes read the right tables on every level too.
+- New keyboard and mouse layout: WASD moves, the mouse and the arrow keys turn the camera, Space jumps, left click swings the wrench (□), right click fires (○), middle click opens the quick select (△), Ctrl crouches (R1), Shift is L1, Esc pauses (Start) and Tab opens the map (Select); Alt walks. The number row 1–8 (1 the top slot, then clockwise) and the numpad (8 up, 9 up-right, …) pick a quick-select weapon or gadget directly. The cursor is locked while playing and free in menus. The debug fly camera moved from Tab to F7. Port Options has Mouse left / right and Mouse up / down (Normal / Inverted) and Mouse sensitivity (1–10); in first person the mouse's left / right turns the view the same way; the mouse turns the camera from the slightest movement and at the same speed whatever the frame rate.
 
 ## v0.4.3-alpha
 

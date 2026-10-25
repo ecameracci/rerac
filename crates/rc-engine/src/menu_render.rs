@@ -582,6 +582,7 @@ struct PortSettings<'a, 'w> {
     /// The main menu's Mods page (crate::mods).
     mods: Option<&'a mut ResMut<'w, crate::mods::Mods>>,
     strafing: Option<&'a mut ResMut<'w, crate::strafing::StrafingSetting>>,
+    mouse: Option<&'a mut ResMut<'w, crate::input_map::MouseSettings>>,
 }
 
 impl PortSettings<'_, '_> {
@@ -600,6 +601,11 @@ impl PortSettings<'_, '_> {
         if let Some(f) = self.fps.as_deref() { menu.set_port_value(Setting::FrameLimit, f.index()); }
         if let Some(s) = self.strafing.as_deref() { menu.set_port_value(Setting::Strafing, s.0.index()); }
         if let Some(q) = self.qs.as_deref() { menu.set_port_value(Setting::QuickSelect, q.index()); }
+        if let Some(m) = self.mouse.as_deref() {
+            menu.set_port_value(Setting::MouseX, m.invert_x as u8);
+            menu.set_port_value(Setting::MouseY, m.invert_y as u8);
+            menu.set_port_value(Setting::MouseSpeed, m.speed);
+        }
         let before = **self.gfx;
         sync_graphics_rows(menu, &before, &self.supported);
         before
@@ -637,6 +643,14 @@ impl PortSettings<'_, '_> {
             if ***s != want {
                 ***s = want;
                 println!("menus: frame {frame}: Port Options: strafing {}", want.0.key());
+                want.save();
+            }
+        }
+        if let (Some(x), Some(y), Some(v), Some(m)) = (menu.port_value(Setting::MouseX), menu.port_value(Setting::MouseY), menu.port_value(Setting::MouseSpeed), self.mouse.as_mut()) {
+            let want = crate::input_map::MouseSettings { invert_x: x == 1, invert_y: y == 1, speed: v };
+            if ***m != want {
+                ***m = want;
+                println!("menus: frame {frame}: Port Options: mouse {want:?}");
                 want.save();
             }
         }
@@ -696,6 +710,7 @@ type PortParams<'w> = (
     Option<ResMut<'w, crate::gameplay::QuickSelectMode>>,
     Option<ResMut<'w, crate::mods::Mods>>,
     Option<ResMut<'w, crate::strafing::StrafingSetting>>,
+    Option<ResMut<'w, crate::input_map::MouseSettings>>,
 );
 
 #[allow(clippy::too_many_arguments)]
@@ -706,10 +721,11 @@ fn menu_frame(
     gs: Option<ResMut<Persistent>>,
     sess: Option<ResMut<Session>>,
     pad: Res<PadFrame>,
+    mut slot_key: Option<ResMut<crate::input_map::QuickSlotKey>>,
     source: Res<crate::game_camera::CameraSource>,
     supported: Option<Res<SupportedMsaa>>,
     (mut vr, mut feed, mut view, mut audio): InteractParams,
-    (mut shadows, mut display, mut gfx, mut fps, mut qs, mut mods, mut strafing): PortParams,
+    (mut shadows, mut display, mut gfx, mut fps, mut qs, mut mods, mut strafing, mut mouse): PortParams,
     mut widgets3d: ResMut<crate::menu_models::GadgetsPreview>,
     (mut fer, movies, mut app_exit): (ResMut<crate::saves::FrontEndRt>, Option<Res<crate::movie_render::MovieState>>, MessageWriter<AppExit>),
 ) {
@@ -718,9 +734,10 @@ fn menu_frame(
     let (gs, sess) = (&mut gs.0, &mut sess.0);
     // The front end (crate::saves): the boot flow instead of the level's modes.
     if fer.fe.is_some() {
+        if let Some(k) = slot_key.as_deref_mut() { k.0 = None; }
         let busy = movies.as_deref().is_some_and(|m| m.busy());
         let fer = &mut *fer;
-        let mut port = PortSettings { shadows: shadows.as_mut(), display: &mut display, gfx: &mut gfx, fps: fps.as_mut(), qs: qs.as_mut(), supported: supported.as_deref().cloned().unwrap_or_default(), mods: mods.as_mut(), strafing: strafing.as_mut() };
+        let mut port = PortSettings { shadows: shadows.as_mut(), display: &mut display, gfx: &mut gfx, fps: fps.as_mut(), qs: qs.as_mut(), supported: supported.as_deref().cloned().unwrap_or_default(), mods: mods.as_mut(), strafing: strafing.as_mut(), mouse: mouse.as_mut() };
         front_end_frame(rt, &mut mm, &mut play, gs, fer, &pad, &source, busy, audio.as_deref_mut(), &mut port, &mut app_exit);
         mm.state.end_frame();
         mm.loop_frame += 1;
@@ -731,6 +748,9 @@ fn menu_frame(
     let ticked = (counter, play.qs_held);
     if mode == Mode::Gameplay && rt.last_counter == Some(ticked) { return; }
     rt.last_counter = Some(ticked);
+    // Port-only: a number-row / numpad slot key (crate::input_map::quick_slot), for this tick's gameplay frame only; the
+    // devices count only while the game camera plays and no script drives the pad.
+    let slot_key = slot_key.as_deref_mut().and_then(|k| k.0.take()).filter(|_| rt.script.is_none() && *source == crate::game_camera::CameraSource::Play);
     if mode != Mode::Gameplay { mm.ring_open = false; }
     mm.state.begin_frame();
     let frame = mm.loop_frame;
@@ -766,6 +786,10 @@ fn menu_frame(
                 let h = qs.hero(&inp, &gate, &mut gs.global, sess);
                 let u = qs.update(&inp, &gate, &mut gs.global, sess, vsync, listeners);
                 if u.lock_pad { play.game.pad.lock = 2; }
+                if let Some(k) = slot_key {
+                    let d = qs.direct(k, &gate, &mut gs.global, sess);
+                    if trace || d.request.is_some() { println!("menus: frame {frame}: quick select key: slot {k} → hand request {:?}", d.request); }
+                }
                 // Clank's command menu: 0x141610 for the gadgetbots and HeroUpdateAlt (next tick).
                 if let Some(c) = u.command { play.game.hero.bodies.command = c; }
                 // 0x242930: the ring's △ also keeps health and bolts up (`HudShowHealth` + the bolt counter, ScaleTicks(180)).
@@ -860,7 +884,7 @@ fn menu_frame(
                 // The close's post-action 3 / 4 / 5 / 6 / 7: `FadeToBlack(ticks(16))` over the menu image, then the action.
                 post_fade_step(rt, &mut mm, &mut play, gs, sess.hp, audio.as_deref_mut(), frame, true);
             } else if let Some(menu) = rt.menu.as_mut() {
-                let mut port = PortSettings { shadows: shadows.as_mut(), display: &mut display, gfx: &mut gfx, fps: fps.as_mut(), qs: qs.as_mut(), supported: supported.as_deref().cloned().unwrap_or_default(), mods: mods.as_mut(), strafing: strafing.as_mut() };
+                let mut port = PortSettings { shadows: shadows.as_mut(), display: &mut display, gfx: &mut gfx, fps: fps.as_mut(), qs: qs.as_mut(), supported: supported.as_deref().cloned().unwrap_or_default(), mods: mods.as_mut(), strafing: strafing.as_mut(), mouse: mouse.as_mut() };
                 let gfx_before = port.rows_in(menu);
                 // The card and the save inputs moved into the menu for its tick (crate::saves).
                 saves_in(menu, &play);
