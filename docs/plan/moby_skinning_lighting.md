@@ -251,7 +251,13 @@ with 0x19304000 / 0x580000000 = **64×64** from core[0x98] / core[0x9c]; MIPTBP1
 core[0x90..0x9c] are byte offsets into the gs_ram lump (Novalis: chrome 0x400 / pal 0x0, glass 0x4800 / pal 0x4400); both
 maps decode to blurry environment photographs with alpha 13..128. **Chrome and glass differ only in the map** (same VU0
 path, same GS state). (0x182c70, from core[0xc0]/[0xc4], is the **gold** 128×128 map: `select_world_object_resource_tables` writes it
-into the first metal ad-gif of a gold weapon's class, `ExtraMobys::set_gold`.)
+into the first metal ad-gif of a gold weapon's class, `ExtraMobys::set_gold`. A gold item is also relit: `update_item_tint_from_hero`
+(L00 0x207330 / L01 0x228ac0) gives it light set 12, written from the hero's key light (direction, and colour (0.5·sv, 0.4·sv, 0)
+with sv the key-light colour's component sum), and the warm ambient (4s/10, 3s/10, 0) from the hero ambient's sum s; in the
+pause menu the "hero" is a menu moby (set 14, ambient 0x20), and the gold upgrade's demo (`FUN_002aea70`) runs it on the
+scene's item actor with the real hero moby once the demo scene is parsed. Port: `moby_light::gold_lights`. The port blends
+the gold metal on display bytes (crate::display_blend): with the gold map's alpha 60..0x80 the linear-light blend of the
+other metal washes out the body texture under it.)
 
 **Novalis classes with metal packets:** placed: 13 (281 instances, the bolt pickups (threaded shaft + head, seen in a close shot); 1 high packet + 2 metal packets, all glass; jc 1),
 1456–1465 (one instance each, 3–7 chrome packets, jc 1, far east of the start), 1818 (1 instance, 4 chrome packets, jc

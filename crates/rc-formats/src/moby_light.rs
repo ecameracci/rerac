@@ -1,6 +1,6 @@
 //! Moby instance rotation and vertex lighting, bit-exact on PS2 float arithmetic
 //! ([`crate::tfrag_light::ps2`]). Spec: docs/plan/moby_skinning_lighting.md §2, §4, §5 and
-//! docs/plan/moby_render_notes.md. Three game routines are ported:
+//! docs/plan/moby_render_notes.md. Four game routines are ported:
 //!
 //! 1. [`rotation_rows`]: `fun_0020def8` (boot 0x20def8) runs VU0 program 28259 at 0xd18
 //!    (`vcallms 0x1a3`) on moby+0x40 (the instance's Euler angles) and stores the rows vf20..vf22 at
@@ -11,7 +11,10 @@
 //! 2. [`moby_lights`]: MobyProc (`fun_00211808`, 0x211d88..0x212140) builds the job's light block: the
 //!    light direction(s) of the selected bank set taken into model space (`L = -R^T dir`), colours,
 //!    back-light factors K and the ambient from moby+0x3c.
-//! 3. [`light_vertex`]: VU0 program 104691 (entry 0, single-matrix loop) per vertex, plus the EE pack
+//! 3. [`gold_lights`]: `update_item_tint_from_hero` (L00 0x207330 / L01 0x228ac0) writes light set 12 of the
+//!    bank from the hero's light word and the item's warm ambient, then [`moby_lights`] builds the block
+//!    with that set (docs/plan/moby_skinning_lighting.md §9).
+//! 4. [`light_vertex`]: VU0 program 104691 (entry 0, single-matrix loop) per vertex, plus the EE pack
 //!    in `fun_001ee650` (multiplier bytes, halfword saturation).
 //!
 //! The point-light merge (MobyProc 0x212150) is the engine's per-frame job (rc-engine `moby_render.rs`, the
@@ -171,6 +174,39 @@ pub fn moby_lights(rows: &[V4; 3], bank: &LightBank, light_word: u32, ambient: [
         neg_k,
         ambient: [r, g, b, alpha].map(|x| 0x4780_0000 | x as u32),
     }
+}
+
+/// The gold weapon's light block: `update_item_tint_from_hero` (L00 0x207330, L01 0x228ac0; the held weapon from
+/// `update_hero_color_and_item_tint` L00 0x2078a8 / L01 0x228fa8, the menu's preview and 3D Ratchet's hand item with a menu moby as the
+/// "hero") gives the item moby light set 12 and the warm ambient (4s/10, 3s/10, 0), s = the hero ambient's channel
+/// sum (moby+0x3c..0x3e), and writes set 12 of the light bank (0x180340 + 12·0x40) from the hero's light word
+/// `[set0, set1, fade, _]` (moby+0x38; L12 0x269090 / 0x269100, each `(1 − t)·set0 + t·set1` on xyz with
+/// t = itof12(fade << 4), set0's w kept, no renormalisation, or set0's quadword alone when fade = 0):
+/// dir_a = the blended key-light direction (+0x10), color_a = (0.5·sv, 0.4·sv, 0, −0.3) with sv = x + y + z of
+/// the blended key-light **colour** (+0x00).
+pub fn gold_lights(rows: &[V4; 3], bank: &LightBank, hero_light: u32, hero_ambient: [u8; 3], alpha: u8) -> MobyLights {
+    let [i0, i1, fade, _] = hero_light.to_le_bytes();
+    let set = |i: u8| bank.sets.get(i as usize).copied().unwrap_or_default();
+    let blend = |a: [f32; 4], b: [f32; 4]| -> V4 {
+        let a = a.map(f32::to_bits);
+        if fade == 0 { return a; }
+        // qmtc2 + vitof12.x: t; vsubx.w vf3, vf0, vf3x: 1 − t; vmulaw.xyz + vmaddx.xyz.
+        let t = ps2::itof12((fade as i32) << 4);
+        let w = ps2::sub(ps2::ONE, t);
+        let b = b.map(f32::to_bits);
+        lanes(|k| if k < 3 { ps2::add(ps2::mul(a[k], w), ps2::mul(b[k], t)) } else { a[k] })
+    };
+    let (s0, s1) = (set(i0), set(i1));
+    let dir = blend(s0.dir_a, s1.dir_a);
+    let c = blend(s0.color_a, s1.color_a);
+    let sv = ps2::add(ps2::add(c[0], c[1]), c[2]);
+    let color = [ps2::mul(sv, 0x3f00_0000), ps2::mul(sv, 0x3ecc_cccd), ps2::mul(sv, 0), 0xbe99_999a];
+    let mut bank = bank.clone();
+    bank.sets[12] = DirLightSet { color_a: color.map(f32::from_bits), dir_a: dir.map(f32::from_bits), ..Default::default() };
+    // `pack_render_command_fields(item, s·4/10 + (s·3/10 << 8), 12, 12, 0)`: the colour word's low bytes.
+    let s = hero_ambient.iter().map(|&c| c as u32).sum::<u32>();
+    let [r, g, b, _] = (s * 4 / 10 + ((s * 3 / 10) << 8)).to_le_bytes();
+    moby_lights(rows, &bank, 0x0c0c, [r, g, b], alpha)
 }
 
 /// The identity joint matrix (rows 0..2; bind pose / unanimated palette).
@@ -358,5 +394,25 @@ mod tests {
         assert_eq!(pack([0x4780_0000 + 300, 0x4780_0000 + 255, 0x4780_0000, 0x4780_0080], [0x80; 4]), [255, 255, 0, 0x80]);
         // 0x8000 and above read as a negative halfword: saturates to -32768 >> 7 = -256 -> 0.
         assert_eq!(pack([0x4780_8000, 0, 0, 0], [0x80; 4])[0], 0);
+    }
+
+    #[test]
+    fn gold_lights_take_the_key_light_colour_sum_and_direction() {
+        let mut bank = LightBank::default();
+        bank.sets[3] = DirLightSet { color_a: [1.0, 0.5, 0.25, -0.5], dir_a: [0.0, 0.0, -1.0, 0.0], ..Default::default() };
+        bank.sets[4] = DirLightSet { color_a: [0.0, 0.5, 0.25, 0.0], dir_a: [1.0, 0.0, 0.0, 0.0], ..Default::default() };
+        // sv = 1.75 (the colour's sum, not the direction's); ambient from 0x20 · 3 = 96: (38, 28, 0).
+        let l = gold_lights(&IDENTITY, &bank, 0x03, [0x20; 3], 0x80);
+        let sv = f(1.75);
+        assert_eq!(l.colors[0], [ps2::mul(sv, f(0.5)), ps2::mul(sv, 0x3ecc_cccd), 0, 0]);
+        assert_eq!(l.neg_k[0], 0xbe99_999a);
+        assert_eq!(l.ambient, [38, 28, 0, 0x80].map(|x| 0x4780_0000 | x));
+        // L = −dir in model space (identity rows).
+        assert_eq!([l.rows[0][0], l.rows[1][0], l.rows[2][0]].map(f32::from_bits), [0.0, 0.0, 1.0]);
+        // Fade 0x80 (t = 0.5): colours and directions blended, not renormalised.
+        let l = gold_lights(&IDENTITY, &bank, 0x80_04_03, [0x20; 3], 0x80);
+        let sv = f(1.25);
+        assert_eq!(l.colors[0], [ps2::mul(sv, f(0.5)), ps2::mul(sv, 0x3ecc_cccd), 0, 0]);
+        assert_eq!([l.rows[0][0], l.rows[1][0], l.rows[2][0]].map(f32::from_bits), [-0.5, 0.0, 0.5]);
     }
 }

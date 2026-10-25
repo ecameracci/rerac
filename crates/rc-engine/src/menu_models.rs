@@ -741,7 +741,19 @@ fn update(
         let Some(pl) = pl else { continue };
         let at = p.base as usize * 64;
         if let Some(dst) = palette.get_mut(at..) { crate::moby_anim::write_palette(dst, &pl.pose[..pl.pose.len().min(p.slots as usize)]); }
-        let lights = rt.bank.as_ref().map(|bank| moby_light::moby_lights(&pl.rows, bank, frame::LIGHT_WORD, frame::AMBIENT, 0x80));
+        // A gold weapon's preview and the 3D Ratchet's gold hand item get `update_item_tint_from_hero` (L01
+        // 0x228ac0, from the preview update 0x291e3c and `LoadHandGadget` 0x297ecc) with a menu moby as the
+        // "hero": the preview widget's frame moby (+0x14) / the 3D Ratchet, both lit with set 14 and ambient
+        // 0x20 (`create_menu_preview_moby`). So light set 12 takes set 14's direction and the warm ambient
+        // comes from 0x20·3 (`moby_light::gold_lights`), whatever the paused game's lights.
+        let gold = p.gold == Some(true) && matches!(p.role, Role::Hand | Role::Item);
+        let lights = rt.bank.as_ref().map(|bank| {
+            if gold {
+                moby_light::gold_lights(&pl.rows, bank, frame::LIGHT_WORD, frame::AMBIENT, 0x80)
+            } else {
+                moby_light::moby_lights(&pl.rows, bank, frame::LIGHT_WORD, frame::AMBIENT, 0x80)
+            }
+        });
         let model = fold * moby_render::extra_model(rows_f32(&pl.rows), p.scale, pl.pos);
         let r = moby_render::extra_record(&model, lights.as_ref(), p.base);
         let o = k * moby_render::EXTRA_RECORD_SIZE;
