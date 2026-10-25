@@ -1419,6 +1419,7 @@ The tables below are the audit as taken, minus these four rows.
 | `tie_lod::fog_matches_the_tfrag_line` | port logic: fog matches the tfrag line | fast | lib:engine | keep |
 | `tie_lod::integer_vu_ops_match_the_float_model` | port logic: integer vu ops match the float model | fast | lib:engine | keep |
 | `tie_lod::fat_colour_blend` | port logic: fat colour blend | fast | lib:engine | keep |
+| `travel_render::only_a_gold_demo_actor_takes_the_heros_light` | port logic: `update_item_tint_from_hero` in the gold upgrade's demo (`FUN_002aea70`): the gold actor takes light set 12 from the hero moby; every other actor keeps its own light word | fast | lib:engine | keep |
 | `vendor_render::the_static_tiles_its_textures` | game-checked: the static tiles its textures | fast | lib:engine | keep |
 | `visibomb_view::fog_swap_and_restore_in_order` | game-checked: fog swap and restore in order | fast | lib:engine | keep |
 | `visibomb_view::band_records_by_level` | port logic: band records by level | fast | lib:engine | keep |

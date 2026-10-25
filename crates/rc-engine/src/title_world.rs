@@ -441,5 +441,5 @@ fn upload(mut commands: Commands, mut rt: ResMut<TitleWorldRt>, mut buffers: Res
         crate::travel_render::hide_gfx(&rt.gfx, &mut q);
         return;
     }
-    crate::travel_render::upload_gfx(&mut rt.gfx, &d.level, &d.scene, &rt.poses, None, &mut commands, &mut buffers, &mut q);
+    crate::travel_render::upload_gfx(&mut rt.gfx, &d.level, &d.scene, &rt.poses, None, None, &mut commands, &mut buffers, &mut q);
 }
