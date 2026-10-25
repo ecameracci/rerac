@@ -69,7 +69,7 @@
 //! **Port Options** (port-only, `rc_game::menus::pause::port`): an extra "Port Options" entry in the pause menu's and
 //! the main menu's Options lists opens a page built from the game's machinery; its graphics rows are synced with
 //! crate::graphics's `GraphicsSettings` around every menu tick of both ([`PortSettings`]; the display
-//! rows with `display::DisplaySettings`): the resource's value is shown, a ✕ writes it back and saves it to the port
+//! rows with `display::DisplaySettings`, the controller rows with `haptics::ControllerSettings`): the resource's value is shown, a ✕ writes it back and saves it to the port
 //! settings file. The anti-aliasing row offers only the sample counts the GPU supports ([`SupportedMsaa`]; ✕ skips the
 //! rest, e.g. 8x on Apple M-series).
 //!
@@ -590,6 +590,9 @@ struct PortSettings<'a, 'w> {
     mods: Option<&'a mut ResMut<'w, crate::mods::Mods>>,
     strafing: Option<&'a mut ResMut<'w, crate::strafing::StrafingSetting>>,
     mouse: Option<&'a mut ResMut<'w, crate::input_map::MouseSettings>>,
+    /// The Controller page's rows and its controllers (crate::haptics, crate::gms).
+    controller: Option<&'a mut ResMut<'w, crate::haptics::ControllerSettings>>,
+    gms: Option<&'a mut ResMut<'w, crate::gms::Gms>>,
 }
 
 impl PortSettings<'_, '_> {
@@ -599,6 +602,19 @@ impl PortSettings<'_, '_> {
             let names: Vec<&str> = m.list.iter().map(|i| i.name.as_str()).collect();
             let on: Vec<bool> = m.list.iter().map(|i| i.enabled).collect();
             menu.set_mod_rows(&names, &on);
+        }
+        // The Gadgetron Movement System page's rows: the connected controllers (crate::gms).
+        if let Some(g) = self.gms.as_deref() {
+            menu.set_gms_rows(g.rows());
+            menu.gms_in_log = g.in_log;
+        }
+        if let Some(h) = self.controller.as_deref() {
+            menu.set_port_value(Setting::Vibration, !h.enabled as u8);
+            menu.set_port_value(Setting::VibrationStrength, h.strength.index());
+            menu.set_port_value(Setting::FireButton, h.fire_r2 as u8);
+            menu.set_port_value(Setting::TriggerEffects, !h.triggers as u8);
+            menu.set_port_value(Setting::ButtonIcons, h.icons.index());
+            menu.set_port_value(Setting::Lightbar, h.lightbar.index());
         }
         menu.set_port_value(Setting::Resolution, self.display.resolution.index());
         menu.set_port_value(Setting::Aspect, self.display.gameplay.index());
@@ -619,7 +635,7 @@ impl PortSettings<'_, '_> {
     }
 
     /// After the tick: a changed row into its setting, which is saved.
-    fn rows_out(&mut self, menu: &PageMenu, gfx_before: &crate::graphics::GraphicsSettings, frame: u64) {
+    fn rows_out(&mut self, menu: &mut PageMenu, gfx_before: &crate::graphics::GraphicsSettings, frame: u64) {
         // A toggled mod: saved, and the HUD rebuilds its atlas (crate::hud_render).
         if let (Some(states), Some(m)) = (menu.mod_states(), self.mods.as_mut()) {
             for (i, &on) in states.iter().enumerate() {
@@ -627,6 +643,26 @@ impl PortSettings<'_, '_> {
                     println!("menus: frame {frame}: Mods: {} {}", m.list[i].id, if on { "on" } else { "off" });
                     m.set_enabled(i, on);
                 }
+            }
+        }
+        // ✕ on a GMS row: lock that controller, or free it.
+        if let (Some(g), Some(i)) = (self.gms.as_mut(), menu.take_gms_pick()) {
+            g.pick(i);
+            println!("menus: frame {frame}: GMS: lock {:?}", g.lock);
+        }
+        if let Some(h) = self.controller.as_mut() {
+            let want = crate::haptics::ControllerSettings {
+                enabled: menu.port_value(Setting::Vibration).map_or(h.enabled, |v| v == 0),
+                strength: menu.port_value(Setting::VibrationStrength).map_or(h.strength, crate::haptics::Strength::from_index),
+                fire_r2: menu.port_value(Setting::FireButton).map_or(h.fire_r2, |v| v == 1),
+                triggers: menu.port_value(Setting::TriggerEffects).map_or(h.triggers, |v| v == 0),
+                icons: menu.port_value(Setting::ButtonIcons).map_or(h.icons, crate::button_icons::IconStyle::from_index),
+                lightbar: menu.port_value(Setting::Lightbar).map_or(h.lightbar, crate::haptics::Lightbar::from_index),
+            };
+            if ***h != want {
+                ***h = want;
+                println!("menus: frame {frame}: Port Options: controller {:?}", ***h);
+                h.save();
             }
         }
         if let (Some(v), Some(f)) = (menu.port_value(Setting::FrameLimit), self.fps.as_mut()) {
@@ -708,7 +744,7 @@ type InteractParams<'w> = (
     Option<ResMut<'w, crate::audio_out::AudioOut>>,
 );
 
-/// The Port Options and Mods rows' resources ([`PortSettings`]).
+/// The Port Options and Mods rows' resources ([`PortSettings`]); last the Controller page's (crate::haptics, crate::gms).
 type PortParams<'w> = (
     ResMut<'w, crate::display::DisplaySettings>,
     ResMut<'w, crate::graphics::GraphicsSettings>,
@@ -718,6 +754,7 @@ type PortParams<'w> = (
     Option<ResMut<'w, crate::mods::Mods>>,
     Option<ResMut<'w, crate::strafing::StrafingSetting>>,
     Option<ResMut<'w, crate::input_map::MouseSettings>>,
+    (Option<ResMut<'w, crate::haptics::ControllerSettings>>, Option<ResMut<'w, crate::gms::Gms>>),
 );
 
 #[allow(clippy::too_many_arguments)]
@@ -732,7 +769,7 @@ fn menu_frame(
     source: Res<crate::game_camera::CameraSource>,
     supported: Option<Res<SupportedMsaa>>,
     (mut vr, mut feed, mut view, mut audio): InteractParams,
-    (mut display, mut gfx, mut fps, mut smoothing, mut qs, mut mods, mut strafing, mut mouse): PortParams,
+    (mut display, mut gfx, mut fps, mut smoothing, mut qs, mut mods, mut strafing, mut mouse, (mut controller, mut gms)): PortParams,
     mut widgets3d: ResMut<crate::menu_models::GadgetsPreview>,
     (mut fer, movies, mut app_exit): (ResMut<crate::saves::FrontEndRt>, Option<Res<crate::movie_render::MovieState>>, MessageWriter<AppExit>),
 ) {
@@ -744,7 +781,7 @@ fn menu_frame(
         if let Some(k) = slot_key.as_deref_mut() { k.0 = None; }
         let busy = movies.as_deref().is_some_and(|m| m.busy());
         let fer = &mut *fer;
-        let mut port = PortSettings { display: &mut display, gfx: &mut gfx, fps: fps.as_mut(), smoothing: smoothing.as_mut(), qs: qs.as_mut(), supported: supported.as_deref().cloned().unwrap_or_default(), mods: mods.as_mut(), strafing: strafing.as_mut(), mouse: mouse.as_mut() };
+        let mut port = PortSettings { display: &mut display, gfx: &mut gfx, fps: fps.as_mut(), smoothing: smoothing.as_mut(), qs: qs.as_mut(), supported: supported.as_deref().cloned().unwrap_or_default(), mods: mods.as_mut(), strafing: strafing.as_mut(), mouse: mouse.as_mut(), controller: controller.as_mut(), gms: gms.as_mut() };
         front_end_frame(rt, &mut mm, &mut play, gs, fer, &pad, &source, busy, audio.as_deref_mut(), &mut port, &mut app_exit);
         mm.state.end_frame();
         mm.loop_frame += 1;
@@ -896,7 +933,7 @@ fn menu_frame(
                 // The close's post-action 3 / 4 / 5 / 6 / 7: `FadeToBlack(ticks(16))` over the menu image, then the action.
                 post_fade_step(rt, &mut mm, &mut play, gs, sess.hp, audio.as_deref_mut(), frame, true);
             } else if let Some(menu) = rt.menu.as_mut() {
-                let mut port = PortSettings { display: &mut display, gfx: &mut gfx, fps: fps.as_mut(), smoothing: smoothing.as_mut(), qs: qs.as_mut(), supported: supported.as_deref().cloned().unwrap_or_default(), mods: mods.as_mut(), strafing: strafing.as_mut(), mouse: mouse.as_mut() };
+                let mut port = PortSettings { display: &mut display, gfx: &mut gfx, fps: fps.as_mut(), smoothing: smoothing.as_mut(), qs: qs.as_mut(), supported: supported.as_deref().cloned().unwrap_or_default(), mods: mods.as_mut(), strafing: strafing.as_mut(), mouse: mouse.as_mut(), controller: controller.as_mut(), gms: gms.as_mut() };
                 let gfx_before = port.rows_in(menu);
                 // The card and the save inputs moved into the menu for its tick (crate::saves).
                 saves_in(menu, &play);
@@ -1659,6 +1696,7 @@ fn build_prims(
     let Some(mut rt) = rt else { return };
     let Some(lh) = level.0.hud.as_ref() else { return };
     let mut h = Hud2d::default();
+    h.sharp_icons = true;
     h.frame_sizes = rt.assets.hud.frame_sizes.clone();
     let mut st = TextState::default();
     let mut statics: [Vec<Prim>; 3] = Default::default();
@@ -1678,6 +1716,7 @@ fn build_prims(
         convert(&d, &mut h, &mut statics, &mut st, &lh.glyphs, &mut resolve);
     }
     hook.prims = h.prims;
+    hook.icons = h.icons.into_iter().map(|m| crate::hud_render::IconMark { boxed: true, ..m }).collect();
     hook.statics = statics;
     hook.replace_hud = matches!(rt.render_mode, Mode::Menu | Mode::Slideshow) || menu_under_freeze(&rt);
     // The vendor (mode 5) runs `HudUpdate(1)` every frame: the HUD ticks and draws over its screens.

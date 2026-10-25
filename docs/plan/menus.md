@@ -587,6 +587,40 @@ sub-pages (`crates/rc-game/src/menus/pause/port.rs`, `PageMenu::install_port_pag
   dimmed to half, while △ keeps the quick-select ring or Clank's command page open; the ring, its selection and the
   hand swap are the game's) → `gameplay::QuickSelectMode` (key `quick_select`, `RC_QUICK_SELECT=classic|modern` at start);
   docs/plan/quick_select_pause.md.
+  The controller rows (port-only: the game has no vibration) → `haptics::ControllerSettings`: Vibration: on / off and Vibration strength: Low / Medium / High (rumble from
+  game events), Fire button: Circle / R2 (R2 read as ○, at the held weapon's fire point; R1 still crouches) and Trigger
+  effects: on / off (R2's per-weapon DualSense feel); keys `vibration` / `vibration_strength` / `fire_button` /
+  `trigger_effects` in the settings file. A change of the vibration rows plays a short pulse at the new strength.
+* **Controller page** (port-only): Port Options shows `port::ENTRIES[..PORT_ROWS]`, its last row "Controller" (no
+  value, a page button); the controller rows (Vibration, Vibration strength, Fire button, Trigger effects, Button
+  icons, Lightbar) are on the Controller page, above the connected controllers, their values still in the Port Options
+  list. Between two pages of the same frames (Port Options ↔ its Controller page) the frames hold
+  (`frame::FrameMobys::hold`): △ would play them back to the frames' parent layout. The Controller page's list panel is
+  stretched as Port Options' is (`port::panel_stretch`).
+* **Button icons** (Controller page, port-only): Original / PS5 / Xbox One / Auto → `haptics::ControllerSettings::icons`
+  (key `button_icons`). The pad icons in text are the three fonts' glyph cells 0x10..0x19 (✕ ○ △ □, L1 R1 L2 R2, the
+  left / right stick; 24×16 at the glyph's (u, v) of FX 1..3); `hud_render::apply_button_icons` rewrites them in the HUD
+  atlas with `button_icons::cell` (drawn in code on the disc cells' footprints) when the style changes and in every new
+  atlas, so menus, vendor, help box and prompts all follow. Xbox One maps by position: ✕ A, ○ B, △ Y, □ X; LB RB LT RT.
+  Auto: PS5 for a Sony pad, Xbox One for any other, as the controller last used (`gms::Gms::active`).
+  **Sharp icons**: with PS5 / Xbox One the HUD's and page menus' text leaves those cells out (`Hud2d::sharp_icons`,
+  `Hud2d::icons`) and `button_icons::place` draws each icon as a UI image over the 512×416 layer at the window's
+  resolution, fitted to the cell's footprint, dimmed by the fades drawn over it (`button_icons::shown`). The art is
+  Zacksly's "PS5 Button Icons and Controls" and "Xbox Series Button Icons and Controls" (CC BY 3.0,
+  https://zacksly.itch.io; crates/rc-engine/art/button_icons/CREDITS.md). The monitors' canvases and scene
+  subtitles keep the rewritten cells.
+* **Gadgetron Movement System** (GMS, idea by roxas997 on the ReRAC Discord): the Controller row does not
+  cycle; ✕ opens its own page (`port::GMS_PAGE`, from the main menu `port::GMS_PAGE_FRONT`; Port Options' frames, parent
+  Port Options) titled "Gadgetron Movement System" (regular font: in the large one the title wraps and the label turns
+  into a scroller) listing the connected controllers (`port::GmsList`, filled by the engine's `gms::Gms` before each tick):
+  Active (the one last used) / Available, or with one locked by ✕: Locked / Off. In a new game's Veldin (level 0
+  loaded with under `gms::NEW_GAME_PLAY_TIME` played) a text-only HelpDesk note (`port::text::GMS_HELP_TEXT`, no voice,
+  no help record: `help::Help::request_port`) says what the GMS is. Once it has shown, the Help Log lists it last
+  (`PageMenu::gms_in_log`; settings key `gms_help`), outside the saved log, so saves stay the game's.
+* **Lightbar** (Controller page, port-only): Default (the pad's own: nothing sent) / Off / Orange / Green / Blue /
+  Health (green to red with Ratchet's health over `max_hp`) → `haptics::ControllerSettings::lightbar` (key
+  `lightbar`), sent by `dualsense` with valid flag 1 0x04 and, once, the lightbar setup that ends the pad's own
+  animation. Pads are read, and rumble and R2's effect sent, only while the game's window has the focus.
 * **Device support**: the row offers only the sample counts the GPU can use for every multisampled world attachment
   (`render_settings::SupportedMsaa`, detected at start from `RenderAdapter::get_texture_format_features` for
   `Rgba8UnormSrgb` and `Depth32Float` — the WebGPU guarantee {1, 4} when the device lacks

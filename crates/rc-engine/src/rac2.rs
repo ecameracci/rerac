@@ -23,6 +23,7 @@
 
 use crate::hud_render::{self, Hud2d, HudComposite, HudMaterial, Layer, Tex};
 use anyhow::{Context, Result};
+use bevy::input::mouse::AccumulatedMouseMotion;
 use bevy::prelude::*;
 use rc_formats::rac2::boot::{BootElf, GLYPHS, GLYPHS_2, MAIN_MENU};
 use rc_formats::rac2::front_end::FrontEnd as Blob;
@@ -257,13 +258,17 @@ fn tick(
     mut rac2: ResMut<Rac2>,
     keys: Res<ButtonInput<KeyCode>>,
     mouse: Res<ButtonInput<MouseButton>>,
-    gamepads: Query<&Gamepad>,
+    motion: Res<AccumulatedMouseMotion>,
+    pads: crate::input_map::Pads,
 ) {
     let r = &mut *rac2;
     if r.done { return; }
     let held = match &r.script {
         Some(s) => s.at(r.ticks).buttons,
-        None => crate::input_map::sample(&keys, &mouse, Vec2::ZERO, gamepads).buttons,
+        None => {
+            let (keys, mouse, _) = crate::gms::keyboard(pads.gms(), &keys, &mouse, &motion);
+            crate::input_map::sample(keys, mouse, Vec2::ZERO, pads.device()).buttons
+        }
     };
     let ended = std::mem::take(&mut r.movie_ended);
     for req in r.front.tick(held, ended, &r.data.assets) {
