@@ -248,7 +248,8 @@ pub struct WaterMaterial {
 pub struct WaterLook {
     /// x = 1: enhanced (the option is on and the texture is clear water: [`clear_water`]).
     pub misc: Vec4,
-    /// xyz = toward the key light (world; crate::sun_shadow::KeyLight), for the glint.
+    /// xyz = toward the key light (world; crate::sun_shadow::KeyLight), for the glint; w = the swell's scale
+    /// (crate::water_waves).
     pub sun: Vec4,
 }
 
@@ -307,7 +308,8 @@ fn follow_look(
     let Some(mut st) = state else { return };
     let st = &mut *st;
     let tex = level.0.particles.textures.as_ref();
-    let sun = key.map_or(Vec3::Y, |k| k.to_light).extend(0.0);
+    // w: the swell's scale (crate::water_waves; the slope only on this water).
+    let sun = key.map_or(Vec3::Y, |k| k.to_light).extend(crate::water_waves::scale());
     for h in &st.materials {
         let Some(m) = materials.get(h) else { continue };
         let clear = *st.clear_fx.entry(m.fx).or_insert_with(|| {

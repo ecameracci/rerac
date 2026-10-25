@@ -35,6 +35,11 @@
 // * foam along the shore: thin water where the bed rises toward the surface (not over a flat shallow floor). At the
 //   shore line (no thickness) the result is the scene behind, so the edge has no seam.
 // A ripple water draw may sit params.misc.w over the game's height (water_render::SURFACE_LIFT), on Enhanced only.
+//
+// The swell (crate::water_waves; look.sun.w = its scale, 0: none): on the vertices tagged SWELL_TAG (crate::sea_water's
+// split seas) the height of `swell_wave`'s sum times the vertex's shore damping and the far fade, passed on as `swell`;
+// elsewhere `swell` = −1 and the fragment damps the slope by the bed's vertical depth instead. Either way the swell's
+// slope joins the wave normal.
 
 #import bevy_pbr::view_transformations::{position_world_to_clip, position_world_to_view, depth_ndc_to_view_z, position_ndc_to_view, frag_coord_to_ndc, ndc_to_frag_coord}
 #import bevy_pbr::mesh_view_bindings::{view, globals}
@@ -118,6 +123,53 @@ struct WaterVertexOutput {
     // Kind 4: the vertex uv (across, along, flow dir) and the edge fade; 0 otherwise.
     @location(4) flow: vec4<f32>,
     @location(5) fade: f32,
+    // The swell's share at this point (−1: the fragment's own damping).
+    @location(6) swell: f32,
+}
+
+// crate::sea_water::SWELL_TAG; crate::water_waves::SWELL_FADE, WAVE_LOD, SHORE_DEPTH.
+const SWELL_TAG: u32 = 0x80000000u;
+const SWELL_FADE: vec2<f32> = vec2<f32>(50.0, 100.0);
+const WAVE_LOD: f32 = 8.0;
+const SHORE_DEPTH: vec2<f32> = vec2<f32>(0.5, 8.0);
+
+// crate::water_waves::WAVES (direction x, z, wavenumber, amplitude), PHASE, SPEED, G.
+fn swell_wave(i: i32) -> vec4<f32> {
+    var w = array<vec4<f32>, 4>(
+        vec4<f32>(0.8, 0.6, 0.2856, 0.11),
+        vec4<f32>(0.98058, -0.19612, 0.4488, 0.08),
+        vec4<f32>(0.45099, 0.89254, 0.69813, 0.06),
+        vec4<f32>(0.92918, 0.36961, 1.05, 0.04),
+    );
+    return w[i];
+}
+
+fn swell_phase(w: vec4<f32>, i: i32, xz: vec2<f32>, t: f32) -> f32 {
+    return dot(w.xy, xz) * w.z - 0.6 * sqrt(9.8 * w.z) * t + f32(i) * 1.7;
+}
+
+// A wave's share at horizontal distance d from the camera (crate::water_waves::wave_weight).
+fn swell_weight(w: vec4<f32>, d: f32) -> f32 {
+    let l = 6.2831855 / w.z;
+    return 1.0 - smoothstep(WAVE_LOD * l, 2.0 * WAVE_LOD * l, d);
+}
+
+fn swell_height(xz: vec2<f32>, t: f32, d: f32) -> f32 {
+    var h = 0.0;
+    for (var i = 0; i < 4; i += 1) {
+        let w = swell_wave(i);
+        h += swell_weight(w, d) * w.w * sin(swell_phase(w, i, xz, t));
+    }
+    return h;
+}
+
+fn swell_grad(xz: vec2<f32>, t: f32, d: f32) -> vec2<f32> {
+    var g = vec2<f32>(0.0);
+    for (var i = 0; i < 4; i += 1) {
+        let w = swell_wave(i);
+        g += w.xy * (swell_weight(w, d) * w.w * w.z * cos(swell_phase(w, i, xz, t)));
+    }
+    return g;
 }
 
 fn ripple_pos(base: u32, g: u32) -> vec3<f32> {
@@ -182,7 +234,14 @@ fn vertex(v: WaterVertex) -> WaterVertexOutput {
     }
     out.ripple_grad = grad;
     // Game (x, y, z) -> Bevy (x, z, -y).
-    let p = vec3<f32>(pos.x, z, -pos.y);
+    var p = vec3<f32>(pos.x, z, -pos.y);
+    out.swell = -1.0;
+    if (look.misc.x > 0.5 && kind == 0u && (v.tag.y & SWELL_TAG) != 0u) {
+        let damp = f32((v.tag.y >> 8u) & 0xffffu) / 65535.0;
+        let d = distance(p.xz, view.world_position.xz);
+        out.swell = look.sun.w * damp;
+        p.y += out.swell * (1.0 - smoothstep(SWELL_FADE.x, SWELL_FADE.y, d)) * swell_height(p.xz, globals.time, d);
+    }
     out.position = position_world_to_clip(p);
     out.uv = uv;
     out.color = vec3<f32>(f32(c & 0xffu), f32((c >> 8u) & 0xffu), f32((c >> 16u) & 0xffu)) / 128.0;
@@ -379,6 +438,18 @@ fn fragment(in: WaterVertexOutput) -> @location(0) vec4<f32> {
     // Kind 4 is a film everywhere: its edges fade by the vertex fade instead.
     let shore = select(max(smoothstep(0.0, 0.6, thickness), far), 1.0, chute);
 
+    // The swell's share: the vertex's shore damping (split seas), else the bed's vertical depth under this pixel.
+    var swell = select(in.swell, 0.0, chute);
+    if (swell < 0.0) {
+        var under = SHORE_DEPTH.y;
+        let d0 = textureLoad(scene_depth, clamp(here, vec2<i32>(0), size - 1), 0).r;
+        if (d0 > 0.0) {
+            let bed0 = (view.world_from_view * vec4<f32>(position_ndc_to_view(vec3<f32>(frag_coord_to_ndc(in.position).xy, d0)), 1.0)).xyz;
+            under = wp.y - bed0.y;
+        }
+        swell = look.sun.w * smoothstep(SHORE_DEPTH.x, SHORE_DEPTH.y, under);
+    }
+    let swell_d = distance(wp.xz, view.world_position.xz);
     var n_world: vec3<f32>;
     var tilt: vec2<f32>;
     if (chute) {
@@ -392,7 +463,7 @@ fn fragment(in: WaterVertexOutput) -> @location(0) vec4<f32> {
         n_world = normalize(mix(n_geo, normalize(n_geo - along * gv - across * gu), shore));
         tilt = (n_world - n_geo).xz * 2.5;
     } else {
-        let g = wave_grad(wp.xz, t_now) + in.ripple_grad + ring_grad(wp.xz, t_now);
+        let g = wave_grad(wp.xz, t_now) + in.ripple_grad + ring_grad(wp.xz, t_now) + swell_grad(wp.xz, t_now, swell_d) * swell;
         n_world = normalize(mix(vec3<f32>(0.0, 1.0, 0.0), normalize(vec3<f32>(-g.x, 1.0, -g.y)), shore));
         tilt = n_world.xz;
     }
@@ -428,6 +499,8 @@ fn fragment(in: WaterVertexOutput) -> @location(0) vec4<f32> {
     var col = bed * trans + deep * (1.0 - trans);
     col = mix(col, tint, select(0.12, 0.4, chute) * shore);
     col = mix(col, tint, far);
+    // The swell's crests lighter, its troughs darker (crate::water_waves::CREST, by the height over MAX_HEIGHT).
+    col = col * (1.0 + 0.35 * clamp(swell * swell_height(wp.xz, t_now, swell_d) / 0.3, -1.5, 1.5));
     if (chute) {
         // White streaks stretched along the flow and carried with it.
         let q = vec2<f32>(in.flow.x * 5.0, (in.flow.y - t_now * params.misc.z * 1.1) * 0.5);

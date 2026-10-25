@@ -125,6 +125,7 @@ mod title_world;
 mod vendor_render;
 mod water_mirror;
 mod water_render;
+mod water_waves;
 mod aa_blit;
 mod afterimage_render;
 mod ao_render;

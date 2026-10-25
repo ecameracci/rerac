@@ -28,6 +28,7 @@ use crate::fx_draw::PrimBuf;
 use crate::game_camera::TfragFog;
 use crate::gs_state::GsPass;
 use crate::water_render::{WaterLook, WaterParams, ATTRIBUTE_WATER_TAG, ATTRIBUTE_WATER_UV, ATTRIBUTE_WATER_Z1};
+use crate::water_waves::ShoreMap;
 use bevy::asset::RenderAssetUsages;
 use bevy::camera::visibility::NoFrustumCulling;
 use bevy::mesh::{Indices, MeshVertexBufferLayoutRef, PrimitiveTopology, VertexAttributeValues};
@@ -83,9 +84,10 @@ pub fn clarity(fix: u8) -> f32 {
 
 /// A draw's `look` (module doc): the opaque seas fade into their colour far out and absorb toward [`DEEP`] of it; a
 /// translucent grid (seen through at any distance, as in Original) has no far fade and absorbs toward its full colour.
-pub fn look(fix: u8, sun: Vec3) -> WaterLook {
+/// `sun`: the key light, w the swell's scale (crate::water_waves).
+pub fn look(fix: u8, sun: Vec4) -> WaterLook {
     let misc = if fix >= 0x80 { Vec4::new(1.0, FAR_FADE[0], FAR_FADE[1], DEEP) } else { Vec4::new(1.0, 0.0, 0.0, 1.0) };
-    WaterLook { misc, sun: sun.extend(0.0) }
+    WaterLook { misc, sun }
 }
 
 /// A draw's `params`: FIX / 128 (the Original fallback's alpha while the scene copy is not there), kind 0, [`clarity`].
@@ -164,22 +166,47 @@ impl Material for SeaWaterMaterial {
     }
 }
 
-/// The water layout of a draw's primitives: game-space points (z1 = z), (s, t, s, t), (RGBA, 0).
-fn water_mesh(prims: &PrimBuf, mesh: &mut Mesh) {
+/// `tag.y` of a swell vertex (crate::water_waves): this bit, and its shore damping · 65535 in bits 8..23.
+pub const SWELL_TAG: u32 = 0x8000_0000;
+
+/// The swell's inputs to [`water_mesh`]: the camera (game), the shore damping and its collision probe.
+struct Swell<'a> {
+    cam: [f32; 3],
+    shore: &'a mut ShoreMap,
+    probe: &'a mut dyn FnMut([f32; 3], [f32; 3]) -> Option<f32>,
+}
+
+/// The water layout of a draw's primitives: game-space points (z1 = z), (s, t, s, t), (RGBA, 0). With the swell, the
+/// triangles near the camera split (crate::water_waves::tessellate) and every point tagged [`SWELL_TAG`] with its damping
+/// (the far ones too: their slope carries on).
+fn water_mesh(prims: &PrimBuf, mesh: &mut Mesh, swell: Option<Swell>) {
     let (pos, uv, color, idx) = prims.parts();
     // Bevy (x, y, z) = game (x, z, −y); the RGBA bytes were stored / 128 (both exact).
-    let game: Vec<[f32; 3]> = pos.iter().map(|p| [p[0], -p[2], p[1]]).collect();
+    let mut game: Vec<[f32; 3]> = pos.iter().map(|p| [p[0], -p[2], p[1]]).collect();
+    let rgba = |c: &[f32; 4]| c.iter().enumerate().fold(0u32, |a, (k, x)| a | ((x * 128.0).round() as u32 & 0xff) << (8 * k));
+    let (uv4, tag, idx): (Vec<[f32; 4]>, Vec<[u32; 2]>, Vec<u32>) = match swell {
+        None => (uv.iter().map(|t| [t[0], t[1], t[0], t[1]]).collect(), color.iter().map(|c| [rgba(c), 0]).collect(), idx.to_vec()),
+        Some(s) => {
+            let t = crate::water_waves::tessellate(&game, uv, color, idx, [s.cam[0], s.cam[1]], crate::water_waves::SWELL_FADE[1] + crate::water_waves::TESS_MARGIN);
+            let tag = t.pos.iter().zip(&t.color).map(|(p, c)| {
+                let d = s.shore.damp(p[0], p[1], p[2], s.probe);
+                [rgba(c), SWELL_TAG | ((d * 65535.0).round() as u32) << 8]
+            });
+            let tag = tag.collect();
+            game = t.pos;
+            (t.uv.iter().map(|t| [t[0], t[1], t[0], t[1]]).collect(), tag, t.idx)
+        }
+    };
     let z1: Vec<f32> = game.iter().map(|p| p[2]).collect();
-    let uv4: Vec<[f32; 4]> = uv.iter().map(|t| [t[0], t[1], t[0], t[1]]).collect();
-    let tag: Vec<[u32; 2]> = color.iter().map(|c| [c.iter().enumerate().fold(0u32, |a, (k, x)| a | ((x * 128.0).round() as u32 & 0xff) << (8 * k)), 0]).collect();
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, game);
     mesh.insert_attribute(ATTRIBUTE_WATER_Z1, z1);
     mesh.insert_attribute(ATTRIBUTE_WATER_UV, uv4);
     mesh.insert_attribute(ATTRIBUTE_WATER_TAG, VertexAttributeValues::Uint32x2(tag));
-    mesh.insert_indices(Indices::U32(idx.to_vec()));
+    mesh.insert_indices(Indices::U32(idx));
 }
 
-type Slot = (Entity, Handle<Mesh>, Handle<SeaWaterMaterial>, bool);
+/// Entity, mesh, material, shown, and the key of the mesh as last built ([`build_key`]).
+type Slot = (Entity, Handle<Mesh>, Handle<SeaWaterMaterial>, bool, u64);
 
 /// The Enhanced sea draws: this tick's groups (crate::sea_render fills `pending` once per tick), the slots, the buffers.
 #[derive(Resource, Default)]
@@ -187,10 +214,28 @@ pub struct SeaWaterDraw {
     pub pending: Option<Vec<SeaGroup>>,
     /// The flat regions of the last tick's groups (crate::water_mirror's plane choice).
     pub planes: Vec<crate::water_mirror::FlatWater>,
+    /// The camera (game) of `pending`, for the swell's split (crate::water_waves).
+    pub cam: [f32; 3],
     slots: Vec<Option<Slot>>,
     /// The `frame` record and an empty buffer (the unread `ripple`, the `rings` without strip water).
     buffers: Option<(Handle<ShaderBuffer>, Handle<ShaderBuffer>)>,
     copy_size: UVec2,
+    shore: ShoreMap,
+    reported: bool,
+}
+
+/// The camera cell the swell's split is kept for (game units; within crate::water_waves::TESS_MARGIN).
+const REBUILD_STEP: f32 = 4.0;
+
+/// A draw's mesh key: its points, and with the swell the camera's [`REBUILD_STEP`] cell (0: no swell).
+fn build_key(prims: &PrimBuf, cam: Option<[f32; 3]>) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    let (pos, uv, color, idx) = prims.parts();
+    for v in pos.iter().flatten().chain(uv.iter().flatten()).chain(color.iter().flatten()) { v.to_bits().hash(&mut h); }
+    idx.hash(&mut h);
+    cam.map(|c| [(c[0] / REBUILD_STEP).floor() as i32, (c[1] / REBUILD_STEP).floor() as i32]).hash(&mut h);
+    h.finish()
 }
 
 /// The material plugin and the draw (from crate::sea_render's plugin, after its draw).
@@ -209,20 +254,23 @@ pub fn draw(
     mirror: Res<crate::water_mirror::WaterMirror>,
     key: Option<Res<crate::sun_shadow::KeyLight>>,
     water: Option<Res<crate::water_render::WaterState>>,
+    level: Res<crate::Level>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<SeaWaterMaterial>>,
     mut buffers: ResMut<Assets<ShaderBuffer>>,
     mut vis: Query<&mut Visibility>,
 ) {
     let st = state.into_inner();
-    let sun = key.map_or(Vec3::Y, |k| k.to_light);
+    // look.sun.w: the swell's scale (crate::water_waves; 0: none).
+    let scale = crate::water_waves::scale();
+    let sun = key.map_or(Vec3::Y, |k| k.to_light).extend(scale);
     // A resized copy re-binds (Bevy keeps a material's bind group until it changes), a moved key light re-uploads.
     let resized = copy.size != st.copy_size;
     st.copy_size = copy.size;
-    for (_, _, mat, _) in st.slots.iter().flatten() {
-        let moved = materials.get(mat).is_some_and(|m| m.look.sun.truncate().distance(sun) > 0.01);
+    for (_, _, mat, _, _) in st.slots.iter().flatten() {
+        let moved = materials.get(mat).is_some_and(|m| m.look.sun.distance(sun) > 0.01);
         if resized || moved {
-            if let Some(mut m) = materials.get_mut(mat) { m.look.sun = sun.extend(0.0); }
+            if let Some(mut m) = materials.get_mut(mat) { m.look.sun = sun; }
         }
     }
     let Some(groups) = st.pending.take() else { return };
@@ -241,6 +289,9 @@ pub fn draw(
         let pts: Vec<[f32; 3]> = g.prims.parts().0.iter().map(|p| [p[0], -p[2], p[1]]).collect();
         st.planes.extend(crate::water_mirror::flat_blocks(&pts, GRID_STRIP_LEN));
     }
+    let coll = level.0.collision.as_ref();
+    let cam = (scale > 0.0 && coll.is_some()).then_some(st.cam);
+    let mut probe = |a, b| crate::water_waves::probe_line(coll, a, b);
     let n = groups.len();
     for (k, g) in groups.into_iter().enumerate() {
         if st.slots.len() <= k { st.slots.push(None); }
@@ -249,8 +300,13 @@ pub fn draw(
             continue;
         }
         let (want_params, want_look) = (params(g.fix), look(g.fix, sun));
-        if let Some((e, mesh, mat, shown)) = &mut st.slots[k] {
-            if let Some(mut m) = meshes.get_mut(&*mesh) { water_mesh(&g.prims, &mut m); }
+        let key = build_key(&g.prims, cam);
+        let swell = cam.map(|cam| Swell { cam, shore: &mut st.shore, probe: &mut probe });
+        if let Some((e, mesh, mat, shown, built)) = &mut st.slots[k] {
+            if *built != key {
+                *built = key;
+                if let Some(mut m) = meshes.get_mut(&*mesh) { water_mesh(&g.prims, &mut m, swell); }
+            }
             let need = materials.get(&*mat).is_none_or(|m| m.texture != g.image || m.fog != g.fog || m.rings != rings || m.params.misc != want_params.misc || m.look.misc != want_look.misc);
             if need {
                 if let Some(mut m) = materials.get_mut(&*mat) {
@@ -268,7 +324,7 @@ pub fn draw(
             continue;
         }
         let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
-        water_mesh(&g.prims, &mut mesh);
+        water_mesh(&g.prims, &mut mesh, swell);
         let mesh = meshes.add(mesh);
         let mat = materials.add(SeaWaterMaterial {
             texture: g.image,
@@ -285,13 +341,17 @@ pub fn draw(
             order: SEA_BAND + k as f32,
         });
         let e = commands.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(mat.clone()), Transform::IDENTITY, NoFrustumCulling, Visibility::Inherited, Name::new(format!("sea water {k}")))).id();
-        st.slots[k] = Some((e, mesh, mat, true));
+        st.slots[k] = Some((e, mesh, mat, true, key));
     }
     for s in st.slots.iter_mut().skip(n) { hide(&mut vis, s); }
+    if !st.reported && st.shore.stats[0] > 0 {
+        st.reported = true;
+        let [n, above, under] = st.shore.stats;
+        println!("sea water: swell shore lattice: {n} probes, {above} met land or a structure, {under} a bed, {} open water", n - above - under);    }
 }
 
 fn hide(vis: &mut Query<&mut Visibility>, s: &mut Option<Slot>) {
-    let Some((e, _, _, shown)) = s else { return };
+    let Some((e, _, _, shown, _)) = s else { return };
     if !*shown { return; }
     *shown = false;
     if let Ok(mut v) = vis.get_mut(*e) { *v = Visibility::Hidden; }
@@ -353,8 +413,8 @@ mod tests {
         }
         assert!(clarity(0x20) < clarity(0x40));
         // Opaque seas keep the far fade and DEEP, translucent grids neither; params carry FIX / 128 and the clarity.
-        assert_eq!(look(0x80, Vec3::Y).misc, Vec4::new(1.0, FAR_FADE[0], FAR_FADE[1], DEEP));
-        assert_eq!(look(0x20, Vec3::Y).misc, Vec4::new(1.0, 0.0, 0.0, 1.0));
+        assert_eq!(look(0x80, Vec4::Y).misc, Vec4::new(1.0, FAR_FADE[0], FAR_FADE[1], DEEP));
+        assert_eq!(look(0x20, Vec4::Y).misc, Vec4::new(1.0, 0.0, 0.0, 1.0));
         assert_eq!(params(0x20).misc, Vec4::new(0.25, 0.0, clarity(0x20), 0.0));
         assert_eq!(params(0x80).misc, Vec4::new(1.0, 0.0, 0.0, 0.0));
     }
@@ -372,7 +432,7 @@ mod tests {
         let mut b = PrimBuf::default();
         b.strip([([10.0, -20.0, 59.75], [0.5, 2.0], 0x8012_34ff), ([11.0, -20.0, 59.75], [1.5, 2.0], 0x0000_0001), ([10.0, -21.0, 59.75], [0.5, 3.0], 0xffff_ffff)]);
         let mut m = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
-        water_mesh(&b, &mut m);
+        water_mesh(&b, &mut m, None);
         let Some(VertexAttributeValues::Float32x3(p)) = m.attribute(Mesh::ATTRIBUTE_POSITION) else { panic!("positions") };
         assert_eq!(p[0], [10.0, -20.0, 59.75]);
         let Some(VertexAttributeValues::Uint32x2(t)) = m.attribute(ATTRIBUTE_WATER_TAG) else { panic!("tags") };

@@ -393,6 +393,8 @@ struct SeaDraw {
     clear: HashMap<(Tex, [u32; 3], u8), bool>,
     /// [`grid_tint`] by port.
     tints: HashMap<usize, [f32; 3]>,
+    /// The ocean's swell damping (Water Enhanced, crate::water_waves).
+    ocean_shore: crate::water_waves::ShoreMap,
 }
 
 pub struct SeaRenderPlugin;
@@ -496,6 +498,8 @@ fn draw(
     mut sea_level: ResMut<crate::volumetric_light::SeaLevel>,
     gfx: Res<crate::graphics::GraphicsSettings>,
     mut enhanced: ResMut<crate::sea_water::SeaWaterDraw>,
+    time: Res<Time>,
+    key: Option<Res<crate::sun_shadow::KeyLight>>,
 ) {
     let st = state.into_inner();
     let Some(p) = play.as_deref() else { return };
@@ -509,6 +513,8 @@ fn draw(
     let to_game = |v: Vec3| [v.x, -v.z, v.y];
     let rows = [to_game(*cam_t.forward()), to_game(*cam_t.left())];
     let fx = level.0.particles.textures.as_ref().map(|t| t.fx_textures.as_slice());
+    let swell = if gfx.water.on() { crate::water_waves::scale() } else { 0.0 };
+    let sun = key.map_or(Vec3::Y, |k| k.to_light).to_array();
     let water = &p.svc.water;
     let cbs = &p.svc.draw_callbacks;
     let view = crate::particle_render::bsphere_view(cam_t, particles.map_or_else(|| crate::particle_render::view_tans(None), |s| s.view_tan));
@@ -579,7 +585,13 @@ fn draw(
             }
             (SeaKind::Ocean, SeaData::Ocean(t)) => {
                 if m.pvars.len() < 0x30 { continue; }
-                for (j, (fxi, additive, prims)) in ocean_groups(&m.pvars, run, t, cam, rows).into_iter().enumerate() {
+                for (j, (fxi, additive, mut prims)) in ocean_groups(&m.pvars, run, t, cam, rows).into_iter().enumerate() {
+                    // Water Enhanced: the swell on the surface layers (crate::water_waves::swell_prims).
+                    if additive && swell > 0.0 {
+                        let coll = level.0.collision.as_ref();
+                        let mut probe = |a, b| crate::water_waves::probe_line(coll, a, b);
+                        prims = crate::water_waves::swell_prims(&prims, cam, time.elapsed_secs_wrapped(), swell, run.sea_z, sun, &mut st.ocean_shore, &mut probe);
+                    }
                     groups.push(Group { tex: Tex::Fx(fxi, false), effect: Some(Blend::of(additive)), fog: level_fog, bias: bias + j as f32 * 0.25, prims });
                 }
             }
@@ -663,6 +675,7 @@ fn draw(
         }
     }
     enhanced.pending = Some(clear_seas);
+    enhanced.cam = cam;
     // Show the groups in slots 0.., hide the rest.
     let n = groups.len();
     for (k, g) in groups.into_iter().enumerate() {

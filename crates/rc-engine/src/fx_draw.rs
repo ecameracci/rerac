@@ -235,6 +235,13 @@ impl PrimBuf {
         for k in 0..n.saturating_sub(2) { self.idx.extend([b + k, b + k + 1, b + k + 2]); }
     }
 
+    /// Indexed triangles over these vertices (crate::water_waves::swell_prims).
+    pub fn triangles(&mut self, v: impl IntoIterator<Item = ([f32; 3], [f32; 2], u32)>, idx: impl IntoIterator<Item = u32>) {
+        let b = self.pos.len() as u32;
+        for (p, st, c) in v { self.vertex(p, st, c); }
+        self.idx.extend(idx.into_iter().map(|k| b + k));
+    }
+
     pub fn is_empty(&self) -> bool { self.idx.is_empty() }
 
     /// The primitives as built (crate::sea_water).
