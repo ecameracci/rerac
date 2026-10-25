@@ -19,7 +19,8 @@
 //! plane with its x axis turned back, a proper rotation, so the world is drawn with its own winding (no cull flip)
 //! and the picture comes out mirrored left to right: the water reads it at (−x, y). The world camera's projection is
 //! the main one with an oblique near plane on the water ([`GameProjection::clip`], [`crate::game_camera::oblique_near`], [`CLIP_BIAS`]
-//! under the surface), so nothing under the water is drawn; the sky's has none (it is at infinity).
+//! under the surface), so nothing under the water is drawn; the sky's has none (it is at infinity). Neither takes
+//! the sun's shadow cascades ([`no_sun_cascades`]).
 //!
 //! **What it draws** ([`keep_world_draws`], after Bevy's visibility check, on the mirror cameras only): the sky shells,
 //! the tfrags, the ties and the mobys (Ratchet among them; their metal pass too), without the effect mobys
@@ -48,6 +49,7 @@ use bevy::camera::visibility::{RenderLayers, VisibilitySystems, VisibleEntities}
 use bevy::camera::{Camera3dDepthLoadOp, CameraOutputMode, CameraUpdateSystems, ClearColorConfig, RenderTarget};
 use bevy::core_pipeline::tonemapping::{DebandDither, Tonemapping};
 use bevy::image::{ImageAddressMode, ImageFilterMode, ImageSampler, ImageSamplerDescriptor};
+use bevy::light::{Cascades, SimulationLightSystems};
 use bevy::math::Affine3A;
 use bevy::prelude::*;
 use bevy::render::render_resource::{BlendState, Extent3d, TextureDimension, TextureFormat, TextureUsages};
@@ -245,8 +247,25 @@ impl Plugin for WaterMirrorPlugin {
                     .before(TransformSystems::Propagate),
                 pin.after(TransformSystems::Propagate).before(VisibilitySystems::UpdateFrusta),
                 keep_world_draws.after(VisibilitySystems::CheckVisibility).before(VisibilitySystems::MarkNewlyHiddenEntitiesInvisible),
+                no_sun_cascades
+                    .after(SimulationLightSystems::UpdateDirectionalLightCascades)
+                    .before(SimulationLightSystems::UpdateLightFrusta),
             ),
         );
+    }
+}
+
+/// The sun's cascades emptied for the mirror cameras: bevy_light `build_directional_light_cascades` makes them for
+/// every active camera, and the mirror reads none (crate::sun_shadow's receiver and the passes after it run on
+/// `ShadowCamera` views only), so it skips three shadow views queueing every caster. The entry stays: bevy_pbr
+/// `prepare_lights` unwraps it.
+fn no_sun_cascades(cams: Query<Entity, With<MirrorCam>>, mut lights: Query<&mut Cascades>) {
+    for mut lc in &mut lights {
+        for e in &cams {
+            if lc.cascades.get(&e).is_some_and(|c| !c.is_empty()) {
+                lc.cascades.insert(e, Vec::new());
+            }
+        }
     }
 }
 
@@ -300,7 +319,7 @@ fn place(
     mut images: ResMut<Assets<Image>>,
     mut buffers: ResMut<Assets<ShaderBuffer>>,
     mut water_mats: ResMut<Assets<crate::water_render::WaterMaterial>>,
-    mut sea_mats: ResMut<Assets<crate::sea_water::SeaWaterMaterial>>,
+    sea_mats: Option<ResMut<Assets<crate::sea_water::SeaWaterMaterial>>>,
     mut inset: Query<&mut Visibility>,
 ) {
     let m = &mut *mirror;
@@ -336,8 +355,10 @@ fn place(
         m.size = size;
         let ids: Vec<_> = water_mats.ids().collect();
         for id in ids { water_mats.get_mut(id); }
-        let ids: Vec<_> = sea_mats.ids().collect();
-        for id in ids { sea_mats.get_mut(id); }
+        if let Some(mut sea_mats) = sea_mats {
+            let ids: Vec<_> = sea_mats.ids().collect();
+            for id in ids { sea_mats.get_mut(id); }
+        }
     }
 
     if plane.is_some() && m.cams.is_none() { m.cams = Some(spawn_cameras(&mut commands, &m.image, *t, base)); }
