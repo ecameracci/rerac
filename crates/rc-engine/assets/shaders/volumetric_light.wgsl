@@ -1,5 +1,6 @@
 // Lighting Enhanced's volumetric light (crate::volumetric_light): in-scattering through the sun's cascaded shadow map.
-// `march` (half resolution): each pixel's view ray from the camera to the surface (or a short way toward the sky),
+// `march` (half resolution): each pixel's view ray from the camera to the surface or the open sea (or a short way
+// toward the sky),
 // dithered steps packed toward the camera, lit steps adding σ·exp(−σt)·dt, each weighted by the shadow around it
 // (crate::volumetric_light::Shafts: bold next to long shadows, faint in open lit air), times the Henyey-Greenstein phase;
 // rgb = the in-scattered light, a = the sample's view distance. `composite` (full resolution): a 4×4 depth-aware blur
@@ -24,6 +25,8 @@ struct VolParams {
     extra: vec4<f32>,
     // crate::volumetric_light::ShaftShape: open, edge, shade, after_lit.
     shape: vec4<f32>,
+    // crate::volumetric_light::SeaLevel: its y, 1 while known.
+    sea: vec4<f32>,
 }
 
 #ifdef MULTISAMPLED
@@ -97,6 +100,11 @@ fn march(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     }
     let eye = view.world_from_view[3].xyz;
     let ray = normalize((view.world_from_view * vec4<f32>(ray_view, 0.0)).xyz);
+    // The open sea writes no depth: the ray stops at its surface, and from under it there is no air to light.
+    if (vol.sea.y > 0.5) {
+        if (eye.y <= vol.sea.x) { return vec4<f32>(0.0, 0.0, 0.0, dist); }
+        if (ray.y < 0.0) { len = min(len, (vol.sea.x - eye.y) / ray.y); }
+    }
     let forward = -ray_view.z;
     let n = i32(vol.march.x);
     let sigma = vol.march.y;

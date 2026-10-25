@@ -4,7 +4,8 @@
 //!
 //! Standard in-scattering through the sun's shadow map (`assets/shaders/volumetric_light.wgsl`), after the 3D passes
 //! and before crate::sun_rays, the screen tints and the anti-aliasing blit:
-//! 1. **March** (half resolution): each pixel's view ray from the camera to the depth-buffer surface, at most
+//! 1. **March** (half resolution): each pixel's view ray from the camera to the depth-buffer surface or the open sea
+//!    ([`SeaLevel`]; none from under it), at most
 //!    [`LENGTH`] units ([`SKY_LENGTH`] toward the sky, so it does not wash out), in [`STEPS`] steps packed toward the
 //!    camera ([`step`]) from a per-pixel dithered start (interleaved gradient noise). Each step looks the sun's
 //!    cascades up (crate::sun_shadow `SunCascades`, one comparison tap): a lit step adds `σ·T·dt` of a uniform thin
@@ -93,6 +94,12 @@ pub struct VolumetricLight {
     pub strength: f32,
 }
 
+/// The open sea's surface (Bevy y; crate::sea_render: the ocean 1111's sea z while its callback is registered). The
+/// ocean writes no depth, so without it the march would run on under the surface to the bed and lay the shadows of
+/// the islands above as dark jagged edges in the water (G-REN-162): the rays stop at it.
+#[derive(Resource, Clone, Copy, Debug, Default, PartialEq, ExtractResource)]
+pub struct SeaLevel(pub Option<f32>);
+
 /// The view's half-resolution march target this frame (only while the shafts show).
 #[derive(Component)]
 struct ScatterTarget(CachedTexture);
@@ -101,7 +108,10 @@ pub struct VolumetricLightPlugin;
 
 impl Plugin for VolumetricLightPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<VolumetricLight>().add_plugins(ExtractResourcePlugin::<VolumetricLight>::default()).add_systems(Last, update);
+        app.init_resource::<VolumetricLight>()
+            .init_resource::<SeaLevel>()
+            .add_plugins((ExtractResourcePlugin::<VolumetricLight>::default(), ExtractResourcePlugin::<SeaLevel>::default()))
+            .add_systems(Last, update);
         let Some(render_app) = app.get_sub_app_mut(RenderApp) else { return };
         render_app
             .add_systems(RenderStartup, init_pipelines)
@@ -301,6 +311,8 @@ struct VolParams {
     extra: Vec4,
     /// [`ShaftShape`]: open, edge, shade, after_lit.
     shape: Vec4,
+    /// [`SeaLevel`]: its y, 1 while known.
+    sea: Vec4,
 }
 
 #[derive(Resource)]
@@ -395,6 +407,7 @@ fn volumetric_pass(
     view: ViewQuery<VolView, With<ShadowCamera>>,
     lights: Query<&ExtractedDirectionalLight>,
     vol: Option<Res<VolumetricLight>>,
+    sea: Option<Res<SeaLevel>>,
     pipes: Option<Res<VolPipelines>>,
     cache: Res<PipelineCache>,
     mut ctx: RenderContext,
@@ -412,6 +425,7 @@ fn volumetric_pass(
         march: Vec4::new(steps.round().max(1.0), density, g, length),
         extra: Vec4::new(sky, debug_gain(), size.x as f32, size.y as f32),
         shape: Vec4::new(open, edge.max(1.0), shade.max(1e-3), after_lit),
+        sea: sea.and_then(|s| s.0).map_or(Vec4::ZERO, |y| Vec4::new(y, 1.0, 0.0, 0.0)),
     };
     let format = target.main_texture_format();
     let ms = depth.texture.sample_count() > 1;
