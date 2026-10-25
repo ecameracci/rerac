@@ -421,7 +421,9 @@ fn fragment(in: WaterVertexOutput) -> @location(0) vec4<f32> {
     let tint = srgb_to_linear(rgb);
     // look.misc.w: the deep water's share of the colour (crate::sea_water's seas; 0: 0.55).
     let deep = tint * select(0.55, look.misc.w, look.misc.w > 0.0);
-    let absorb = vec3<f32>(0.30, 0.12, 0.07) * (0.6 + params.misc.x);
+    // params.misc.z: an even absorption per unit (crate::sea_water's translucent grids; 0: this coloured one), the
+    // flow speed on a chute.
+    let absorb = select(vec3<f32>(0.30, 0.12, 0.07) * (0.6 + params.misc.x), vec3<f32>(params.misc.z), params.misc.z > 0.0 && !chute);
     let trans = exp(-absorb * path);
     var col = bed * trans + deep * (1.0 - trans);
     col = mix(col, tint, select(0.12, 0.4, chute) * shore);

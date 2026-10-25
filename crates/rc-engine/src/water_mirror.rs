@@ -4,9 +4,12 @@
 //!
 //! **The plane** ([`choose_plane`]). Every frame with the option on, the flat regions of the Enhanced water
 //! ([`flat_region`]: the clear strips at their z blend and the drawn clear ripple patches, crate::water_render
-//! `WaterState::flat_surfaces`; the Enhanced seas, crate::sea_water `SeaWaterDraw::planes`) whose rectangle may be on
-//! screen (the four corners' clip codes, as crate::water_render's patch test) and that the camera is above
-//! ([`MIN_ABOVE`]); the nearest to the eye wins. None: the mirror cameras are inactive (nothing drawn, no cost).
+//! `WaterState::flat_surfaces`; the Enhanced seas and translucent pools block by block, [`flat_blocks`],
+//! crate::sea_water `SeaWaterDraw::planes`) that the camera is above ([`MIN_ABOVE`]) and whose rectangle is partly in
+//! the view frustum ([`visible_part`]: clipped by the near side and the four side planes, so a rectangle behind the eye
+//! or beside the view does not count); the one whose part in view is nearest the eye ([`polygon_distance`]) wins.
+//! What hides a region inside the frustum (the ground over a ripple patch) is not seen (G-REN-111). None: the mirror
+//! cameras are inactive (nothing drawn, no cost).
 //!
 //! **The mirror view.** Two cameras draw into [`WaterMirror::image`] at half the main view's size, without
 //! multisampling: the sky layer (crate::sky_render's [`SKY_LAYER`], cleared to the level background, depth cleared)
@@ -73,14 +76,6 @@ pub struct FlatWater {
     pub max: Vec2,
 }
 
-impl FlatWater {
-    /// The distance from `eye` to the nearest point of the rectangle.
-    pub fn distance(&self, eye: Vec3) -> f32 {
-        let p = eye.truncate().clamp(self.min, self.max);
-        eye.distance(p.extend(self.z))
-    }
-}
-
 /// The flat part of a surface's points (game x, y, z): the median height and the rectangle of the points within
 /// [`FLAT_TOL`] of it (a sea's drop at its edge, a sloped strip's ends fall out). None: fewer than three such points.
 pub fn flat_region(points: impl IntoIterator<Item = [f32; 3]>) -> Option<FlatWater> {
@@ -98,30 +93,90 @@ pub fn flat_region(points: impl IntoIterator<Item = [f32; 3]>) -> Option<FlatWat
     (n >= 3).then_some(FlatWater { z, min, max })
 }
 
-/// Whether a region's rectangle may be on screen: not all four corners outside one clip plane (or all behind).
-pub fn on_screen(clip_from_world: &Mat4, f: &FlatWater) -> bool {
-    let code = |x: f32, y: f32| {
-        let c = *clip_from_world * game_to_bevy([x, y, f.z]).extend(1.0);
-        let mut o = 0u32;
-        if c.x < -c.w { o |= 1; }
-        if c.x > c.w { o |= 2; }
-        if c.y < -c.w { o |= 4; }
-        if c.y > c.w { o |= 8; }
-        if c.w <= 0.0 { o |= 0x20; }
-        o
-    };
-    let all = [(f.min.x, f.min.y), (f.max.x, f.min.y), (f.min.x, f.max.y), (f.max.x, f.max.y)].iter().fold(0x2f, |a, &(x, y)| a & code(x, y));
-    all == 0
+/// The flat regions of one surface's points (game x, y, z) taken `block` points at a time (a liquid grid's block: one
+/// strip, crate::sea_water): the surface's median height ([`flat_region`]) and, per block, the rectangle of its points
+/// within [`FLAT_TOL`] of it (a block with fewer than three such points falls out).
+pub fn flat_blocks(points: &[[f32; 3]], block: usize) -> Vec<FlatWater> {
+    let Some(all) = flat_region(points.iter().copied()) else { return Vec::new() };
+    points
+        .chunks(block.max(1))
+        .filter_map(|c| {
+            let (mut min, mut max, mut n) = (Vec2::splat(f32::MAX), Vec2::splat(f32::MIN), 0);
+            for p in c.iter().filter(|p| p.iter().all(|v| v.is_finite()) && (p[2] - all.z).abs() <= FLAT_TOL) {
+                min = min.min(Vec2::new(p[0], p[1]));
+                max = max.max(Vec2::new(p[0], p[1]));
+                n += 1;
+            }
+            (n >= 3).then_some(FlatWater { z: all.z, min, max })
+        })
+        .collect()
 }
 
-/// The plane to mirror (game z): of the regions the eye (game) is [`MIN_ABOVE`] over and that may be on screen, the
-/// nearest one's.
+/// Clip w under which a point counts as behind the eye (the frustum's near side of [`visible_part`]).
+const NEAR_W: f32 = 1e-3;
+
+/// The part of a region's rectangle inside the view frustum (`clip_from_world`, Bevy): the four corners clipped by the
+/// near side (w ≥ [`NEAR_W`]) and the four side planes, one after the other (Sutherland–Hodgman); game points, a convex
+/// polygon on the region's plane. Empty: the rectangle is out of view or behind the eye.
+pub fn visible_part(clip_from_world: &Mat4, f: &FlatWater) -> Vec<Vec3> {
+    let mut poly: Vec<(Vec3, Vec4)> = [(f.min.x, f.min.y), (f.max.x, f.min.y), (f.max.x, f.max.y), (f.min.x, f.max.y)]
+        .iter()
+        .map(|&(x, y)| (Vec3::new(x, y, f.z), *clip_from_world * game_to_bevy([x, y, f.z]).extend(1.0)))
+        .collect();
+    let sides: [fn(Vec4) -> f32; 5] = [|c| c.w - NEAR_W, |c| c.w + c.x, |c| c.w - c.x, |c| c.w + c.y, |c| c.w - c.y];
+    for side in sides {
+        let mut out = Vec::with_capacity(poly.len() + 1);
+        for (k, &(p, c)) in poly.iter().enumerate() {
+            let (q, d) = poly[(k + 1) % poly.len()];
+            let (sa, sb) = (side(c), side(d));
+            if sa >= 0.0 { out.push((p, c)); }
+            if (sa >= 0.0) != (sb >= 0.0) {
+                let t = sa / (sa - sb);
+                out.push((p.lerp(q, t), c.lerp(d, t)));
+            }
+        }
+        poly = out;
+        if poly.is_empty() { break; }
+    }
+    poly.into_iter().map(|(p, _)| p).collect()
+}
+
+/// The distance from `eye` to a convex polygon on a horizontal plane (game points, [`visible_part`]): straight down
+/// when the eye is over it, else to its nearest edge.
+pub fn polygon_distance(eye: Vec3, poly: &[Vec3]) -> f32 {
+    let Some(first) = poly.first() else { return f32::INFINITY };
+    let dz = eye.z - first.z;
+    let e = eye.truncate();
+    let n = poly.len();
+    let cross = |k: usize| {
+        let (a, b) = (poly[k].truncate(), poly[(k + 1) % n].truncate());
+        (b - a).perp_dot(e - a)
+    };
+    let inside = n >= 3 && ((0..n).all(|k| cross(k) >= 0.0) || (0..n).all(|k| cross(k) <= 0.0));
+    if inside { return dz.abs(); }
+    let flat = (0..n)
+        .map(|k| {
+            let (a, b) = (poly[k].truncate(), poly[(k + 1) % n].truncate());
+            let ab = b - a;
+            let t = if ab.length_squared() > 0.0 { ((e - a).dot(ab) / ab.length_squared()).clamp(0.0, 1.0) } else { 0.0 };
+            e.distance(a + ab * t)
+        })
+        .fold(f32::INFINITY, f32::min);
+    (flat * flat + dz * dz).sqrt()
+}
+
+/// The plane to mirror (game z): of the regions the eye (game) is [`MIN_ABOVE`] over whose rectangle is partly in the
+/// view frustum ([`visible_part`]), the one whose visible part is nearest the eye ([`polygon_distance`]).
 pub fn choose_plane(eye: Vec3, clip_from_world: &Mat4, regions: &[FlatWater]) -> Option<f32> {
     regions
         .iter()
-        .filter(|f| eye.z > f.z + MIN_ABOVE && on_screen(clip_from_world, f))
-        .min_by(|a, b| a.distance(eye).total_cmp(&b.distance(eye)))
-        .map(|f| f.z)
+        .filter(|f| eye.z > f.z + MIN_ABOVE)
+        .filter_map(|f| {
+            let part = visible_part(clip_from_world, f);
+            (!part.is_empty()).then(|| (polygon_distance(eye, &part), f.z))
+        })
+        .min_by(|a, b| a.0.total_cmp(&b.0))
+        .map(|(_, z)| z)
 }
 
 /// The mirror view's world-from-view for a camera's `g` and the plane y = `h` (Bevy): R·G·F, R the reflection about
@@ -266,7 +321,7 @@ fn place(
     let plane = if m.regions.is_empty() { None } else { choose_plane(game_eye(t), &clip_from_world, &m.regions) };
     if m.mode == Mode::Debug && (m.regions.len() != m.logged.0 || plane != m.logged.1) {
         m.logged = (m.regions.len(), plane);
-        let list: Vec<String> = m.regions.iter().map(|f| format!("z {:.2} x {:.1}..{:.1} y {:.1}..{:.1}", f.z, f.min.x, f.max.x, f.min.y, f.max.y)).collect();
+        let list: Vec<String> = m.regions.iter().take(8).map(|f| format!("z {:.2} x {:.1}..{:.1} y {:.1}..{:.1}", f.z, f.min.x, f.max.x, f.min.y, f.max.y)).collect();
         println!("water mirror: plane {plane:?} of {} flat regions [{}]", m.regions.len(), list.join("; "));
     }
 
@@ -386,14 +441,58 @@ mod tests {
         let ahead_near = flat(4.0, [-5.0, 8.0], [5.0, 16.0]);
         let behind = flat(6.0, [-5.0, -40.0], [5.0, -30.0]);
         let above = flat(12.0, [-50.0, -50.0], [50.0, 50.0]);
-        assert!(on_screen(&clip, &ahead_far) && on_screen(&clip, &ahead_near));
-        assert!(!on_screen(&clip, &behind));
+        assert!(!visible_part(&clip, &ahead_far).is_empty() && !visible_part(&clip, &ahead_near).is_empty());
+        assert!(visible_part(&clip, &behind).is_empty());
         assert_eq!(choose_plane(eye, &clip, &[ahead_far, behind, above, ahead_near]), Some(4.0));
         assert_eq!(choose_plane(eye, &clip, &[behind, above]), None);
         // Just under the eye is not enough ([`MIN_ABOVE`]).
         assert_eq!(choose_plane(eye, &clip, &[flat(9.95, [-5.0, 8.0], [5.0, 16.0])]), None);
         // A plane the camera stands over counts even when its corners are all around the view.
         assert_eq!(choose_plane(eye, &clip, &[flat(1.0, [-500.0, -500.0], [500.0, 500.0])]), Some(1.0));
+    }
+
+    #[test]
+    fn plane_choice_skips_a_nearer_region_out_of_view() {
+        // Looking along +y from 10 over the origin, 60° wide: a region right under and beside the eye but out of the
+        // frustum, one off to the side (its corners outside different side planes, so no single plane culls them
+        // all), and a far one in view.
+        let g = cam([0.0, 0.0, 10.0], [0.0, 20.0, 9.0]);
+        let clip = GameProjection::default().get_clip_from_view() * Mat4::from(g.inverse());
+        let eye = Vec3::new(0.0, 0.0, 10.0);
+        let under = flat(5.0, [-3.0, -6.0], [3.0, -1.0]);
+        let side = flat(6.0, [30.0, -40.0], [300.0, 3.0]);
+        let ahead = flat(2.0, [-5.0, 60.0], [5.0, 70.0]);
+        assert!(visible_part(&clip, &under).is_empty());
+        assert!(visible_part(&clip, &side).is_empty(), "{:?}", visible_part(&clip, &side));
+        assert!(!visible_part(&clip, &ahead).is_empty());
+        assert_eq!(choose_plane(eye, &clip, &[under, side, ahead]), Some(2.0));
+        // Partly in view: the distance is to the part in view, not to the rectangle's part under the eye.
+        let long = flat(3.0, [-2.0, -5.0], [2.0, 200.0]);
+        let part = visible_part(&clip, &long);
+        assert!(!part.is_empty() && part.iter().all(|p| p.y > 0.0 && p.z == 3.0));
+        assert!(polygon_distance(eye, &part) > 7.5);
+    }
+
+    #[test]
+    fn polygon_distance_is_down_inside_and_to_the_edge_outside() {
+        let sq = [Vec3::new(0.0, 0.0, 1.0), Vec3::new(4.0, 0.0, 1.0), Vec3::new(4.0, 4.0, 1.0), Vec3::new(0.0, 4.0, 1.0)];
+        assert_eq!(polygon_distance(Vec3::new(2.0, 2.0, 5.0), &sq), 4.0);
+        let mut rev = sq;
+        rev.reverse();
+        assert_eq!(polygon_distance(Vec3::new(2.0, 2.0, 5.0), &rev), 4.0);
+        assert!((polygon_distance(Vec3::new(7.0, 2.0, 5.0), &sq) - 5.0).abs() < 1e-6);
+        assert_eq!(polygon_distance(Vec3::ZERO, &[]), f32::INFINITY);
+    }
+
+    #[test]
+    fn flat_blocks_split_a_surface_by_block_at_its_height() {
+        // Two blocks of four points at 59.5 far apart, a third block on the drop (40) and a broken point.
+        let mut pts = vec![[0.0, 0.0, 59.5], [2.0, 0.0, 59.5], [0.0, 2.0, 59.5], [2.0, 2.0, 59.5]];
+        pts.extend([[100.0, 50.0, 59.5], [103.0, 50.0, 59.5], [100.0, 52.0, 59.5], [f32::NAN, 0.0, 59.5]]);
+        pts.extend([[200.0, 0.0, 40.0], [201.0, 0.0, 40.0], [200.0, 1.0, 40.0], [201.0, 1.0, 40.0]]);
+        let b = flat_blocks(&pts, 4);
+        assert_eq!(b, [flat(59.5, [0.0, 0.0], [2.0, 2.0]), flat(59.5, [100.0, 50.0], [103.0, 52.0])]);
+        assert!(flat_blocks(&pts[..2], 4).is_empty());
     }
 
     #[test]
