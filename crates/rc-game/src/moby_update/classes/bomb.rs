@@ -3,7 +3,8 @@
 //! `0x2c27a8` (its release, [`release`]). The glove's own update is `crate::hero::weapons` (hand item 10).
 //!
 //! **The bomb** (moby +0x20): **0 held** — the glove places it every tick (collision off, +0x98 = 1), a pulsing
-//! glow; hidden while the first-person camera is up (0x1413f5, the hero's `f13f5`); deleted when the hand no
+//! glow; hidden while the first-person camera is up (0x1413f5, the hero's `f13f5`) or the gold bolt's pickup hides the
+//! hand item (0x1413ff); deleted when the hand no
 //! longer holds the glove. **1 flying** — the glow fades from red to grey over its 30-tick timer (+0x6a), it spins
 //! (x 120°/s, y 450°/s), moves by its velocity (+0x00) under gravity 11 u/s² (1.1 under water), and tests its path
 //! (`CollLine_Fix(old, new, 0x10, bomb, tmpl)`: template flags 0x830000 (| 1 after its first 10 ticks), damage 2,
@@ -118,7 +119,7 @@ pub fn init_held(m: &mut crate::moby_runtime::Moby, rng: &mut crate::rng::Rng, p
 }
 
 /// `FUN_002c27a8(point, bomb)`: the release — the flash timer 30, state 1, the velocity the glove's aim left in the
-/// pvars (plus Ratchet's velocity while grinding: `grind_vel`), the 300-tick fuse, at `point`; a wall between
+/// pvars (plus Ratchet's velocity while grinding or riding a carrier: `grind_vel`), the 300-tick fuse, at `point`; a wall between
 /// Ratchet (`hero_pos`, at the point's height) and the point explodes it there at once. Returns the line to test
 /// `(from, to)`: the caller runs it (it needs the collision) and passes the hit point to [`release_hit`].
 pub fn release(m: &mut crate::moby_runtime::Moby, point: [f32; 3], grind_vel: Option<[f32; 3]>) {
@@ -158,11 +159,12 @@ pub fn update(w: &mut World, id: MobyId) {
         w.delete_moby(id);
         return;
     }
-    // Hidden while held in first person (0x1413f5), shown otherwise.
+    // Hidden while held in first person (0x1413f5) or with the hand item hidden at a gold bolt's pickup (0x1413ff),
+    // shown otherwise.
     {
-        let fp = w.hero.f13f5 != 0;
+        let hide = w.hero.f13f5 != 0 || w.hero.f13ff != 0;
         let m = w.mm(id);
-        if fp && m.state == HELD { m.mode |= 0x41; } else { m.mode &= !0x41; }
+        if hide && m.state == HELD { m.mode |= 0x41; } else { m.mode &= !0x41; }
     }
     // The glove's bomb (owner +0x50 = the glove) with a velocity and +0x56 clear: the landing preview and its reticle
     // (`0x2c2be0(pvars, bomb, 1)`; the moving-platform variants 0 / 2 need 0x13f64c, which the port never sets).
@@ -200,7 +202,7 @@ fn aim_preview(w: &mut World, id: MobyId) -> bool {
     let vel = v4(p::v4f(&w.m(id).pvars, pv::VEL));
     let (from, vel, budget) = if held {
         let h = w.hero;
-        let from = crate::hero::weapons::launch_point(crate::hero::physics::to_f32x3(h.pos), crate::hero::physics::to_f32x3(h.moby_rows[0]));
+        let from = crate::hero::weapons::launch_point(crate::hero::physics::to_f32x3(h.pos), crate::hero::physics::to_f32x3(h.aim_rows[0]));
         let d = crate::hero::physics::to_f32x3(h.disp);
         let vel = if h.group == 0xf { [vel[0] + d[0], vel[1] + d[1], vel[2] + d[2]] } else { vel };
         (from, vel, 300)
@@ -318,7 +320,8 @@ fn fly(w: &mut World, id: MobyId) {
             p::set_i16(&mut m.pvars, pv::LIFE, t);
         }
         Some(h) => {
-            // `CollType` 0 (+0x1c only): a moby's water face too (the patch managers' pools, `water::managers`).
+            // `coll_type() == 0` (0x1f0b58) on whatever was hit: the moving water of Umbris's tanks, Pokitaru, Rilgar,
+            // Hoven and Veldin 2 is moby collision (classes whose every face is type 0), and the bomb sinks in it too.
             let water_face = h.surface_id() == 0;
             if water == 0 && water_face && vel[2] < 0.0 {
                 // Into water: sink slowly; the ripple, splash and drops (`bomb_water::entry`).

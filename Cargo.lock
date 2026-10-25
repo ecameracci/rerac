@@ -4391,6 +4391,7 @@ dependencies = [
  "rc-extract",
  "rc-formats",
  "rc-game",
+ "rc-game2",
  "rc-video",
  "twox-hash",
 ]
@@ -4417,6 +4418,15 @@ name = "rc-game"
 version = "0.4.3"
 dependencies = [
  "rc-formats",
+]
+
+[[package]]
+name = "rc-game2"
+version = "0.4.3"
+dependencies = [
+ "anyhow",
+ "rc-formats",
+ "rc-game",
 ]
 
 [[package]]

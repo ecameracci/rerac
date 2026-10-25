@@ -14,14 +14,15 @@
 //!   actor 4 (scene 1), 2 (scenes 2..4) or 1 (scene 6).
 //!
 //! * **92 the gates** (`0x2a36d0`, U536, 4 placed): open 4.25 up (or, Giant Clank's (+0x20 a cuboid), five times
-//!   as fast down, the level word 0x184aa8 = 1 while open) in 0.6 s when Ratchet (as Giant Clank for theirs) enters
+//!   as fast down, map zone flag 0 (0x184aa8) = 1 while open) in 0.6 s when Ratchet (as Giant Clank for theirs) enters
 //!   +0x10, or when their link (+0x24) is gone with no alarm running (and then stay open); they close again once
 //!   neither Ratchet nor the camera is in +0x14 (or Ratchet has left +0x20); the hum (sound 0) while moving. Giant
 //!   Clank's stay open once planet 16 is unlocked.
 //! * **1430 the dispenser** (`0x2ec030`, U556, one placed): carried by its link (+0x0c); hides its 24 groups;
-//!   with flag 0x13d38a set and Ratchet on foot within 3: the fly-by camera +0x00 armed (camera class 19, not run:
-//!   G-HERO-027, logged), then a piece 1428 slides out of it beside Ratchet (put 3 away facing it, state 0x72), the
-//!   first group shown; the piece slides back over a full turn of `scale(360)` ticks; the level word 0x184aac = 1;
+//!   with flag 0x13d38a set (the Codebot) and Ratchet on foot within 3: the fly-by camera +0x00 armed (camera class
+//!   19); once the fly-by is back from its fade to black (`0x2f78e0`: phase 1 with the fade up, or phase 3, or no
+//!   fly-by) a piece 1428 (the Codebot) slides out of it and Ratchet is put 3 away facing it (state 0x72, which the
+//!   fly-by's end clears), the first group shown; the piece slides back over a full turn of `scale(360)` ticks; map zone flag 1 (0x184aac) = 1;
 //!   with ten of the group gone, flag 0x13d3f5 and 15000 bolts. **1428** (`0x2ebd78`) does nothing on level 15.
 //!
 //! * **67 the sliding doors** (`0x29aff0`, U530, 8 placed; read from the disassembly, no decomp): slide +0x24 to the
@@ -67,9 +68,9 @@ pub const PIECE_CLASSES: [i16; 1] = [1428];
 
 /// gp−0x5708: the gates' rise.
 const GATE_RISE: f32 = 4.25;
-/// The level words the gates and the dispenser write (0x184aa8 / 0x184aac) and the alarm's (0x161ac0).
-const GATE_WORD: u32 = 0x18_4aa8;
-const DISPENSER_WORD: u32 = 0x18_4aac;
+/// The map zone flags the gates and the dispenser write (level 15's table 0x184aa8: 0 and 1).
+const GATE_ZONE: i32 = 0;
+const DISPENSER_ZONE: i32 = 1;
 const FLAG_DISPENSER: usize = story::flag_index(0x13_d38a);
 const FLAG_BOLTS: usize = story::flag_index(0x13_d3f5);
 
@@ -263,7 +264,7 @@ pub fn gate_update(w: &mut World, id: MobyId) {
         }
         1 => {
             c::set_pf(w, id, 0x18, 0.0);
-            if giant { w.svc.units.set_word(GATE_WORD, 0); }
+            if giant { w.svc.map.set_zone_flag(GATE_ZONE, 0); }
             let link = c::pi32(w, id, 0x24);
             if link == -1 {
                 if w.in_cuboid(hero, c::pi32(w, id, 0x10)) && (!giant || w.body() == 2) { w.mm(id).state = 2; }
@@ -291,7 +292,7 @@ pub fn gate_update(w: &mut World, id: MobyId) {
             set_z(w);
         }
         3 => {
-            if giant { w.svc.units.set_word(GATE_WORD, 1); }
+            if giant { w.svc.map.set_zone_flag(GATE_ZONE, 1); }
             let watched = w.in_cuboid(hero, c::pi32(w, id, 0x14)) || w.in_cuboid(cam, c::pi32(w, id, 0x14));
             if watched && !w.in_cuboid(hero, c::pi32(w, id, 0x20)) { return; }
             if c::pi32(w, id, 0x28) == 0 { w.mm(id).state = 4; }
@@ -306,7 +307,7 @@ pub fn gate_update(w: &mut World, id: MobyId) {
                 w.mm(id).state = 1;
                 if giant {
                     w.mm(id).state = 5;
-                    w.svc.units.set_word(GATE_WORD, 0);
+                    w.svc.map.set_zone_flag(GATE_ZONE, 0);
                 }
             }
             set_z(w);
@@ -318,11 +319,11 @@ pub fn gate_update(w: &mut World, id: MobyId) {
                 if w.body() != 2 {
                     w.mm(id).state = 1;
                     w.mm(id).position[2] = home_z;
-                    w.svc.units.set_word(GATE_WORD, 0);
+                    w.svc.map.set_zone_flag(GATE_ZONE, 0);
                 }
             } else {
                 w.mm(id).position[2] = home_z - GATE_RISE;
-                w.svc.units.set_word(GATE_WORD, 1);
+                w.svc.map.set_zone_flag(GATE_ZONE, 1);
             }
         }
         _ => {}
@@ -383,7 +384,7 @@ pub fn dispenser_update(w: &mut World, id: MobyId) {
             if gone {
                 w.mm(id).state = 4;
             } else {
-                w.svc.units.set_word(DISPENSER_WORD, 0);
+                w.svc.map.set_zone_flag(DISPENSER_ZONE, 0);
                 w.mm(id).state = 1;
                 for k in 0..24 {
                     let g = c::pi32(w, id, 0x20 + 4 * k);
@@ -400,7 +401,12 @@ pub fn dispenser_update(w: &mut World, id: MobyId) {
             }
         }
         2 => {
-            if w.camera_class != 0x13 {
+            // `0x2f78e0`: past the fly-by's fade to black (phase 1 with the fade still up: Ratchet is put beside the
+            // slot under the black and the Codebot slides out on camera) or once it has ended (phase 3), or no
+            // fly-by. The fly-by's own end gives Ratchet back (`SetState(0, 1)`).
+            let phase = w.camera_flyby_phase;
+            let ready = w.camera_class != 0x13 || (phase == 1 && w.svc.cinematic.fade != 0.0) || phase == 3;
+            if ready {
                 let p = c::add(c::pos(w, id), off(2.0));
                 let pc = make_piece(w, p, [0.0, FRAC_PI_2, c::add_rot(yaw, FRAC_PI_2), 0.0]);
                 c::set_pi32(w, id, 4, pc.map_or(0, |m| m as i32 + 1));
@@ -428,7 +434,7 @@ pub fn dispenser_update(w: &mut World, id: MobyId) {
             }
         }
         4 => {
-            w.svc.units.set_word(DISPENSER_WORD, 1);
+            w.svc.map.set_zone_flag(DISPENSER_ZONE, 1);
             let p = c::add(c::pos(w, id), off(0.5));
             let rot = [0.0, FRAC_PI_2, c::add_rot(yaw, FRAC_PI_2), 0.0];
             match piece(w) {

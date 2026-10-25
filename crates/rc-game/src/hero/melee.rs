@@ -8,7 +8,8 @@
 //! states 10 / 11 in [`super::comet`]; the glove throw 0x23 has the group-6 entry here and the rest in
 //! [`super::weapons`]; the gadget lunge 0x20 has the group-6 entry here and the rest in [`super::walloper`] (with the
 //! melee aim search `0x22e238`, [`aim_search`]); the rebound 0x21 off a target whose record has flag 2 ([`Hero::rebound_entry`],
-//! the physics and transitions of 0x7a: `super::packs`). Not ported: 0x51, the wall-hit spark line and the jump-attack
+//! the physics and transitions of 0x7a: `super::packs`). The wrench states aim with the target search
+//! ([`Hero::aim_assist`]: the turn toward the best crate or enemy in range). Not ported: 0x51, the wall-hit spark line and the jump-attack
 //! ground sparks (cosmetic + sounds) and the trail counters of the wrench (pvar +0x70/+0x74/+0x7c). The stats
 //! records the entries bump (0x1416c0, 0x141848, 0x141850 + 0x1417a8) are counted in [`Melee::entered`] and
 //! applied to the game state by the caller ([`apply_melee_stats`], [`MeleeRecords`]).
@@ -24,7 +25,6 @@ use crate::moby_update::services::HitTemplate;
 use crate::pad::{button, fast_arctan, fast_diff_rots};
 use crate::ps2v::Pf;
 use rc_formats::moby_anim;
-use std::f32::consts::{FRAC_PI_3, FRAC_PI_4, FRAC_PI_6};
 
 /// The wrench's look-stance reticle (`0x2be1c0`): its colour (R low) and FX texture.
 pub const LOOK_MARKER_RGBA: u32 = 0xff91_7267;
@@ -58,6 +58,12 @@ const HALF_PI: Pf = Pf::b(0x3fc9_0fdb);
 const YAW_SENTINEL: Pf = Pf::b(0x47c3_4f80);
 /// 15.009831 rad/s: the aim turn rate.
 const AIM_TURN: Pf = Pf::b(0x4170_2845);
+/// The cones of the wrench states' `0x2351d0(range, cone, cone2)` (45°, 60°, 30°): the combo 0x13 (5, 45°, 45°), the
+/// jump attack 0x14 (entry 8, 60°, none; physics 8, 60°, 60°), the comet strike 0x15 (entry 14, 30°, none; physics
+/// 14, 30°, 45°: `super::comet`).
+pub(super) const AIM_45: f32 = f32::from_bits(0x3f49_0fdb);
+pub(super) const AIM_60: f32 = f32::from_bits(0x3f86_0a92);
+pub(super) const AIM_30: f32 = f32::from_bits(0x3f06_0a92);
 /// Wrench class (moby +0xa6).
 pub const WRENCH_CLASS: i16 = 0x47;
 /// The wrench's hit sound, `FUN_002bda88()`: class sound 1 when the moby hit (0x1742d8: the line's moby, or the
@@ -247,7 +253,7 @@ impl Hero {
                 }
                 self.melee.combo = step;
                 // 0x23fbb0.
-                self.aim_assist(c.env, 5.0, FRAC_PI_4, FRAC_PI_4);
+                self.aim_assist(c.env, 5.0, AIM_45, AIM_45);
                 if !play { return; }
                 let (b, f2) = match step { 0 => (5, 0), 1 => (7, 2), _ => (7, 4) };
                 let mut b = ticks(b);
@@ -262,7 +268,7 @@ impl Hero {
                 self.f15d4 = 0x50;
                 self.items.restore = 0;
                 // 0x23f7b0.
-                self.aim_assist(c.env, 8.0, FRAC_PI_3, -1.0);
+                self.aim_assist(c.env, 8.0, AIM_60, -1.0);
                 self.melee.falling = Pf::ZERO;
                 self.items.slot.swap_timer = 10;
                 if !play { return; }
@@ -277,7 +283,7 @@ impl Hero {
                 self.melee.combo = 3;
                 self.items.restore = 0;
                 // 0x23f998.
-                self.aim_assist(c.env, 14.0, FRAC_PI_6, -1.0);
+                self.aim_assist(c.env, 14.0, AIM_30, -1.0);
                 self.melee.comet_side = (self.melee.comet_side == 0) as u32;
                 if !play { return; }
                 let mut b = ticks(10);
@@ -350,7 +356,7 @@ impl Hero {
             self.turn_to(f * Pf::b(0x3d4c_cccd), f * Pf::b(0x3e4c_cccd), DT * AIM_TURN);
         } else if !(row[C_STEP] == 1 && !blending && Pf::b(0x40e0_0000) < frame) {
             // 0x239bbc.
-            self.aim_assist(env, 5.0, FRAC_PI_4, FRAC_PI_4);
+            self.aim_assist(env, 5.0, AIM_45, AIM_45);
         }
         self.speed_step(DT2 * Pf::b(0x4214_0000), DT2 * Pf::b(0x41e0_0000));
         let y = if self.melee.aimed != 0 { self.melee.aim_yaw } else { YAW_SENTINEL };
@@ -379,7 +385,7 @@ impl Hero {
             self.turn_to(SCALE64 * Pf::b(0x3d4c_cccd), SCALE64 * Pf::b(0x3e4c_cccd), DT * AIM_TURN);
         } else if frame < Pf::b(0x41c8_0000) {
             // 0x239284.
-            self.aim_assist(env, 8.0, FRAC_PI_3, FRAC_PI_3);
+            self.aim_assist(env, 8.0, AIM_60, AIM_60);
         }
         let t9 = ticks(9);
         let mut up = DT * Pf::b(0x40f6_6666);
@@ -1071,7 +1077,7 @@ mod tests {
         let mut frame = 100;
         let mut hand = Vec::new();
         for _ in 0..8 {
-            let env = ItemEnv { data: &data, pad: &pad, frame, hero_moby: 0, coll: None, camera: None, camera_up: None, targets: &[] };
+            let env = ItemEnv { data: &data, pad: &pad, frame, hero_moby: 0, coll: None, mobys: None, camera: None, camera_up: None, targets: &[] };
             items::items_update(&mut r.hero, &mut g, &mut table, &anim, &mut rng, &env, &mut items::NoHits);
             hand.push((r.hero.items.slot.id, r.hero.items.slot.state, r.hero.items.slot.item.as_ref().map(|m| m.o_class)));
             frame += 1;
@@ -1088,7 +1094,7 @@ mod tests {
         // □ with the glove in hand swaps back to the wrench.
         let mut p = crate::pad::PadState::default();
         p.update(Some(&PadInput::neutral().press(button::SQUARE).bytes()), false);
-        let env = ItemEnv { data: &data, pad: &p, frame, hero_moby: 0, coll: None, camera: None, camera_up: None, targets: &[] };
+        let env = ItemEnv { data: &data, pad: &p, frame, hero_moby: 0, coll: None, mobys: None, camera: None, camera_up: None, targets: &[] };
         items::items_update(&mut r.hero, &mut g, &mut table, &anim, &mut rng, &env, &mut items::NoHits);
         assert_eq!((r.hero.items.target, r.hero.items.slot.state, g.wrench_flag), (8, 3, 1));
     }

@@ -751,3 +751,24 @@ pub fn save_notice_due(card: &MemCard, gs: &crate::game_state::GameState, g: &No
         && (scale_ticks(0x1e) as u64) < g.tick
         && gs.global.level != 0
 }
+
+#[cfg(test)]
+mod busy_icon_tests {
+    use rc_formats::{hud, wad};
+
+    /// Every level's HUD has the card icon 0x755d with its two frames (the main loop's busy icon reads both).
+    #[test]
+    fn the_card_icon_is_on_every_level_and_the_spinner_sits_on_it() {
+        for level in 0..19u32 {
+            let dir = rc_formats::test_data::level_dir(level);
+            let Ok(header) = std::fs::read(dir.join("hud_header.bin")) else { eprintln!("skipped: no extracted/"); return };
+            let h = hud::parse_header(&header).unwrap();
+            let banks: Vec<Vec<u8>> = (0..hud::BANKS)
+                .map(|b| if h.bank_size[b] == 0 { Vec::new() } else { wad::decompress(&std::fs::read(dir.join(format!("hud_bank_{b}.bin"))).unwrap()).unwrap() })
+                .collect();
+            let hd = hud::parse_hud(&header, std::array::from_fn(|b| banks[b].as_slice())).unwrap();
+            let e = &hd.icons[hd.icon_index(super::CARD_ICON)];
+            assert!(e.id == super::CARD_ICON && e.frame_count >= 2, "level {level}: icon {:#x} frames {}", e.id, e.frame_count);
+        }
+    }
+}

@@ -175,9 +175,15 @@ pub fn load_mobys_with_gs(root: &Path, core: &LevelCore, core_data: &[u8], gamep
     let t0 = Instant::now();
     let classes = moby::parse_level_mobys(core, core_data).context("parsing moby classes")?;
     let anim = moby_anim::load_anim_classes(core, core_data, &classes);
-    let mut instances = gameplay::parse_moby_instances(gameplay_file).context("parsing moby instances")?;
+    let rac2 = core.game == rc_formats::Game::Rac2;
+    let mut instances = match core.game {
+        rc_formats::Game::Rac1 => gameplay::parse_moby_instances(gameplay_file),
+        rc_formats::Game::Rac2 => rc_formats::rac2::gameplay::moby_instances(gameplay_file).map(|v| v.into_iter().map(|m| m.base).collect()),
+    }
+    .context("parsing moby instances")?;
     // The loader's ground snap of the rooted records (`InitLevelRenderGlobals`), before anything reads a position.
-    if let Some(mesh) = mesh {
+    // Not for Going Commando until its loader's snap is read (docs/plan/rac2_bringup.md §6.3 C).
+    if let Some(mesh) = mesh.filter(|_| !rac2) {
         let n = rc_game::moby_update::scheduler::root_instances(&mut instances, mesh);
         if n != 0 { println!("mobys: {n} rooted instances put on the ground"); }
     }
@@ -185,7 +191,8 @@ pub fn load_mobys_with_gs(root: &Path, core: &LevelCore, core_data: &[u8], gamep
     let parse_time = t0.elapsed();
 
     let t0 = Instant::now();
-    let lighting: Option<MobyLighting> = moby_light::load(root, gameplay_file)?;
+    // Going Commando's moby lighting is milestone D (docs/plan/rac2_bringup.md §6.3): none yet.
+    let lighting: Option<MobyLighting> = if rac2 { None } else { moby_light::load(root, gameplay_file)? };
     let cpu_light = env_on("RC_MOBY_CPU_LIGHT");
     let check = env_on("RC_MOBY_LIGHT_CHECK");
     let by_class: HashMap<i32, usize> = classes.iter().enumerate().map(|(i, c)| (c.o_class, i)).collect();
@@ -1238,7 +1245,7 @@ fn spawn_mobys(
         instances: inst_buffer.clone(),
         driven_hidden: vec![false; n_inst],
         records_dirty: false,
-        look: m.placed.iter().map(|p| p.map_or(MobyLook { alpha: 0x80, mode: 0, glow: 0, shine_distance: 0, draw_dist: None, late: None }, |p| MobyLook::of_class(&m.classes[p.class]))).collect(),
+        look: m.placed.iter().map(|p| p.map_or(MobyLook { alpha: 0x80, mode: 0, glow: 0, shine_distance: 0, draw_dist: None, late: None, scroll: (0, 0) }, |p| MobyLook::of_class(&m.classes[p.class]))).collect(),
         moved: vec![false; n_inst],
         lit_by_point: vec![false; n_inst],
         class_parts: parts.into_iter().map(|(ci, (high, low, _))| (ci, [high.0, low])).collect(),
@@ -1319,6 +1326,9 @@ pub struct MobyLook {
     /// Deferred by `MobyProc` (mode 0x400 with a live shadow, or 0x800): a caster's draws after the shadow pass
     /// ([`CasterTwin`]). None: as its class (deferred when it has a shadow block; an undriven static).
     pub late: Option<bool>,
+    /// The class's texture scroll (`rc_game::moby_update::Services::class_scroll`: s, t in 1/4096), written into the
+    /// instance's record ([`set_uv_scroll`]).
+    pub scroll: (i16, i16),
 }
 
 impl MobyLook {
@@ -1335,6 +1345,7 @@ impl MobyLook {
             shine_distance: if h.metal_count > 0 { moby_lod::SHINE_DISTANCE } else { 0 },
             draw_dist: None,
             late: None,
+            scroll: (0, 0),
         }
     }
 }
@@ -1473,6 +1484,15 @@ pub fn update_moby_occlusion(
             _ => (0x80, 0, 0, [[0.0; 3]; 3]),
         };
         moby_lod::write_lod_record(rec, alpha, flags, shine, moby_lod::glow_word(mode, look.glow), &e);
+        // The class's texture scroll (`FUN_00263d90`).
+        let at = ii * RECORD_SIZE;
+        if let Some(r) = s.records.get_mut(at..at + RECORD_SIZE) {
+            let w = (look.scroll.0 as u16 as u32 | (look.scroll.1 as u16 as u32) << 16).to_le_bytes();
+            if r[RECORD_SIZE - 4..] != w {
+                set_uv_scroll(r, look.scroll.0, look.scroll.1);
+                s.records_dirty = true;
+            }
+        }
         // The point lights in range of the sphere centre become the third light (none: cleared).
         if !point_lights.0.is_empty() || s.lit_by_point[ii] {
             let merged = sphere.and_then(|(sp, _, _)| point_light_merge(&point_lights.0, [sp[0] / crate::game_camera::UNITS, sp[1] / crate::game_camera::UNITS, sp[2] / crate::game_camera::UNITS], &inp.rows));

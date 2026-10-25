@@ -259,7 +259,10 @@ pub struct ItemEnv<'a> {
     pub hero_moby: MobyId,
     /// The level collision (world mesh) for the items' own lines (the thrown wrench's ground height and bounce;
     /// None: they hit nothing).
-    pub coll: Option<&'a rc_formats::collision::Collision>,    /// The camera as the previous tick's update left it: position 0x167240 and forward 0x167450 (the Bomb Glove's
+    pub coll: Option<&'a rc_formats::collision::Collision>,
+    /// The mobys' collision for those lines (`CollLine` tests the moby grid after the world mesh: the doors stop the thrown
+    /// wrench). None: the world mesh only (the tick builds it while the wrench is thrown).
+    pub mobys: Option<&'a crate::collision_query::MobyScene<'a>>,    /// The camera as the previous tick's update left it: position 0x167240 and forward 0x167450 (the Bomb Glove's
     /// first-person aim). None: no camera.
     pub camera: Option<([f32; 3], [f32; 3])>,
     /// The camera's up row 0x167470 (the Pyrocitor's first-person flame starts one unit below the eye).
@@ -296,8 +299,11 @@ pub fn items_update(hero: &mut Hero, g: &mut ItemGlobals, table: &mut MobyTable,
     attach_hand(hero, table, anim, env);
     // `0x2297b0` (after `HeroItemsAttach` and `0x249ea0`): the glow list, the hand item's glow word, Ratchet's glow
     // word; then the drawer's dot on foot and its registration (`0x229400`, super::glow).
+    // `0x2297b0` returns when the hand moby is hidden (mode bit 0): the first-person view (0x1413f5) and a gold
+    // bolt's pickup (0x1413ff, `FUN_002487a8`) hide it; the head item only with the first-person view.
     let shown = hero.f13f5 == 0;
-    super::glow::items_glow(hero, shown && hero.head_slot.state != 0, shown && hero.items.slot.state != 0);
+    let hand_shown = shown && hero.f13ff == 0;
+    super::glow::items_glow(hero, shown && hero.head_slot.state != 0, hand_shown && hero.items.slot.state != 0);
     if let Some(m) = table.mobys.get_mut(env.hero_moby) { m.glow = hero.glow.ratchet; }
     if hero.mode == 0 {
         hero.glow.dot = None;

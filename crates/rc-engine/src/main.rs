@@ -24,7 +24,11 @@
 //! - `RC_SCENE=0` / `RC_SCENE=<k>`, `RC_SUBTITLES=0` in-engine scenes (Novalis arrival = scene 5), crate::scene_render
 //! - `RC_UNLOCK_PLANETS=<p>,…` planets unlocked from the start (the ship's planet page), crate::gameplay;
 //!   `RC_TRAVEL_TRACE=1` the ship / mode-6 / transition trace, crate::travel_render
+//! - `RC_GAME_BEATEN=1` the Goodies on the pause menu, `RC_SKILL_POINTS=all` every skill point (Sketchbook, Epilogue),
+//!   crate::gameplay
 //! - `RC_HUD=0`, `RC_HUD_DEMO=1`, `RC_HUD_TEXT`, `RC_HUD_HELP=<id>`, `RC_LANG` the HUD and its demos, crate::hud_render
+//! - `RC_SCREEN_TINT=<rgba hex>:<alpha hex>` one forced full-screen tint every frame (dev check), crate::screen_tint
+//! - `RC_DEBUG_HUD=1` the inspect overlay, F3 shows / hides it (position, facing, state, camera, the moby looked at), crate::debug_hud
 //! - `RC_MSAA=0|2|4|8` the Anti-aliasing option at start: Off or that multisampling (default: Original, the game's own softening passes), crate::graphics
 //! - `RC_SETTINGS_FILE=<path>` the port-settings file (`0` or empty: none), crate::render_settings;
 //!   `RC_SETTINGS_PAGE=0` no "Port Options" page in the Options menu, crate::menu_render
@@ -43,6 +47,7 @@ mod fly_cam;
 mod fx_draw;
 mod fog_state;
 mod screen_tint;
+mod debug_hud;
 mod game_camera;
 mod gameplay;
 mod gs_state;
@@ -81,6 +86,9 @@ mod window_icon;
 mod visibomb_view;
 mod gs_post;
 mod reactive_render;
+mod rac2;
+mod rac2_level;
+mod rac2_play;
 mod saves;
 mod scene_render;
 mod sea_render;
@@ -129,7 +137,7 @@ use level_load::LoadedLevel;
 use tfrag_render::{game_to_bevy, TfragMaterial};
 
 #[derive(Resource)]
-struct Level(LoadedLevel);
+pub(crate) struct Level(pub(crate) LoadedLevel);
 
 #[derive(Resource)]
 struct ScreenshotRequest {
@@ -147,12 +155,15 @@ fn main() -> anyhow::Result<()> {
     // `--version-json` exits here; a missing or wrong data folder exits with a clear error (crate::disc_source).
     let root = disc_source::startup();
     session::start();
+    // Going Commando's data folder: its own front end (crate::rac2).
+    // Going Commando runs the same app on its level (crate::rac2_level), its front end over it (crate::rac2).
+    let rac2 = disc_source::game(&root) == disc_source::Game::Rac2;
     let index = level_load::level_index();
     // The one level load (the boot's and every runtime level change's, crate::level_switch): the level data, the loader's
     // ship and the load-time update pass (crate::moby_spawn; RC_SPAWN_RULES=0 skips it), the fog zones and the
     // underwater test (crate::fog_state).
     // The boot's game state first: the level's spawn test reads its save bits (crate::gameplay::level_spawn_save).
-    let boot = gameplay::boot_state(&root, index);
+    let boot = if rac2 { None } else { gameplay::boot_state(&root, index) };
     let save = gameplay::level_spawn_save(boot.as_ref().map(|(gs, _)| gs), index);
     let level_switch::LevelBundle { mut level, spawn, fog: fog_state, .. } = match level_switch::load_bundle(&root, index, &save) {
         Ok(b) => b,
@@ -238,6 +249,7 @@ fn main() -> anyhow::Result<()> {
     .add_plugins(sky_stars::SkyStarsPlugin)
     .add_plugins(fog_state::FogStatePlugin)
     .add_plugins(screen_tint::ScreenTintPlugin)
+    .add_plugins(debug_hud::DebugHudPlugin)
     .add_plugins(visibomb_view::VisibombViewPlugin)
     .add_plugins(hud_render::HudPlugin)
     // The game tick (hero, pad, follow camera) driving Ratchet and the view; RC_PLAY=0 keeps the fly camera only.
@@ -267,6 +279,8 @@ fn main() -> anyhow::Result<()> {
     .add_systems(Startup, setup_camera)
     .add_systems(level_switch::LevelStartup, setup)
     .add_systems(Update, (report_fps, input_map::log_connections));
+    if rac2 && rac2::requested() { app.add_plugins(rac2::FrontEndPlugin::new(&root)?); }
+    if rac2 { app.add_plugins(rac2_play::Rac2PlayPlugin); }
     // RC_RENDER_DIAG=1: Bevy's per-pass render timings (CPU only on Metal) and the views rendered, logged every 5 s.
     if std::env::var("RC_RENDER_DIAG").is_ok_and(|v| v.trim() == "1") {
         app.add_plugins((
@@ -294,7 +308,7 @@ fn ms(d: Duration) -> f64 { d.as_secs_f64() * 1e3 }
 /// `../Resources/assets` inside a macOS `.app`; otherwise the repo's `crates/rc-engine/assets` (`cargo dev`,
 /// `target/*/rerac`). The executable path is resolved through symlinks first, so a symlinked binary finds the
 /// folder beside its real file.
-fn asset_dir() -> String {
+pub(crate) fn asset_dir() -> String {
     let exe = std::env::current_exe().and_then(std::fs::canonicalize).ok();
     let dir = exe.as_deref().and_then(std::path::Path::parent);
     [dir.map(|d| d.join("assets")), dir.map(|d| d.join("../Resources/assets"))]

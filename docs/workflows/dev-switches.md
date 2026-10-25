@@ -95,6 +95,7 @@ module that reads it: `grep -rn '"RC_' crates/` lists them all.
 | `RC_SEA` | `0`: do not draw the seas and liquid surfaces of the draw callbacks (crate::sea_render) |
 | `RC_NO_TIES` | `1`: do not draw ties |
 | `RC_NO_SHRUBS` | `1`: do not draw shrubs |
+| `RC_SWAY` | `0`: no wind sway on shrubs or ties (their per-frame shear stays zero) |
 | `RC_SKY_ROT` | Sky rotation speed in ticks per 60 Hz tick (`0` freezes; default 1) |
 | `RC_ANIM` | `0`: disable moby animation (bind pose) |
 | `RC_MOBY_CPU_LIGHT` | `1`: use the bit-exact CPU moby lighting (bind pose) instead of the GPU path |
@@ -106,6 +107,7 @@ module that reads it: `grep -rn '"RC_' crates/` lists them all.
 | `RC_GIVE_ITEMS` | `id,id,…` (decimal or `0x` hex): own those items from the start (debug; `rc_game::inventory::debug_grant`, docs/plan/gadgets.md §6); the last back (2 Heli-Pack, 3 Thruster-Pack, 4 Hydro-Pack), feet (28 Magneboots, 29 Grindboots) and head item (5..7) among them are saved as equipped, and the last hand item (e.g. 12, the Swingshot) is requested into the hand. Unset: the game's own starting state |
 | `RC_GIVE_ITEMS_EQUIP` | `0`: `RC_GIVE_ITEMS` only owns the items (nothing equipped; equip them in the pause menu's Gadgets page) |
 | `RC_HERO_AT` | `x,y,z[,yaw]`: place Ratchet there at the level load, before the hero init's ground snap (debug; e.g. on a grind rail with `RC_GIVE_ITEMS=29`) |
+| `RC_DEBUG_HUD` | `1`: the inspect overlay: F3 shows / hides it, F4 cycles its pages, F8 makes a repro line. **Player**: level, tick, Ratchet's position, facing (radians and degrees), state, speed, ground moby, the camera, the moby the camera looks at, the scene. **Mobys**: a label (id, class, state) over every moby within 15 of Ratchet, and the looked-at moby's uid, mode, distances, health and first pvar words. **Sound**: every busy sound slot (owner, sound, loop, volume, state, sound instance). **F8**: `RC_LEVEL=… RC_SCENE=0 RC_HERO_AT=x,y,z,yaw RC_GIVE_ITEMS=…` (hand item last), printed, copied to the clipboard and shown for 5 s. `show` / `mobys` / `sound`: shown from the start on that page (headless captures). F9's dump prints the player page |
 | `RC_SHIP_ADOPTED` | `1`: a placed ship was adopted (0x160540) from the start: level 13 with `RC_SHIP=2` takes Gemlik's placed 533 as the ship at the load, as after the escape (debug) |
 | `RC_LEVEL_CAMERAS` | `0`: do not load the level's camera records (no class-17 regions: the follow camera alone, as before `rc_game::follow_camera::level`; for before / after comparisons) |
 | `RC_GIVE_BOLTS` | `n`: start with n bolts (debug; e.g. to buy at the Gadgetron vendor) |

@@ -545,7 +545,8 @@ sub-pages (`crates/rc-game/src/menus/pause/port.rs`, `PageMenu::install_port_pag
   stretched (port-only) to rows 82..302 between the title and the hints on both pages (`port::panel_stretch`:
   `frame::FrameMobys::stretch` moves the slot's top / bottom corners in world z, in proportion to its sequence's
   progress, so the open / close animations reach it smoothly; the engine moves the corner joints of the drawn moby
-  by the same amount), showing `h / 20 − 1` rows (10) at a time and scrolling with the cursor. The port list is
+  by the same amount), showing `h / 20 − 1` rows (10) at a time and scrolling with the cursor; the game's arrow (icon
+  0xe99e frame 6, the Epilogue's page arrow, turned to point up / down) marks rows hidden above and below. The port list is
   updated and drawn exactly like the camera list 0x294cc0 / 0x294e68 (rows `h/(n+1)`, first y `h/(n+1) − 8`, label regular at
   (12, y) 0x8020ffff selected / 0x80ffa888, value right-aligned at (w − 12, y) 0x80ffa888; Up/Down without wrap + sound 1; ✕
   cycles the value + sound 0; generic Start/Select/R3 close and △ → Options). Transitions (12 ticks, seqs forward / reversed),
@@ -777,7 +778,7 @@ first KB) is never sampled.
 | 0x25e630 label text | `%b` → the price 0x1c4530, else "error" | `map_page::label_text` |
 | missions page 0x1b3bf8 | the mission list 0x293090 (`fun_0020bc00`), the mission picture 0x293398 / 0x293670 (`mission_ss`), the selection marks | ported 2026-10-01 (`map_page` coverage table) |
 | level 6's gp−0x6e08 | set by level 6's class code (0x302578) | the flag is `MapState::alt`; its writer NOT ported (G-UI-001) |
-| 0x184928 zone flags | written by level classes (L07 / L13 movers …) | `MapState::zone_flags`; the writers NOT ported (G-UI-001) |
+| 0x184928 zone flags | written by level classes (L07 / L13 movers and sliders, L13 towers, L15 gates and dispenser; each overlay's own table) | `MapState::zone_flags`, `MapState::set_zone_flag` |
 
 **[L] notes.** The globe's copy "aspect crop" (return 4) keeps the target's centre at the panel's aspect. The map's
 coordinates are converted from 1/16 pixels to whole pixels when drawn. The file is read when composed (the game
