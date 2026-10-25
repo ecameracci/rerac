@@ -472,9 +472,10 @@ fn blasts(rows: &[Row]) -> Vec<(usize, usize)> {
 /// Novalis, the Glove of Doom (item 20, class 229) 7 units east of critter group 2 (moby 592), facing it: ○ throws
 /// from the throw state 0x23 (voice 0x1a, one ammo; the next canister in the glove at once); the canister 230 flies
 /// (2), glowing (type 32) every 4 ticks, stops and opens (3), lets out four bots 186 eight ticks apart and fades (4)
-/// away. A bot takes the critter as its target (the target list's search), runs at it and blows up on it: the blast
-/// (a light, 2 spark pairs, 5 streaks, 4 puffs, the shake, class sound 0) and the hit (damage 3: the critter's 1 →
-/// −2), and the critter dies; the other bots go for the critters farther off.
+/// away. Held, the canister's landing preview registers its ground reticle every tick. A bot takes the critter as its
+/// target (the target list's search), runs at it and blows up on it: the blast (a light, 2 spark pairs, 5 streaks, 4
+/// puffs, the shake, class sound 0) and the hit (damage 3: the critter's 1 → −2), and the critter dies; the other bots
+/// go for the critters farther off.
 #[test]
 fn novalis_bots_blow_up_a_critter() {
     let Some(lv) = load() else { eprintln!("skipped: no extracted/"); return };
@@ -492,6 +493,9 @@ fn novalis_bots_blow_up_a_critter() {
     let next = rows[t].held.expect("a new canister in the glove");
     assert_ne!(next, c);
     assert_eq!(states_of(&rows, c), [0, 1, 2, 3, 4], "held, flew, opened, faded");
+    // The ground reticle while held, from the state-1 update: the create's velocity is 0, so the create tick and the
+    // state-0 update have nothing to preview.
+    assert!(rows[3..t].iter().all(|r| r.reticles == 1), "the ground reticle while held");
     assert!(rows.last().unwrap().objects.iter().all(|o| o.0 != c || o.1 != 230), "gone");
     let made = rows.iter().filter_map(|r| r.objects.iter().find(|o| o.0 == c && o.1 == 230).map(|o| o.4)).fold(0.0f32, f32::max);
     assert_eq!(made, 4.0, "four bots let out");

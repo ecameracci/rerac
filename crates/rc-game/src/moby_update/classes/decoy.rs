@@ -11,7 +11,8 @@
 //!
 //! **States** (+0x20):
 //! * **0 / 1 held** (the glove places it every tick; hidden while the first-person camera is up): deleted when the
-//!   hand no longer holds the Decoy Glove (or Ratchet is not on foot). The landing preview runs while held.
+//!   hand no longer holds the Decoy Glove (or Ratchet is not on foot). The landing preview runs while held from the
+//!   state-1 update (the create leaves the velocity 0: the state-0 update has nothing to preview).
 //! * **2 flying**: grows to the class scale (0.02 a tick), gravity 9·dt², pushed apart from the other decoys within
 //!   1.8, moved by `walker::move_collide` (`0x26d610`: up 0.2, radius 0.2; Ratchet's collision off while he aims in
 //!   first person). On a wall or floor (move bit 0) a sphere test (0.23, 0.2 up) gives the face: the velocity
@@ -101,10 +102,11 @@ pub fn set_velocity(m: &mut crate::moby_runtime::Moby, v: [f32; 3]) {
 }
 
 /// `0x2d9228(glove, point, vel)`: the new decoy (the caller's `CreateMoby`): update / draw distances 0xff, visible,
-/// state 0 at the hand point, the velocity word = the point (the glove's aim writes it before the decoy's next update),
-/// the owner, half the class scale, health 4 (8 gold), no collision (+0x94 = 0, +0x98 = −1), a random yaw
-/// `randf(−π, π)`, Ratchet's lighting, the red flash record (0x80, 4 in, 15 out); hidden in first person or with the
-/// hand hidden.
+/// state 0 at the hand point, the velocity 0 (the caller's `loc` is zeroed; the glove's aim fills it, and a value here
+/// would let the create tick's preview take its flying branch, whose "a new object in the glove" flag ends every later
+/// held reticle), the owner, half the class scale, health 4 (8 gold), no collision (+0x94 = 0, +0x98 = −1), a random
+/// yaw `randf(−π, π)`, Ratchet's lighting, the red flash record (0x80, 4 in, 15 out); hidden in first person or with
+/// the hand hidden.
 pub fn init_held(table: &mut MobyTable, id: MobyId, rng: &mut crate::rng::Rng, point: [f32; 3], gold: bool, hidden: bool) {
     let hero_light = table.hero().map(|h| (table.mobys[h].light, table.mobys[h].ambient));
     let m = &mut table.mobys[id];
@@ -115,7 +117,7 @@ pub fn init_held(table: &mut MobyTable, id: MobyId, rng: &mut crate::rng::Rng, p
     m.position = [point[0], point[1], point[2], m.position[3]];
     if m.pvars.len() < pv::SIZE { m.pvars.resize(pv::SIZE, 0); }
     let pvs = &mut m.pvars;
-    p::set_v4f(pvs, pv::VEL, [point[0], point[1], point[2], 0.0]);
+    p::set_v4f(pvs, pv::VEL, [0.0; 4]);
     p::set_i32(pvs, pv::OWNER, 1);
     p::set_i16(pvs, pv::TIMER, 0);
     p::set_i32(pvs, pv::AGE, 0);

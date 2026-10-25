@@ -441,7 +441,8 @@ fn thrown(rows: &[Row]) -> Option<(usize, usize)> {
 /// Novalis, the Decoy Glove (item 25, class 562) 7 units east of critter group 2 (instance 592), facing it: ○ throws
 /// (the throw state 0x23, one ammo); the decoy 203 flies (state 2), lands and inflates (3) about 3 units ahead; a
 /// critter lands by it and bites it (its health 4 → 0, one bite per 30 ticks) instead of Ratchet, who is not hurt while
-/// it stands, until it bursts (deleted); then the critter comes for Ratchet.
+/// it stands, until it bursts (deleted); then the critter comes for Ratchet. Held, the decoy's landing preview registers
+/// its ground reticle every tick.
 #[test]
 fn novalis_decoy_lures_critters() {
     let Some(lv) = load() else { eprintln!("skipped: no extracted/"); return };
@@ -457,6 +458,9 @@ fn novalis_decoy_lures_critters() {
     assert_eq!(rows[t].ammo + 1, rows[30].ammo, "one ammo a throw");
     let st = states_of(&rows, d);
     assert_eq!(&st[..4], &[0, 1, 2, 3], "held, flew, landed: {st:?}");
+    // The ground reticle while held, from the state-1 update: the create's velocity is 0, so the create tick and the
+    // state-0 update have nothing to preview.
+    assert!(rows[3..t].iter().all(|r| r.reticles == 1), "the ground reticle while held");
     let life: Vec<(usize, [f32; 3], f32)> = rows.iter().enumerate().filter_map(|(i, r)| r.objects.iter().find(|o| o.0 == d && o.2 == 3).map(|o| (i, o.3, o.4))).collect();
     let (landed, spot, _) = life[0];
     let gone = life.last().unwrap().0 + 1;

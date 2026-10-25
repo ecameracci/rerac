@@ -41,9 +41,9 @@
 //! docs/plan/hero_gameplay.md §13; corrects §8's "the Bomb Glove's only"): the mine 74's preview `0x2bfa78` (gravity
 //! 9.8, 120 ticks held, only faces end it: [`Prims::Ignore`]) with the draw `0x2bf420`, the decoy 203's `0x2d9760` and
 //! the Glove of Doom's canister's `0x2de0a8` (gravity 9, 300 ticks, primitives snapped without the height rule) with
-//! the draw `0x2d8e28` — the same quads and constants ([`BOMB_RETICLE`]). The decoy's and the canister's first update
-//! (state 0) takes the flying branch and marks "a new object in the glove" on itself, so in the game they never draw
-//! one (reproduced).
+//! the draw `0x2d8e28` — the same quads and constants ([`BOMB_RETICLE`]). Both preview while held: their create leaves
+//! the velocity 0 (the glove's aim fills it), so the first update (state 0) has nothing to preview and state 1 draws
+//! every tick; only once the glove holds a new object does a thrown one's preview stop (its `+0x46` / `+0x3a`).
 //!
 //! Native `f32` throughout (`atan2` for `FastArcTan`).
 
