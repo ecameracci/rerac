@@ -16,7 +16,8 @@
 //!
 //! Mouse look ([`MouseSettings`], the Port Options' mouse rows): the motion summed over the frames until a tick runs,
 //! per tick, turns the right stick as the game reads it (past its dead zone, `PadInput::axis_byte`) linearly to full
-//! at [`MouseSettings::full_px`]. Normal: the mouse's right is the stick's left, its down the stick's up.
+//! at [`MouseSettings::full_px`]. Normal: the mouse's right is the stick's left (the stick's
+//! right in first person), its down the stick's up.
 //!
 //! Scripted input (`RC_PLAY_SCRIPT`), for deterministic runs: see [`Script`]. With a script the devices are
 //! ignored.
@@ -87,11 +88,12 @@ impl MouseSettings {
 
     /// The right stick as the game reads it (`rc_game::pad::axis`, past its dead zone: x right, y down, each in
     /// [−1, 1]) for one tick's mouse motion (Bevy: y down), linear up to [`Self::full_px`]. Normal: mouse right = stick
-    /// left, mouse down = stick up.
-    pub fn stick(self, d: Vec2) -> Vec2 {
+    /// left (the follow camera swings the other way), mouse down = stick up; in `first_person` (the first-person camera
+    /// up, `rc_game::follow_camera::FirstPerson::active`, which turns with the stick) mouse right = stick right.
+    pub fn stick(self, d: Vec2, first_person: bool) -> Vec2 {
         let axis = |v: f32| if v.abs() < MOUSE_JITTER { 0.0 } else { v.signum() * (v.abs() / self.full_px()).min(1.0) };
         let flip = |i: bool| if i { -1.0 } else { 1.0 };
-        Vec2::new(-axis(d.x) * flip(self.invert_x), -axis(d.y) * flip(self.invert_y))
+        Vec2::new(-axis(d.x) * flip(self.invert_x != first_person), -axis(d.y) * flip(self.invert_y))
     }
 }
 
@@ -246,6 +248,7 @@ pub fn sample_system(
     gamepads: Query<&Gamepad>,
     cursor: Option<Single<&bevy::window::CursorOptions, With<bevy::window::PrimaryWindow>>>,
     (settings, strategy, budget): (Option<Res<MouseSettings>>, Res<bevy::time::TimeUpdateStrategy>, Option<Res<crate::gameplay::TickBudget>>),
+    play: Option<Res<crate::gameplay::Play>>,
     mut frame: ResMut<PadFrame>,
     mut slot: ResMut<QuickSlotKey>,
     mut pending: Local<Vec2>,
@@ -262,7 +265,8 @@ pub fn sample_system(
         Vec2::ZERO
     } else {
         let d = std::mem::take(&mut *pending) / ticks as f32;
-        settings.as_deref().copied().unwrap_or_default().stick(d)
+        let first_person = play.is_some_and(|p| p.game.camera.first_person.active);
+        settings.as_deref().copied().unwrap_or_default().stick(d, first_person)
     };
     frame.0 = sample(&keys, &mouse, look, &gamepads);
     if let Some(k) = quick_slot(&keys) { slot.0 = Some(k); }
@@ -423,16 +427,18 @@ mod tests {
         assert_eq!((p.rx.to_f32(), p.ry.to_f32(), p.lx.to_f32(), p.ly.to_f32()), (-1.0, -1.0, 0.0, 0.0));
         assert_eq!(pad_of(&[Comma, Period], &[], Vec2::ZERO).rx.to_f32(), 0.0);
         // Mouse look, Normal at 5: right = stick left, full at 8 counts a tick; one count already turns it (past the dead
-        // zone), less than half a count does not; inverted, right = stick right.
+        // zone), less than half a count does not; inverted, right = stick right; first person flips left / right only.
         let m = MouseSettings::default();
         assert_eq!(m.full_px(), 8.0);
-        assert_eq!(pad_of(&[], &[], m.stick(Vec2::new(8.0, 0.0))).rx.to_f32(), -1.0);
-        assert_eq!(pad_of(&[], &[], m.stick(Vec2::new(0.0, 20.0))).ry.to_f32(), -1.0);
-        assert!(pad_of(&[], &[], m.stick(Vec2::new(1.0, 0.0))).rx.to_f32() < 0.0);
-        assert_eq!(m.stick(Vec2::new(0.4, -0.4)), Vec2::ZERO);
+        assert_eq!(pad_of(&[], &[], m.stick(Vec2::new(8.0, 0.0), false)).rx.to_f32(), -1.0);
+        assert_eq!(pad_of(&[], &[], m.stick(Vec2::new(0.0, 20.0), false)).ry.to_f32(), -1.0);
+        assert!(pad_of(&[], &[], m.stick(Vec2::new(1.0, 0.0), false)).rx.to_f32() < 0.0);
+        assert_eq!(m.stick(Vec2::new(0.4, -0.4), false), Vec2::ZERO);
         let inv = MouseSettings { invert_x: true, invert_y: true, ..m };
-        let p = pad_of(&[], &[], inv.stick(Vec2::new(8.0, 8.0)));
+        let p = pad_of(&[], &[], inv.stick(Vec2::new(8.0, 8.0), false));
         assert_eq!((p.rx.to_f32(), p.ry.to_f32()), (1.0, 1.0));
+        assert_eq!(m.stick(Vec2::new(8.0, 8.0), true), Vec2::new(1.0, -1.0));
+        assert_eq!(inv.stick(Vec2::new(8.0, 8.0), true), Vec2::new(-1.0, 1.0));
         assert_eq!(MouseSettings { speed: 9, ..m }.full_px(), 4.0);
         // The quick-select keys: 1 and numpad 8 the top slot, clockwise.
         let slot = |key: KeyCode| {
