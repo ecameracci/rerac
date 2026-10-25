@@ -11,7 +11,7 @@
 //! | [`AmbientOcclusion`] | Original (none: the shade is the artists' baked vertex colours), On (screen-space occlusion from the depth buffer) | crate::ao_render |
 //! | [`Water`] | Original (the GS blend of the water textures), Enhanced (clear by depth, reflections, a sun glint, foam at the shore) | crate::water_render, crate::scene_copy |
 //! | [`Particles`] | Original (sprites cut where they meet the world), Soft (faded by their depth in front of it) | crate::particle_render, crate::scene_copy |
-//! | [`Lighting`] | Original (the game's shadows), Simple (sun shadows in their place), Enhanced (Simple's shadows and every advanced lighting effect) | crate::shadow_render, crate::sun_shadow, crate::tie_lod ([`Lighting::game_shadows`], [`Lighting::sun_shadows`]); crate::sun_rays, crate::gi_render ([`Lighting::enhanced`]; the rays also per level, [`LightShafts`]) |
+//! | [`Lighting`] | Original (the game's shadows), Simple (sun shadows in their place), Enhanced (Simple's shadows and every advanced lighting effect) | crate::shadow_render, crate::sun_shadow, crate::tie_lod ([`Lighting::game_shadows`], [`Lighting::sun_shadows`]); crate::sun_rays, crate::gi_render, crate::post_render ([`Lighting::enhanced`]; the rays also per level, [`LightShafts`]) |
 //!
 //! **The lighting gate:** a later lighting effect (volumetric light, global illumination) runs only while
 //! `GraphicsSettings::lighting.enhanced()` (main world, or the render world's extracted copy), as crate::sun_rays
@@ -222,7 +222,7 @@ pub enum Lighting {
     Original,
     /// Cascaded shadows from the level's key light in their place (crate::sun_shadow).
     Simple,
-    /// Simple's shadows and every advanced lighting effect (crate::sun_rays, and the effects gated on [`Lighting::enhanced`]).
+    /// Simple's shadows and every advanced lighting effect (crate::sun_rays, crate::post_render, and the effects gated on [`Lighting::enhanced`]).
     Enhanced,
 }
 
