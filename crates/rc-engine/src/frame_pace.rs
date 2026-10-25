@@ -22,6 +22,12 @@
 //!   remainder clamp drops the debt), so the whole game (movement, music, speech) ran up to a quarter fast.
 //! * **Unlimited**: no limiter, and the window presents without vsync.
 //!
+//! * **Frame smoothing** (crate::frame_smooth), On and frames faster than the ticks
+//!   (`frame_smooth::faster_than_ticks`): the limit 60 becomes the display's rate (no limiter: vsync paces), `n` is
+//!   the floor at every limit, and the remainder is the frame's alpha (`frame_smooth::TickPhase`, written every
+//!   frame). Otherwise everything above is unchanged. `RC_FRAME_SMOOTH_HZ=<h>` (dev) paces at h frames a second
+//!   without vsync, whatever the limit and the option.
+//!
 //! The limit is kept in the port settings file (`fps_limit = 30|60|120|unlimited`, crate::render_settings).
 //! `RC_FRAME_CAP=0` (or `RC_NOVSYNC=1`, which measures headroom) turns the limiter off whatever the limit; frame-exact
 //! runs (`crate::determinism`) keep their own one tick per update, without the limiter unless `RC_FRAME_CAP=1`
@@ -104,34 +110,48 @@ struct Pace {
     avg: f64,
     /// A ~60 Hz display whose vsync does not pace the loop: the 1/60 s limiter runs anyway (module docs).
     unpaced: bool,
+    /// Frame smoothing is on and the frames come faster than the ticks ([`smooth_state`]).
+    smooth: bool,
+    /// `RC_FRAME_SMOOTH_HZ`.
+    forced: Option<f64>,
+}
+
+impl Pace {
+    fn new(limit: bool, forced: Option<f64>) -> Self {
+        Pace { limit, last: None, acc: 0.0, next: None, period: None, avg: TICK, unpaced: false, smooth: false, forced }
+    }
 }
 
 fn env_is(name: &str, v: &str) -> bool { std::env::var(name).is_ok_and(|x| x.trim() == v) }
 
 impl Plugin for FramePacePlugin {
     fn build(&self, app: &mut App) {
+        app.init_resource::<crate::frame_smooth::TickPhase>();
         if crate::determinism::deterministic() {
             // Frame-exact runs keep their one tick per update; `RC_FRAME_CAP=1` still limits them to 60 frames a second
             // (a capture run otherwise renders as fast as the machine allows).
             app.insert_resource(FrameLimit::Fps60);
             if env_is("RC_FRAME_CAP", "1") {
-                app.insert_resource(Pace { limit: true, last: None, acc: 0.0, next: None, period: None, avg: TICK, unpaced: false }).add_systems(Last, wait);
+                app.insert_resource(Pace::new(true, None)).add_systems(Last, wait);
             }
             return;
         }
-        let limit = !env_is("RC_FRAME_CAP", "0") && !env_is("RC_NOVSYNC", "1");
+        let forced = crate::frame_smooth::forced_hz();
+        if let Some(h) = forced { println!("frame pace: RC_FRAME_SMOOTH_HZ: {h} frames a second, no vsync"); }
+        let limit = forced.is_some() || (!env_is("RC_FRAME_CAP", "0") && !env_is("RC_NOVSYNC", "1"));
         let fps = FrameLimit::startup();
         if fps != FrameLimit::default() { println!("frame pace: FPS limit {} (settings file)", fps.key()); }
         app.insert_resource(fps)
-            .insert_resource(Pace { limit, last: None, acc: 0.0, next: None, period: None, avg: TICK, unpaced: false })
+            .insert_resource(Pace::new(limit, forced))
             .insert_resource(TimeUpdateStrategy::FixedTimesteps(1))
-            .add_systems(First, steps.before(bevy::time::TimeSystems));
-        if limit { app.add_systems(Last, (present_mode, wait)); }
+            .add_systems(First, steps.before(bevy::time::TimeSystems))
+            .add_systems(Last, smooth_state);
+        if limit { app.add_systems(Last, (present_mode, wait.after(smooth_state))); }
     }
 }
 
-/// This frame's ticks (module docs).
-fn steps(mut pace: ResMut<Pace>, mut strategy: ResMut<TimeUpdateStrategy>, fps: Res<FrameLimit>) {
+/// This frame's ticks (module docs), and its place between them for crate::frame_smooth.
+fn steps(mut pace: ResMut<Pace>, mut strategy: ResMut<TimeUpdateStrategy>, fps: Res<FrameLimit>, mut phase: ResMut<crate::frame_smooth::TickPhase>) {
     let now = Instant::now();
     let Some(last) = pace.last.replace(now) else {
         *strategy = TimeUpdateStrategy::FixedTimesteps(1);
@@ -140,7 +160,7 @@ fn steps(mut pace: ResMut<Pace>, mut strategy: ResMut<TimeUpdateStrategy>, fps: 
     let dt = (now - last).as_secs_f64();
     pace.avg += (dt.min(4.0 * TICK) - pace.avg) * 0.05;
     pace.acc += dt / TICK;
-    let round = pace.limit && fps.hz().is_some_and(|h| h <= TICK_HZ);
+    let round = pace.limit && !pace.smooth && fps.hz().is_some_and(|h| h <= TICK_HZ);
     let n = if round {
         let mut n = pace.acc.round().max(0.0);
         if n == 0.0 && pace.acc > 0.25 { n = 1.0; }
@@ -152,6 +172,20 @@ fn steps(mut pace: ResMut<Pace>, mut strategy: ResMut<TimeUpdateStrategy>, fps: 
     pace.acc -= n;
     pace.acc = if round { pace.acc.clamp(-0.5, 0.5) } else { pace.acc.clamp(0.0, 1.0) };
     *strategy = TimeUpdateStrategy::FixedTimesteps(n as u32);
+    if pace.smooth || phase.active {
+        *phase = crate::frame_smooth::TickPhase { ticks: n as u32, alpha: crate::frame_smooth::alpha_from_acc(pace.acc), active: pace.smooth };
+    }
+}
+
+/// Whether frame smoothing interpolates (crate::frame_smooth): the option On and frames faster than the ticks, from
+/// the primary monitor's refresh rate.
+fn smooth_state(mut pace: ResMut<Pace>, fps: Res<FrameLimit>, smoothing: Option<Res<crate::graphics::FrameSmoothing>>, monitors: Query<&Monitor, With<PrimaryMonitor>>) {
+    let refresh = monitors.iter().next().and_then(|m| m.refresh_rate_millihertz).map(|m| m as f64 / 1000.0);
+    let on = smoothing.is_some_and(|s| s.on()) && crate::frame_smooth::faster_than_ticks(pace.forced, pace.limit, *fps, refresh);
+    if pace.smooth != on {
+        pace.smooth = on;
+        println!("frame pace: frame smoothing {} (FPS limit {}, display {refresh:?} Hz)", if on { "interpolating" } else { "idle" }, fps.key());
+    }
 }
 
 /// The limiter's period for a limit of `hz` frames a second on a monitor of `mhz` millihertz (module docs): None at
@@ -167,10 +201,10 @@ fn period_for(mhz: Option<u32>, hz: f64) -> Option<Duration> {
     own
 }
 
-/// The present mode for the limit: vsync, except when unlimited.
-fn present_mode(fps: Res<FrameLimit>, mut windows: Query<&mut Window, With<PrimaryWindow>>) {
+/// The present mode for the limit: vsync, except when unlimited (or `RC_FRAME_SMOOTH_HZ`).
+fn present_mode(fps: Res<FrameLimit>, pace: Res<Pace>, mut windows: Query<&mut Window, With<PrimaryWindow>>) {
     if !fps.is_changed() { return; }
-    let want = if *fps == FrameLimit::Unlimited { PresentMode::AutoNoVsync } else { PresentMode::Fifo };
+    let want = if *fps == FrameLimit::Unlimited || pace.forced.is_some() { PresentMode::AutoNoVsync } else { PresentMode::Fifo };
     for mut w in &mut windows {
         if w.present_mode != want { w.present_mode = want; }
     }
@@ -179,8 +213,14 @@ fn present_mode(fps: Res<FrameLimit>, mut windows: Query<&mut Window, With<Prima
 /// The limiter (module docs).
 fn wait(mut pace: ResMut<Pace>, fps: Res<FrameLimit>, monitors: Query<&Monitor, With<PrimaryMonitor>>) {
     let mhz = monitors.iter().next().and_then(|m| m.refresh_rate_millihertz);
-    let mut period = fps.hz().and_then(|hz| period_for(mhz, hz));
-    if let Some(hz) = fps.hz() {
+    // Smoothing: the limit 60 is the display's rate (vsync paces the frames, faster than the limit by design).
+    let smooth60 = pace.smooth && *fps == FrameLimit::Fps60;
+    let mut period = match pace.forced {
+        Some(h) => Some(Duration::from_secs_f64(1.0 / h)),
+        None if smooth60 => None,
+        None => fps.hz().and_then(|hz| period_for(mhz, hz)),
+    };
+    if let (None, false, Some(hz)) = (pace.forced, smooth60, fps.hz()) {
         if period.is_none() && pace.avg < 0.97 / hz { pace.unpaced = true; }
         if pace.unpaced { period = period.or(Some(Duration::from_secs_f64(1.0 / hz))); }
     }

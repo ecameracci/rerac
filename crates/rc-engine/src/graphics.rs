@@ -13,6 +13,7 @@
 //! | [`Water`] | Original (the GS blend of the water textures), Enhanced (clear by depth, reflections, a sun glint, foam at the shore) | crate::water_render, crate::scene_copy |
 //! | [`Particles`] | Original (sprites cut where they meet the world), Soft (faded by their depth in front of it) | crate::particle_render, crate::scene_copy |
 //! | [`Lighting`] | Original (the game's shadows), Simple (sun shadows in their place), Enhanced (Simple's shadows and every advanced lighting effect) | crate::shadow_render, crate::sun_shadow, crate::tie_lod ([`Lighting::game_shadows`], [`Lighting::sun_shadows`]); crate::sun_rays, crate::gi_render, crate::post_render ([`Lighting::enhanced`]; the rays also per level, [`LightShafts`]) |
+//! | [`FrameSmoothing`] | Off (one picture per 60 Hz tick), On (the display's rate, interpolated between ticks); not in the presets | crate::frame_smooth, crate::frame_pace |
 //!
 //! **The lighting gate:** a later lighting effect (volumetric light, global illumination) runs only while
 //! `GraphicsSettings::lighting.enhanced()` (main world, or the render world's extracted copy), as crate::sun_rays
@@ -20,10 +21,10 @@
 //!
 //! Persisted in the port settings file (`crate::render_settings::save_key`); `RC_HUD`-style switches are not used here
 //! (`RC_HUD=0` already hides the HUD): `RC_GFX_ANTI_ALIASING`, `RC_GFX_HUD`, `RC_GFX_TEXTURES`, `RC_GFX_DETAIL`,
-//! `RC_GFX_DRAW_DISTANCE`, `RC_GFX_AMBIENT_OCCLUSION`, `RC_GFX_WATER`, `RC_GFX_PARTICLES`, `RC_GFX_LIGHTING` (the keys
-//! below), `RC_MSAA=0|2|4|8` (Anti-aliasing Off or that multisampling), `RC_SHADOWS=1|dynamic` (Lighting Original /
-//! Enhanced, the older switch; `0`: crate::shadow_render) and `RC_GFX_PRESET=original|enhanced` override the file at
-//! start.
+//! `RC_GFX_DRAW_DISTANCE`, `RC_GFX_AMBIENT_OCCLUSION`, `RC_GFX_WATER`, `RC_GFX_PARTICLES`, `RC_GFX_LIGHTING`,
+//! `RC_GFX_FRAME_SMOOTHING` (the keys below), `RC_MSAA=0|2|4|8` (Anti-aliasing Off or that multisampling),
+//! `RC_SHADOWS=1|dynamic` (Lighting Original / Enhanced, the older switch; `0`: crate::shadow_render) and
+//! `RC_GFX_PRESET=original|enhanced` override the file at start.
 
 use bevy::prelude::*;
 
@@ -309,6 +310,28 @@ impl GfxOption for Lighting {
     }
 }
 
+/// Frames drawn between two 60 Hz ticks (crate::frame_smooth). Not part of the presets (like the FPS limit, it depends
+/// on the screen): its own resource, not a [`GraphicsSettings`] field.
+#[derive(Resource, Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum FrameSmoothing {
+    /// The game's: one picture per tick, repeated while no tick runs.
+    #[default]
+    Off,
+    /// The display's rate, each frame interpolated between the last two ticks.
+    On,
+}
+
+impl GfxOption for FrameSmoothing {
+    const ALL: &'static [Self] = &[FrameSmoothing::Off, FrameSmoothing::On];
+    const KEY: &'static str = "frame_smoothing";
+    fn key(self) -> &'static str {
+        match self {
+            FrameSmoothing::Off => "off",
+            FrameSmoothing::On => "on",
+        }
+    }
+}
+
 /// Lighting Enhanced's light shafts (crate::sun_rays, crate::volumetric_light) by level index: on where a sun lights
 /// open air, off where they only veil or streak the view (the play-test of 2026-10-26). docs/plan/graphics_options.md.
 pub const SHAFT_LEVELS: [(bool, &str); 19] = [
@@ -367,6 +390,13 @@ fn update_shafts(
         println!("graphics: light shafts {} (level {level:02} {why}{}; RC_LIGHT_SHAFTS=0|1 forces)", if on { "on" } else { "off" }, if space { ", space scene" } else { "" });
     }
     if out.0 != on { out.0 = on; }
+}
+
+impl FrameSmoothing {
+    pub fn on(self) -> bool { self == FrameSmoothing::On }
+    /// The settings file's value, then `RC_GFX_FRAME_SMOOTHING` over it.
+    pub fn startup() -> Self { env_value(file_value(FrameSmoothing::Off)) }
+    pub fn save(self) { save(self); }
 }
 
 /// A preset: a value for every option but [`Lighting`].
@@ -597,6 +627,8 @@ mod tests {
         for &v in Particles::ALL { assert_eq!(Particles::parse(v.key()), Some(v)); }
         for &v in Lighting::ALL { assert_eq!(Lighting::parse(v.key()), Some(v)); }
         assert_eq!(Lighting::ALL.iter().map(|v| v.key()).collect::<Vec<_>>(), ["original", "simple", "enhanced"]);
+        for &v in FrameSmoothing::ALL { assert_eq!(FrameSmoothing::parse(v.key()), Some(v)); }
+        assert_eq!(FrameSmoothing::ALL[0], FrameSmoothing::default());
         assert!(!AmbientOcclusion::Original.on() && Water::Enhanced.on());
         assert_eq!(Detail::from_index(9), Detail::Original);
         assert_eq!(AntiAliasing::from_samples(0), AntiAliasing::Off);

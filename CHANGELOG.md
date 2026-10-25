@@ -14,6 +14,7 @@
 - Port Options: Lighting Enhanced adds global illumination: light bounces once between nearby surfaces, so a coloured wall tints the ground beside it and lit ground brightens the shaded side of what stands over it.
 - Port Options: Lighting Enhanced also polishes the 3D picture: lamps, glows and explosions get a soft bloom, a gentle film-like grade adds a little contrast and colour without clipping the whites, and a light sharpening brings out detail. The HUD, menus and movies are unchanged.
 - Port Options has a new graphics row, Draw distance, below Detail distance: Far, Farther and Maximum draw the level's scenery, buildings and plants farther away (×1.5, ×2, ×4), and fade it out at the new limit instead of popping. Characters, objects and particles keep the original distance. Original still looks like the PS2 game; the presets leave the row as it is.
+- New Port Options row Frame smoothing (Off / On, after FPS limit; Off by default): on a display faster than 60 Hz, On draws every frame the display can show, with the camera, Ratchet, every object's movement and animation, and the particles placed between the game's 60 ticks a second instead of repeating each tick's picture. The game itself runs exactly as with Off; the picture is up to one tick (16.7 ms) behind. The HUD, menus, shadows, water, sky spin and texture animations still move 60 times a second. Cuts, respawns and level changes are drawn without blending across them.
 
 ## v0.4.3-alpha
 

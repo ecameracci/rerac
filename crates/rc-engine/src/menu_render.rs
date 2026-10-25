@@ -581,6 +581,7 @@ struct PortSettings<'a, 'w> {
     display: &'a mut ResMut<'w, crate::display::DisplaySettings>,
     gfx: &'a mut ResMut<'w, crate::graphics::GraphicsSettings>,
     fps: Option<&'a mut ResMut<'w, crate::frame_pace::FrameLimit>>,
+    smoothing: Option<&'a mut ResMut<'w, crate::graphics::FrameSmoothing>>,
     qs: Option<&'a mut ResMut<'w, crate::gameplay::QuickSelectMode>>,
     supported: SupportedMsaa,
     /// The main menu's Mods page (crate::mods).
@@ -602,6 +603,7 @@ impl PortSettings<'_, '_> {
         menu.set_port_value(Setting::CutsceneAspect, self.display.cutscenes.index());
         menu.set_port_value(Setting::Fullscreen, self.display.fullscreen as u8);
         if let Some(f) = self.fps.as_deref() { menu.set_port_value(Setting::FrameLimit, f.index()); }
+        if let Some(s) = self.smoothing.as_deref() { menu.set_port_value(Setting::FrameSmoothing, crate::graphics::GfxOption::index(**s)); }
         if let Some(s) = self.strafing.as_deref() { menu.set_port_value(Setting::Strafing, s.0.index()); }
         if let Some(q) = self.qs.as_deref() { menu.set_port_value(Setting::QuickSelect, q.index()); }
         if let Some(m) = self.mouse.as_deref() {
@@ -630,6 +632,14 @@ impl PortSettings<'_, '_> {
             if ***f != want {
                 ***f = want;
                 println!("menus: frame {frame}: Port Options: FPS limit {want:?}");
+                want.save();
+            }
+        }
+        if let (Some(v), Some(s)) = (menu.port_value(Setting::FrameSmoothing), self.smoothing.as_mut()) {
+            let want = <crate::graphics::FrameSmoothing as crate::graphics::GfxOption>::from_index(v);
+            if ***s != want {
+                ***s = want;
+                println!("menus: frame {frame}: Port Options: frame smoothing {want:?}");
                 want.save();
             }
         }
@@ -701,6 +711,7 @@ type PortParams<'w> = (
     ResMut<'w, crate::display::DisplaySettings>,
     ResMut<'w, crate::graphics::GraphicsSettings>,
     Option<ResMut<'w, crate::frame_pace::FrameLimit>>,
+    Option<ResMut<'w, crate::graphics::FrameSmoothing>>,
     Option<ResMut<'w, crate::gameplay::QuickSelectMode>>,
     Option<ResMut<'w, crate::mods::Mods>>,
     Option<ResMut<'w, crate::strafing::StrafingSetting>>,
@@ -719,7 +730,7 @@ fn menu_frame(
     source: Res<crate::game_camera::CameraSource>,
     supported: Option<Res<SupportedMsaa>>,
     (mut vr, mut feed, mut view, mut audio): InteractParams,
-    (mut display, mut gfx, mut fps, mut qs, mut mods, mut strafing, mut mouse): PortParams,
+    (mut display, mut gfx, mut fps, mut smoothing, mut qs, mut mods, mut strafing, mut mouse): PortParams,
     mut widgets3d: ResMut<crate::menu_models::GadgetsPreview>,
     (mut fer, movies, mut app_exit): (ResMut<crate::saves::FrontEndRt>, Option<Res<crate::movie_render::MovieState>>, MessageWriter<AppExit>),
 ) {
@@ -731,7 +742,7 @@ fn menu_frame(
         if let Some(k) = slot_key.as_deref_mut() { k.0 = None; }
         let busy = movies.as_deref().is_some_and(|m| m.busy());
         let fer = &mut *fer;
-        let mut port = PortSettings { display: &mut display, gfx: &mut gfx, fps: fps.as_mut(), qs: qs.as_mut(), supported: supported.as_deref().cloned().unwrap_or_default(), mods: mods.as_mut(), strafing: strafing.as_mut(), mouse: mouse.as_mut() };
+        let mut port = PortSettings { display: &mut display, gfx: &mut gfx, fps: fps.as_mut(), smoothing: smoothing.as_mut(), qs: qs.as_mut(), supported: supported.as_deref().cloned().unwrap_or_default(), mods: mods.as_mut(), strafing: strafing.as_mut(), mouse: mouse.as_mut() };
         front_end_frame(rt, &mut mm, &mut play, gs, fer, &pad, &source, busy, audio.as_deref_mut(), &mut port, &mut app_exit);
         mm.state.end_frame();
         mm.loop_frame += 1;
@@ -883,7 +894,7 @@ fn menu_frame(
                 // The close's post-action 3 / 4 / 5 / 6 / 7: `FadeToBlack(ticks(16))` over the menu image, then the action.
                 post_fade_step(rt, &mut mm, &mut play, gs, sess.hp, audio.as_deref_mut(), frame, true);
             } else if let Some(menu) = rt.menu.as_mut() {
-                let mut port = PortSettings { display: &mut display, gfx: &mut gfx, fps: fps.as_mut(), qs: qs.as_mut(), supported: supported.as_deref().cloned().unwrap_or_default(), mods: mods.as_mut(), strafing: strafing.as_mut(), mouse: mouse.as_mut() };
+                let mut port = PortSettings { display: &mut display, gfx: &mut gfx, fps: fps.as_mut(), smoothing: smoothing.as_mut(), qs: qs.as_mut(), supported: supported.as_deref().cloned().unwrap_or_default(), mods: mods.as_mut(), strafing: strafing.as_mut(), mouse: mouse.as_mut() };
                 let gfx_before = port.rows_in(menu);
                 // The card and the save inputs moved into the menu for its tick (crate::saves).
                 saves_in(menu, &play);

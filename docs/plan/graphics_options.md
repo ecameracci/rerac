@@ -17,6 +17,7 @@ stored; it is read back from the options. Options never change game state: the g
 |---|---|---|---|
 | Preset | Original / Enhanced / (Custom) | every row Original | done |
 | Fullscreen, Resolution, Gameplay aspect, Cutscene aspect, FPS limit | | | exist (not part of the preset: they depend on the screen) |
+| Frame smoothing (after FPS limit) | Off / On | Off: the game's 60 Hz ticks, each tick's picture shown until the next (pacing unchanged) | built (`frame_smooth.rs`, the pacing in `frame_pace.rs`): On, when frames come faster than the ticks (a display above 60 Hz with FPS limit 60 or 120, Unlimited, `RC_NOVSYNC=1`, `RC_FRAME_SMOOTH_HZ`), the limiter follows the display instead of 60 and each frame draws the last two ticks blended by the time since the last tick (`acc / tick`): the camera (lerp + slerp), every moby's instance record and joint palette (Ratchet, his attachments, statics, dynamics, extras) and the particles' positions. The game state never changes: only the render inputs (`GlobalTransform`, the shader buffers) are overwritten in `Last` and put back in `First`. Not part of the preset; at or below 60 Hz On draws as Off (byte-identical) |
 | Anti-aliasing | Original / Off / 2x / 4x / 8x | the game's two full-screen bilinear copies, drawn at the frame's resolution: the AA blit A (`PutAABlitPacket_A` 0x223200, before the HUD: U = X across, 416 → 415 lines down) and the display copy B (`PutAABlitPacket_B` 0x223260, every frame: U = X across, 416 → 448 lines). Off = neither; 2x..8x = multisampling | done (`aa_blit.rs`, `aa_blit.wgsl`: four one-axis draws, each frame pixel reads the box of one game pixel a GS bilinear tap is; at 416 lines the vertical is the GS's result; checked against an independent reference at 416p, within 3 levels over four 8-bit draws). Off byte-identical to the earlier build |
 | Detail distance | Original / Far / Farther / Maximum | the game's LOD distances (×1, ×2, ×4; Maximum ×1000, past every draw distance) | done: tfrag (`trunc(D·1024)` thresholds and the morph constants), tie (class near/mid/far), moby (`lod_trans << 10`, `moby_lod::set_lod_scale`; drawing only: every joint is evaluated whatever LOD is drawn), shrub mesh/billboard (F' = F × scale; within 24 units of D the class draws as one without a billboard: `shrub_render::detail_fade`, shrub.wgsl, shrub_billboard.wgsl; the factor rides in `tex_mode.y`). Draw distances are the Draw distance row's. Original byte-identical to the earlier build |
 | Draw distance | Original / Far / Farther / Maximum | the game's draw distances (×1, ×1.5, ×2, ×4; see "Draw distances" below) | done: tfrag (`tfrag_lod::DRAW_DISTANCE`), tie (per-instance distance), shrub (D and both fade bands), the main camera's far plane (`GameProjection::draw_scale`); above ×1 tfrags and ties fade out over the last 16·s units (4×4 ordered dither, tfrag.wgsl / tie.wgsl); the factor rides in `tex_mode.z`. Mobys, particles, the sky and the level fog are not scaled. Not part of the preset yet. Original byte-identical to the earlier build (8 views on Novalis, Kerwan, Rilgar, Pokitaru, 2026-10-24) |
@@ -42,8 +43,8 @@ Lighting, as it did not touch the Shadows row before it (`GraphicsSettings::with
   the old `msaa = N` key is read once when `anti_aliasing` is missing (N > 1 keeps that multisampling, else Original).
 * Persisted keys in the port settings file: `anti_aliasing` (`original`, `off`, `2x`, `4x`, `8x`), `hud`, `textures`,
   `detail`, `draw_distance`, `ambient_occlusion`, `water`, `particles` (values: the lower-case names), `lighting`
-  (`original`, `simple`, `enhanced`). `RC_GFX_ANTI_ALIASING`, `RC_MSAA=0|2|4|8`, `RC_GFX_HUD`, `RC_GFX_TEXTURES`,
-  `RC_GFX_DETAIL`, `RC_GFX_DRAW_DISTANCE`, `RC_GFX_AMBIENT_OCCLUSION`, `RC_GFX_WATER`, `RC_GFX_PARTICLES`, `RC_GFX_LIGHTING`,
+  (`original`, `simple`, `enhanced`), `frame_smoothing` (`off`, `on`). `RC_GFX_ANTI_ALIASING`, `RC_MSAA=0|2|4|8`, `RC_GFX_HUD`, `RC_GFX_TEXTURES`,
+  `RC_GFX_DETAIL`, `RC_GFX_DRAW_DISTANCE`, `RC_GFX_AMBIENT_OCCLUSION`, `RC_GFX_WATER`, `RC_GFX_PARTICLES`, `RC_GFX_LIGHTING`, `RC_GFX_FRAME_SMOOTHING`,
   `RC_GFX_PRESET=original|enhanced` (Lighting still from the file) override at start; the older `RC_SHADOWS=1|dynamic`
   sets Lighting Original / Enhanced (under `RC_GFX_LIGHTING`), and `RC_SHADOWS=0` is a developer switch for no
   shadows at all (`ShadowSettings::off`; the row has no Off). Migration: the Shadows row's `shadows` key is read once
@@ -109,7 +110,15 @@ Lighting, as it did not touch the Shadows row before it (`GraphicsSettings::with
   apart; Veldin's from −65° at 20°, its sunset from 1° at 8°: 66°. Only the port's sun light moves; the game's baked
   vertex lighting keeps the key light. Checked with `RC_SUN_DEBUG=1` facing Gemlik's sun: the shadows now run toward
   the camera, away from the sun (before: across the view); Lighting Original byte-identical on Gemlik and Drek's fleet.
-* The Port Options page (seventeen rows) keeps the Camera sub-page's frame and scrolls, four rows at a time (port.rs `VISIBLE`).
+* Frame smoothing (2026-10-25): what is drawn between ticks, and what stays at the tick rate (the HUD and menus,
+  shadows, the sky's spin and stars, seas and water, shrub sway, texture scrolls and animations, effect quads), is
+  listed in `frame_smooth.rs`'s module doc; left: G-REN-150..152. A tick's move above 8 units or 45° (camera, moby),
+  4 units (a particle), a moby's changed palette or colour mode, a joint turned over 45° or shown / hidden, a level
+  change are discontinuities: drawn as the tick, not blended. It adds latency: a frame shows the tick before the last
+  plus the elapsed fraction, so up to one tick (16.7 ms, ~8.3 ms on average) after Off. Evidence (Novalis, frame-exact):
+  Off and On at 60 Hz byte-identical to the earlier build; at 120 Hz (`RC_DUMP_TICKS=1,0`) the same play trace as Off
+  with every frame distinct (the camera half a tick between); a death reload's 120-unit camera cut drawn as the tick.
+* The Port Options page (twenty-one rows) keeps the Camera sub-page's frame and scrolls, four rows at a time (port.rs `VISIBLE`).
 
 ## Draw distances
 

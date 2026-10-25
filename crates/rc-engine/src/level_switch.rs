@@ -155,7 +155,7 @@ fn run_level_startup(world: &mut World) {
 }
 
 /// The swap (module docs).
-fn apply_switch(world: &mut World) {
+pub(crate) fn apply_switch(world: &mut World) {
     let due = world.get_resource::<LevelChange>().is_some_and(|c| c.swap && c.load.as_ref().is_some_and(|l| l.result.is_some()));
     if !due { return; }
     let load = world.resource_mut::<LevelChange>().load.take().unwrap();

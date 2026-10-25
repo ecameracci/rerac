@@ -1,7 +1,7 @@
 //! **Port-only** (not in the game): the "Port Options" page, for settings the PS2 never had (the graphics options and
 //! their preset, anti-aliasing, detail and draw distance, ambient occlusion, water, particles, the lighting (the game's
 //! shadows, sun shadows, or sun shadows with the advanced lighting effects),
-//! the gameplay and cutscene aspects, the render resolution, fullscreen, the FPS limit and, last, the gameplay rows
+//! the gameplay and cutscene aspects, the render resolution, fullscreen, the FPS limit, frame smoothing and, last, the gameplay rows
 //! Strafing and Quick Select, the ring's hold of the world, then the mouse look's direction and speed).
 //! Spec: docs/plan/menus.md "Port-only settings"; the graphics rows: docs/plan/graphics_options.md (every row's first
 //! value is the game's own look).
@@ -138,6 +138,7 @@ pub mod text {
     pub const FPS_120: i32 = -0x1a3;
     pub const UNLIMITED: i32 = -0x1a5;
     pub const SIMPLE: i32 = -0x121;
+    pub const FRAME_SMOOTHING: i32 = -0x1a6;
     pub const AMBIENT_OCCLUSION: i32 = -0x1b0;
     pub const WATER: i32 = -0x1b1;
     pub const PARTICLES: i32 = -0x1b2;
@@ -211,6 +212,7 @@ pub mod text {
             FPS_120 => b"120",
             UNLIMITED => b"Unlimited",
             SIMPLE => b"Simple",
+            FRAME_SMOOTHING => b"Frame smoothing",
             AMBIENT_OCCLUSION => b"Ambient occlusion",
             WATER => b"Water",
             PARTICLES => b"Particles",
@@ -279,6 +281,9 @@ pub enum Setting {
     /// The most frames drawn a second: value 0 30, 1 60 (the default, the game's tick rate), 2 120, 3 unlimited
     /// (no vsync). The game still ticks at 60 Hz.
     FrameLimit,
+    /// Frames between two ticks: value 0 Off (the game's: each tick's picture repeated), 1 On (the display's rate, each
+    /// frame interpolated between the last two ticks; the game state is the same).
+    FrameSmoothing,
     /// L2 / R2 on foot: value 0 Classic (the game's look stance and crouch), 1 Modern (Ratchet & Clank 3's strafe,
     /// `crate::hero::strafe::Strafing`).
     Strafing,
@@ -309,6 +314,7 @@ pub const ENTRIES: &[Entry] = &[
     Entry { setting: Setting::Aspect, label: text::ASPECT, values: &[text::ASPECT_4_3, text::ASPECT_16_10, text::ASPECT_16_9, text::ASPECT_FILL] },
     Entry { setting: Setting::CutsceneAspect, label: text::CUTSCENE_ASPECT, values: &[text::ASPECT_4_3, text::ASPECT_16_10, text::ASPECT_16_9, text::ASPECT_FILL] },
     Entry { setting: Setting::FrameLimit, label: text::FPS_LIMIT, values: &[text::FPS_30, text::FPS_60, text::FPS_120, text::UNLIMITED] },
+    Entry { setting: Setting::FrameSmoothing, label: text::FRAME_SMOOTHING, values: &[text::OFF, text::ON] },
     Entry { setting: Setting::AntiAliasing, label: text::ANTI_ALIASING, values: &[text::ORIGINAL, text::OFF, text::X2, text::X4, text::X8] },
     Entry { setting: Setting::Detail, label: text::DETAIL, values: &[text::ORIGINAL, text::FAR, text::FARTHER, text::MAXIMUM] },
     Entry { setting: Setting::DrawDistance, label: text::DRAW_DISTANCE, values: &[text::ORIGINAL, text::FAR, text::FARTHER, text::MAXIMUM] },

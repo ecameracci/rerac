@@ -64,6 +64,7 @@ mod level_switch;
 mod media_render;
 mod draw_stats;
 mod frame_pace;
+mod frame_smooth;
 mod graphics;
 mod menu_models;
 mod menu_render;
@@ -215,6 +216,8 @@ fn main() -> anyhow::Result<()> {
     .add_plugins(determinism::DeterminismPlugin)
     // One game tick per drawn frame, at most 60 frames a second (crate::frame_pace).
     .add_plugins(frame_pace::FramePacePlugin)
+    // Frame smoothing: frames between two ticks interpolated (crate::frame_smooth; the Port Options' row).
+    .add_plugins(frame_smooth::FrameSmoothPlugin)
     .add_plugins(no_clusters::NoClustersPlugin)
     .add_plugins(graphics::GraphicsPlugin)
     .add_plugins(draw_stats::DrawStatsPlugin)
