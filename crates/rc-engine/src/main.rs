@@ -81,6 +81,7 @@ mod mods;
 mod movie_render;
 mod no_clusters;
 mod occlusion;
+mod particle_lights;
 mod particle_render;
 mod play_camera;
 mod render_settings;
@@ -260,6 +261,8 @@ fn main() -> anyhow::Result<()> {
     .add_plugins(sky_render::SkyRenderPlugin)
     .add_plugins(display_blend::DisplayBlendPlugin)
     .add_plugins(particle_render::ParticlePlugin)
+    // Particles Enhanced: the bright effects light the world (crate::particle_lights).
+    .add_plugins(particle_lights::ParticleLightsPlugin)
     .add_plugins(water_render::WaterPlugin)
     .add_plugins(sea_render::SeaRenderPlugin)
     .add_plugins(fx_draw::FxDrawPlugin)

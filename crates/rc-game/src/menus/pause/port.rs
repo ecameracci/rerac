@@ -260,7 +260,8 @@ pub enum Setting {
     AmbientOcclusion,
     /// The level-code water: value 0 Original, 1 Enhanced.
     Water,
-    /// Particle sprites against the world: value 0 Original (hard cut), 1 Soft.
+    /// Particle sprites against the world: value 0 Original (hard cut), 1 Soft, 2 Enhanced (Soft, and bright effects
+    /// light the world around them).
     Particles,
     /// Extra plants on the grassy ground: value 0 Original (the level's own only), 1 Moderate, 2 Lush.
     Foliage,
@@ -329,7 +330,7 @@ pub const ENTRIES: &[Entry] = &[
     Entry { setting: Setting::Textures, label: text::TEXTURES, values: &[text::ORIGINAL, text::SMOOTH, text::SHARP] },
     Entry { setting: Setting::Hud, label: text::HUD, values: &[text::ORIGINAL, text::SHARP_PIXELS] },
     Entry { setting: Setting::AmbientOcclusion, label: text::AMBIENT_OCCLUSION, values: &[text::ORIGINAL, text::ON] },
-    Entry { setting: Setting::Particles, label: text::PARTICLES, values: &[text::ORIGINAL, text::SOFT] },
+    Entry { setting: Setting::Particles, label: text::PARTICLES, values: &[text::ORIGINAL, text::SOFT, text::ENHANCED] },
     Entry { setting: Setting::Lighting, label: text::LIGHTING, values: &[text::ORIGINAL, text::SIMPLE, text::ENHANCED] },
     Entry { setting: Setting::Water, label: text::WATER, values: &[text::ORIGINAL, text::ENHANCED] },
     Entry { setting: Setting::Foliage, label: text::FOLIAGE, values: &[text::ORIGINAL, text::MODERATE, text::LUSH] },

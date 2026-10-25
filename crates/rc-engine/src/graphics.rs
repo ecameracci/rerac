@@ -11,7 +11,7 @@
 //! | [`DrawDistance`] | Original (the game's draw distances), Far (×1.5), Farther (×2), Maximum (×4), the new end faded | crate::tfrag_lod, crate::tie_lod, crate::shrub_render, crate::game_camera (the far plane); not mobys or particles (their drawn flags are game state) |
 //! | [`AmbientOcclusion`] | Original (none: the shade is the artists' baked vertex colours), On (screen-space occlusion from the depth buffer) | crate::ao_render |
 //! | [`Water`] | Original (the GS blend of the water textures), Enhanced (clear by depth, reflections, a sun glint, foam at the shore; under water: absorption, caustics, light shafts) | crate::water_render, crate::sea_water (the seas), crate::scene_copy, crate::underwater_render |
-//! | [`Particles`] | Original (sprites cut where they meet the world), Soft (faded by their depth in front of it) | crate::particle_render, crate::scene_copy |
+//! | [`Particles`] | Original (sprites cut where they meet the world), Soft (faded by their depth in front of it), Enhanced (Soft, and bright effects light the world) | crate::particle_render, crate::scene_copy, crate::particle_lights |
 //! | [`Foliage`] | Original (the level's own plants only), Moderate, Lush (grass clumps on the grassy ground and more of the level's small plants) | crate::foliage |
 //! | [`Lighting`] | Original (the game's shadows), Simple (sun shadows in their place), Enhanced (Simple's shadows and every advanced lighting effect) | crate::shadow_render, crate::sun_shadow, crate::tie_lod ([`Lighting::game_shadows`], [`Lighting::sun_shadows`]); crate::sun_rays, crate::gi_render, crate::post_render ([`Lighting::enhanced`]; the rays also per level, [`LightShafts`]) |
 //! | [`FrameSmoothing`] | Off (one picture per 60 Hz tick), On (the display's rate, interpolated between ticks); not in the presets | crate::frame_smooth, crate::frame_pace |
@@ -267,12 +267,36 @@ two_valued!(
     /// Clear by depth, with reflections, a sun glint and foam at the shore (crate::water_render).
     Enhanced = "enhanced"
 );
-two_valued!(
-    /// How smoke and other sprites meet the world.
-    Particles, "particles",
+/// How smoke and other sprites meet the world, and whether bright effects light it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum Particles {
+    #[default]
+    Original,
     /// Faded by their distance in front of the world behind them (crate::particle_render).
-    Soft = "soft"
-);
+    Soft,
+    /// Soft, and the bright effects (flashes, fireballs, additive sprites) light the opaque world around them
+    /// (crate::particle_lights).
+    Enhanced,
+}
+
+impl GfxOption for Particles {
+    const ALL: &'static [Self] = &[Particles::Original, Particles::Soft, Particles::Enhanced];
+    const KEY: &'static str = "particles";
+    fn key(self) -> &'static str {
+        match self {
+            Particles::Original => "original",
+            Particles::Soft => "soft",
+            Particles::Enhanced => "enhanced",
+        }
+    }
+}
+
+impl Particles {
+    /// The soft fade (Soft and Enhanced).
+    pub fn on(self) -> bool { self != Particles::Original }
+    /// The effect lights (Enhanced).
+    pub fn lights(self) -> bool { self == Particles::Enhanced }
+}
 
 /// The shadows and the port's lighting effects (the Port Options "Lighting" row; module docs).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -676,6 +700,9 @@ mod tests {
         assert_eq!(FrameSmoothing::ALL[0], FrameSmoothing::default());
         for &v in Foliage::ALL { assert_eq!(Foliage::parse(v.key()), Some(v)); }
         assert!(!AmbientOcclusion::Original.on() && Water::Enhanced.on());
+        assert_eq!(Particles::parse("enhanced"), Some(Particles::Enhanced));
+        assert!(Particles::Enhanced.on() && Particles::Enhanced.lights() && !Particles::Soft.lights());
+        assert_eq!(GraphicsSettings { particles: Particles::Enhanced, ..GraphicsSettings::default().with_preset(Preset::Enhanced) }.preset(), Preset::Custom);
         assert_eq!(Detail::from_index(9), Detail::Original);
         assert_eq!(AntiAliasing::from_samples(0), AntiAliasing::Off);
         assert_eq!(AntiAliasing::from_samples(4).samples(), 4);
