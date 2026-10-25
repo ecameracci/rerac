@@ -111,7 +111,7 @@ fn rows_to_euler(rows: &[V4; 4]) -> [f32; 3] { to_f32x3(sv::rows_euler(rows)) }
 /// The throw's rotation (`0x236da0`): the identity rows through the source rows (`0x1fa328(M, src, M)`: M = src),
 /// row 3 = (0, 0, 0, 1) (`0x1fa298`), back to Euler (`0x2721f0`). The source is the camera's Euler 0x167250
 /// (look stance) or Ratchet's moby rows +0xc0.
-pub fn launch_euler(src: &[V4; 4]) -> [f32; 3] {
+pub fn launch_euler(src: &[V4]) -> [f32; 3] {
     let z = Pf::ZERO;
     rows_to_euler(&[src[0], src[1], src[2], [z, z, z, Pf::ONE]])
 }
@@ -225,11 +225,9 @@ pub fn throw_wrench(h: &mut Hero, env: &Env, _from_check: bool) {
     let look = (h.state == 1 || h.state == 0x1e) && ticks(20) < h.timer;
     let cam = env.world.and_then(|w| w.camera());
     let (mut yaw, mut pitch) = (0.0f32, 0.0f32);
-    let mut cam_euler = [0.0f32; 3];
     let moby_rows = h.moby_rows;
     if look {
         let (cpos, cyaw, cpitch) = cam.unwrap_or(([0.0; 3], env.cam_yaw.to_f32(), 0.0));
-        cam_euler = [0.0, cpitch, cyaw];
         // The in-hand update's look line (state 1: from the camera, 10 units along its view; +0x7e / +0x50).
         let d = polar(10.0, cyaw, -cpitch);
         let a = from_f32x3(cpos);
@@ -260,9 +258,14 @@ pub fn throw_wrench(h: &mut Hero, env: &Env, _from_check: bool) {
     f.wall_close = h.wall_ahead[0] < 1.2 && f32::from_bits(0x3f29_c91f) < h.wall_ahead[1] && h.f5a4 == 0;
     if look {
         f.dir = polar(1.0, yaw, pitch);
-        // The camera's Euler 0x167250 (roll, pitch — positive looking down —, yaw; roll is 0 on foot) through
-        // its rows: the wrench's model x axis points along the view, its z axis along the view's up.
-        f.euler = launch_euler(&sv::euler_rows(from_f32x3(cam_euler)));
+        // The camera's Euler 0x167250 (roll, pitch — positive looking down —, yaw) through its rows: the wrench's
+        // model x axis points along the view, its z axis along the view's up. The rows keep the camera's roll, which
+        // on the Magneboots is Ratchet's tilted up (the view's up), not the world's. The mirror option flips the
+        // camera's left row after that Euler is taken (`CameraUpdate` 0x20eca8), so undo the flip: the game's throw
+        // reads the unflipped Euler.
+        let mut rows = env.cam_rows;
+        if env.mirror { rows[1] = rows[1].map(|x| -x); }
+        f.euler = launch_euler(&rows);
     } else {
         // 0x248da0(1.0): along the moby's yaw (+0x48) — on the Magneboots its model x axis (the rows of +0x40);
         // the rotation from Ratchet's moby rows +0xc0.
@@ -722,6 +725,35 @@ mod tests {
         // Level (0°), both agree.
         let game = turn_local(turn_local([0.0, 0.0, 0.3], [0.0, 0.0, 0.4]), [0.0, 0.0, 0.4]);
         assert!((game[0].abs() < 1e-5) && (game[1].abs() < 1e-5) && (game[2] - 1.1).abs() < 1e-4, "{game:?}");
+    }
+
+    /// The look stance's throw takes the wrench's rotation from the camera's rows: on a magnetic wall (the view's
+    /// up along +y, a 90° roll) the wrench's model z axis is that up, not the world's (`0x236da0`: the camera Euler
+    /// 0x167250 through `0x1fa030`; a zero roll is only the upright case). The mirror option flips the camera's left
+    /// row after that Euler is taken (`CameraUpdate` 0x20eca8), so the throw takes the unflipped frame either way.
+    #[test]
+    fn look_throw_follows_the_camera_up() {
+        let coll = floor(100.0, 100, 106, 100, 106);
+        // Looking along +x on a wall whose normal is +y: forward, left, up.
+        let (fwd, left, up) = (from_f32x3([1.0, 0.0, 0.0]), from_f32x3([0.0, 0.0, -1.0]), from_f32x3([0.0, 1.0, 0.0]));
+        for mirror in [false, true] {
+            let mut h = Hero::spawn([410.0, 410.0, 100.0], 0.0);
+            h.state = 1;
+            h.timer = ticks(30);
+            h.items.slot = items::HandSlot { item: Some(wrench()), fire_mask: button::SQUARE, state: 2, id: 8, ..Default::default() };
+            let pad = crate::pad::PadState::default();
+            // The camera publishes the left row flipped under the mirror option (follow_camera 0x20eca8).
+            let cam_rows = [fwd, if mirror { left.map(|x| -x) } else { left }, up];
+            let env = Env { coll: &coll, pad: &pad, cam_yaw: Pf::ZERO, cam_rows, mirror, death_z: Pf::ZERO, mobys: None, hero_moby: None, water: None, world: None };
+            throw_wrench(&mut h, &env, false);
+            let it = h.items.slot.item.as_ref().unwrap();
+            assert_eq!(it.mstate, OUT);
+            let rows = sv::euler_rows(from_f32x3(it.flight.euler));
+            for (i, want) in [(0, [1.0, 0.0, 0.0]), (2, [0.0, 1.0, 0.0])] {
+                let got = to_f32x3(rows[i]);
+                for k in 0..3 { assert!((got[k] - want[k]).abs() < 1e-3, "mirror {mirror}, row {i}: {got:?} vs {want:?} (euler {:?})", it.flight.euler); }
+            }
+        }
     }
 
     /// The look stance after 20 ticks: □ throws (no state change) along the camera with voice 0x1b; before 20 ticks
