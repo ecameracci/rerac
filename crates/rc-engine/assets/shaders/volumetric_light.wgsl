@@ -4,7 +4,8 @@
 // dithered steps packed toward the camera, lit steps adding σ·exp(−σt)·dt, each weighted by the shadow around it
 // (crate::volumetric_light::Shafts: bold next to long shadows, faint in open lit air), times the Henyey-Greenstein phase;
 // rgb = the in-scattered light, a = the sample's view distance. `composite` (full resolution): a 4×4 depth-aware blur
-// of that target, added to the frame. view.extra.xyz = toward the light (world).
+// of that target, less the share it has in common with its surroundings (crate::volumetric_light::flatten), added to
+// the frame. view.extra.xyz = toward the light (world).
 
 #import bevy_core_pipeline::fullscreen_vertex_shader::FullscreenVertexOutput
 #import rerac::fx_view::{view, fx_view_pos, fx_noise}
@@ -27,6 +28,8 @@ struct VolParams {
     shape: vec4<f32>,
     // crate::volumetric_light::SeaLevel: its y, 1 while known.
     sea: vec4<f32>,
+    // crate::volumetric_light::flatten: the share taken out, the surroundings' radius (target pixels).
+    flat: vec4<f32>,
 }
 
 #ifdef MULTISAMPLED
@@ -163,6 +166,26 @@ fn view_dist(p: vec2<i32>) -> f32 {
     return length(fx_view_pos(vec2<f32>(p) + 0.5, d));
 }
 
+// crate::volumetric_light::flatten's surroundings: the depth-weighted mean of the pixel's own light and FLAT_TAPS
+// march samples on a golden-angle spiral disc of vol.flat.y target pixels (fixed, so stable from frame to frame).
+const FLAT_TAPS: i32 = 12;
+fn surroundings(centre: vec2<f32>, z: f32, own: vec3<f32>) -> vec3<f32> {
+    let lo_size = vec2<i32>(textureDimensions(scatter_tex));
+    var sum = own;
+    var weight = 1.0;
+    for (var i = 0; i < FLAT_TAPS; i += 1) {
+        let k = f32(i) + 0.5;
+        let a = k * 2.3999632;
+        let o = vec2<f32>(cos(a), sin(a)) * vol.flat.y * sqrt(k / f32(FLAT_TAPS));
+        let q = clamp(vec2<i32>(round(centre + o)), vec2<i32>(0), lo_size - 1);
+        let s = textureLoad(scatter_tex, q, 0);
+        let w = exp(-abs(s.a - z) / (0.05 * min(z, s.a) + 0.1));
+        sum += s.rgb * w;
+        weight += w;
+    }
+    return sum / weight;
+}
+
 @fragment
 fn composite(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     let p = vec2<i32>(floor(in.position.xy));
@@ -190,7 +213,8 @@ fn composite(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
             if (dz < nearest_dz) { nearest_dz = dz; nearest = s.rgb; }
         }
     }
-    let light = select(nearest, sum / weight, weight > 1.0e-3);
+    let own = select(nearest, sum / weight, weight > 1.0e-3);
+    let light = own - vol.flat.x * min(own, surroundings(centre, z, own));
     if (vol.extra.y > 0.5) { return vec4<f32>(light * vol.extra.y, 1.0); }
     return vec4<f32>(base.rgb + light, base.a);
 }

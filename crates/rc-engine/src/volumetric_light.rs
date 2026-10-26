@@ -14,8 +14,12 @@
 //!    opening gets bold beams and open daylight stays clear), and the sum by the Henyey-Greenstein phase ([`phase`],
 //!    [`G`]: forward scattering, strongest looking toward the light). Into an RGBA16F target, the sample's view
 //!    distance in alpha.
-//! 2. **Composite** (full resolution): a 4×4 depth-aware (bilateral) blur of the march target, upsampled and added
-//!    to the frame. The scene itself is not dimmed by the medium (the game's fog already does that).
+//! 2. **Composite** (full resolution): a 4×4 depth-aware (bilateral) blur of the march target, upsampled, less
+//!    [`FLATTEN`] of the light it shares with its surroundings ([`flatten`]: the depth-weighted mean of a disc of
+//!    [`FLAT_RADIUS`] of the target's height), added to the frame: light that is the same all around (lit air seen
+//!    from a shaded spot, a level's whole distance) is a grey veil, not a shaft, so only what stands out from its
+//!    surroundings (beams through an opening, cut by its edges) shows in full. The scene itself is not dimmed by the
+//!    medium (the game's fog already does that).
 //!
 //! The colour is the key light's ([`VolumetricLight::tint`]: light set 0's light A, `ShadowGame::sun_color`) pulled
 //! [`FOG_MIX`] of the way toward the frame's fog colour (crate::game_camera `GameFog`), so it sits in the level's
@@ -28,9 +32,12 @@
 //! inside, so the shafts are in the opening, cut by the arch and the vines; with `RC_SUN_DIR=0.4,-0.5,0.75` bold beams
 //! cross the tunnel's air), Kerwan's spawn (sunlit floor, shadowed walls: clear) and Novalis' spawn (open daylight).
 //!
+//! The flattening was tuned on Kerwan's spawn, Rilgar's bay and Hoven's start (the camera in shade under a lit
+//! level: without it a grey veil over the whole distance), keeping the beams of Kerwan's first tunnel.
+//!
 //! Dev switches: `RC_VOLUMETRIC=0` off; a number scales the strength (`2`: twice as bright).
-//! `RC_VOLUMETRIC_TUNE=steps,density,g,length,sky,open,edge,shade,after_lit` overrides the constants (an empty
-//! field keeps one); `RC_VOLUMETRIC_DEBUG=<gain>` shows the shafts alone, times the gain.
+//! `RC_VOLUMETRIC_TUNE=steps,density,g,length,sky,open,edge,shade,after_lit,flatten,flat_radius` overrides the
+//! constants (an empty field keeps one); `RC_VOLUMETRIC_DEBUG=<gain>` shows the shafts alone, times the gain.
 
 use crate::fx_view::{depth_defs, depth_entry, Fullscreen, FxView, Pipelines};
 use crate::game_camera::GameFog;
@@ -78,6 +85,10 @@ const OPEN: f32 = 0.05;
 const EDGE: f32 = 4.0;
 const SHADE: f32 = 4.0;
 const AFTER_LIT: f32 = 0.25;
+/// [`flatten`]'s share of the light common to the surroundings taken out, and the surroundings' radius (a fraction
+/// of the march target's height).
+const FLATTEN: f32 = 0.9;
+const FLAT_RADIUS: f32 = 0.06;
 /// How far the key light's hue is pulled toward the fog colour.
 const FOG_MIX: f32 = 0.35;
 /// The key light's luminance (1.0 = 128 on the colour byte) from which the shafts start, and at which they are full.
@@ -136,6 +147,12 @@ pub fn step(i: u32, n: u32, jitter: f32, length: f32) -> (f32, f32) {
     let u = (i as f32 + jitter) / n as f32;
     (length * u * u, length * 2.0 * u / n as f32)
 }
+
+/// A pixel's in-scattered `light` less `share` of what it has in common with the mean of its surroundings `around`
+/// (per channel): a uniform veil keeps `1 − share` of itself, a beam brighter than around it its excess in full.
+/// Mirrored in the shader's `composite`.
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn flatten(light: Vec3, around: Vec3, share: f32) -> Vec3 { light - share * light.min(around) }
 
 /// [`Shafts`]' shape: see there.
 #[derive(Clone, Copy)]
@@ -258,12 +275,13 @@ fn env_scale() -> f32 {
     *SCALE.get_or_init(|| std::env::var("RC_VOLUMETRIC").ok().and_then(|v| v.trim().parse::<f32>().ok()).map_or(1.0, |v| v.max(0.0)))
 }
 
-/// The march's steps, density, phase g, longest ray, sky ray and [`ShaftShape`] (open, edge, shade, after_lit):
-/// the constants, or `RC_VOLUMETRIC_TUNE=` up to nine numbers (an empty field keeps the constant).
-fn tune() -> [f32; 9] {
-    static TUNE: OnceLock<[f32; 9]> = OnceLock::new();
+/// The march's steps, density, phase g, longest ray, sky ray, [`ShaftShape`] (open, edge, shade, after_lit) and
+/// [`flatten`]'s share and radius: the constants, or `RC_VOLUMETRIC_TUNE=` up to eleven numbers (an empty field
+/// keeps the constant).
+fn tune() -> [f32; 11] {
+    static TUNE: OnceLock<[f32; 11]> = OnceLock::new();
     *TUNE.get_or_init(|| {
-        let mut v = [STEPS as f32, DENSITY, G, LENGTH, SKY_LENGTH, OPEN, EDGE, SHADE, AFTER_LIT];
+        let mut v = [STEPS as f32, DENSITY, G, LENGTH, SKY_LENGTH, OPEN, EDGE, SHADE, AFTER_LIT, FLATTEN, FLAT_RADIUS];
         if let Ok(s) = std::env::var("RC_VOLUMETRIC_TUNE") {
             for (slot, f) in v.iter_mut().zip(s.split(',')) {
                 if let Ok(x) = f.trim().parse::<f32>() { *slot = x; }
@@ -313,6 +331,8 @@ struct VolParams {
     shape: Vec4,
     /// [`SeaLevel`]: its y, 1 while known.
     sea: Vec4,
+    /// [`flatten`]'s share, the surroundings' radius in target pixels.
+    flat: Vec4,
 }
 
 #[derive(Resource)]
@@ -419,13 +439,14 @@ fn volumetric_pass(
     let Some((sun, count)) = SunCascades::of([light], entity) else { return };
     let (Some(mut fx), Some(size)) = (FxView::of(cam, ev), cam.physical_target_size) else { return };
     fx.extra = (-light.transform.forward().as_vec3()).extend(0.0);
-    let [steps, density, g, length, sky, open, edge, shade, after_lit] = tune();
+    let [steps, density, g, length, sky, open, edge, shade, after_lit, flat, flat_radius] = tune();
     let params = VolParams {
         tint: (vol.tint * vol.strength).extend(count as f32),
         march: Vec4::new(steps.round().max(1.0), density, g, length),
         extra: Vec4::new(sky, debug_gain(), size.x as f32, size.y as f32),
         shape: Vec4::new(open, edge.max(1.0), shade.max(1e-3), after_lit),
         sea: sea.and_then(|s| s.0).map_or(Vec4::ZERO, |y| Vec4::new(y, 1.0, 0.0, 0.0)),
+        flat: Vec4::new(flat.clamp(0.0, 1.0), flat_radius.max(0.0) * size.y.div_ceil(2) as f32, 0.0, 0.0),
     };
     let format = target.main_texture_format();
     let ms = depth.texture.sample_count() > 1;
@@ -580,6 +601,18 @@ mod tests {
         let from_shade = ray(&[(0.0, SHADE, 0.0), (SHADE, 1.0, 1.0), (SHADE + 5.0 * EDGE, 1.0, 1.0), (SHADE + 5.0 * EDGE + 1.0, SHADE, 0.0)]);
         assert!((from_shade - 2.0 * S).abs() < 1e-6, "{from_shade}");
         assert!(from_shade > 1.5 * from_sun);
+    }
+
+    #[test]
+    fn flatten_keeps_what_stands_out() {
+        let veil = Vec3::splat(0.1);
+        assert!((flatten(veil, veil, FLATTEN) - veil * (1.0 - FLATTEN)).length() < 1e-6);
+        // A beam over a fainter surround keeps its excess; the darker gap beside it keeps only its own remainder.
+        let (beam, around) = (Vec3::splat(0.3), Vec3::splat(0.1));
+        assert!((flatten(beam, around, FLATTEN) - (beam - FLATTEN * around)).length() < 1e-6);
+        assert!((flatten(around, beam, FLATTEN) - around * (1.0 - FLATTEN)).length() < 1e-6);
+        assert_eq!(flatten(beam, around, 0.0), beam);
+        assert!(flatten(Vec3::ZERO, beam, FLATTEN).length() == 0.0);
     }
 
     #[test]
