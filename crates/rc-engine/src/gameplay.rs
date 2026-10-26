@@ -205,6 +205,14 @@ pub fn boot_state(root: &std::path::Path, index: u32) -> Option<(GameState, Sess
         gs.global.game_beaten = 1;
         println!("game state: RC_GAME_BEATEN=1: Goodies on the pause menu");
     }
+    // RC_COMPLETES=<n>: the times-completed count 0x15ee20 (`GameState::global.completes`) set (debug; a negative
+    // value is ignored): the challenge-mode content appears (the Novalis gold-weapon room's teleporter pad 961,
+    // `TeleporterPadUpdate`'s pvar+0x3c gate, and the even gold-weapon offers, `ItemOfferUpdate`), and scenes may be
+    // skipped as after a completed game. RC_GAME_BEATEN is a different flag (save chunk 31, the Goodies).
+    if let Some(n) = std::env::var("RC_COMPLETES").ok().and_then(|v| v.trim().parse::<i32>().ok()).filter(|&n| 0 <= n) {
+        gs.global.completes = n;
+        println!("game state: RC_COMPLETES: {n} times completed (challenge mode)");
+    }
     // RC_SKILL_POINTS=all: every skill point earned (0x13d408, debug): the Goodies' Sketchbook and Epilogue unlock.
     if std::env::var("RC_SKILL_POINTS").is_ok_and(|v| v.trim() == "all") {
         for b in gs.global.skill_points.iter_mut() { *b = 1; }

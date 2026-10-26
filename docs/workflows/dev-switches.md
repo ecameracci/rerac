@@ -113,6 +113,7 @@ module that reads it: `grep -rn '"RC_' crates/` lists them all.
 | `RC_GIVE_BOLTS` | `n`: start with n bolts (debug; e.g. to buy at the Gadgetron vendor) |
 | `RC_GIVE_GOLD_BOLTS` | `n`: n gold bolts collected from the start (debug; e.g. to buy a gold weapon on Novalis) |
 | `RC_GIVE_GOLD_WEAPONS` | `id,id,...`: those items' gold versions owned from the start (decimal or `0x` hex; debug: the gold look and effects; give the items with `RC_GIVE_ITEMS`) |
+| `RC_COMPLETES` | `n` (≥ 0; a negative value is ignored): the times-completed count (0x15ee20, challenge mode) from the start (debug): the Novalis gold-weapon room's teleporter (pad 961) and the even gold-weapon offers appear. This is not `RC_GAME_BEATEN`, which only sets the Goodies flag |
 | `RC_INTERACT_TRACE` | `1`: log the context prompt's owner changes, the "use" hand-offs (vendor, talkers), vendor purchases and sounds (docs/plan/interaction.md) |
 | `RC_RECORD` | `0`: no play session. By default every run that is not frame-exact records `sessions/<start time>/` beside the settings file: the log, the pad input, the starting settings and card; **F8** adds a bug marker (picture, place, F9 dump) (docs/workflows/play-sessions.md) |
 | `RC_REPLAY` | `<session folder>`: replay that session frame-exact (its `RC_*` variables, settings and card; the recorded steps, tick budget, pad and keys); exits after the last update (docs/workflows/play-sessions.md) |
