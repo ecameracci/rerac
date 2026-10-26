@@ -75,28 +75,30 @@ pub struct Density {
 }
 
 /// The numbers of an option value; None for Original (no foliage pass). Both keep the blades about ankle-high on
-/// Ratchet (his knee is about 0.35 units up); Lush is denser, reaches further and is a little taller.
+/// Ratchet (his knee is about 0.35 units up); Lush is denser, reaches further and is a little taller. Lush's clump discs
+/// (32 a square unit, each about 0.35 units across) cover the ground about three times over, a carpet at Kerwan's
+/// and Novalis' spawns; Moderate's (14, 0.31 across) a little over once.
 pub fn density(f: Foliage) -> Option<Density> {
     match f {
         Foliage::Original => None,
         Foliage::Moderate => Some(Density {
-            clumps: 6.0,
+            clumps: 14.0,
             height: [0.09, 0.18],
-            width: 1.0,
+            width: 1.1,
             full: 14.0,
             end: 30.0,
-            copies: 1.0,
+            copies: 1.5,
             ring: [0.9, 3.0],
             ferns: 0.003,
             flowers: 0.006,
         }),
         Foliage::Lush => Some(Density {
-            clumps: 14.0,
+            clumps: 32.0,
             height: [0.12, 0.24],
-            width: 1.1,
+            width: 1.25,
             full: 22.0,
             end: 48.0,
-            copies: 2.5,
+            copies: 3.5,
             ring: [0.8, 4.0],
             ferns: 0.003,
             flowers: 0.006,
@@ -597,6 +599,8 @@ mod tests {
         assert!(density(Foliage::Original).is_none());
         let (m, l) = (density(Foliage::Moderate).unwrap(), density(Foliage::Lush).unwrap());
         assert!(l.clumps > 2.0 * m.clumps && l.height[1] > m.height[1] && l.full > m.full && l.end > m.end && l.copies > m.copies);
+        // Lush's clump discs (the template's 0.14 radius × width) cover the ground about three times over: a carpet.
+        assert!(l.clumps * std::f32::consts::PI * (0.14 * l.width).powi(2) > 3.0 && l.width > m.width);
         for d in [m, l] {
             assert!(d.full < d.end && d.height[0] < d.height[1] && d.ring[0] < d.ring[1]);
             // Below Ratchet's knee, flowers included; ferns and flowers a sparse share.
