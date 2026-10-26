@@ -978,7 +978,16 @@ fn upload(
         }
         let at = item.base as usize * 64;
         crate::moby_anim::write_palette(&mut palette[at..], &f[..f.len().min(item.slots as usize)]);
-        let lights: Option<light::MobyLights> = lighting.map(|l| light::moby_lights(&item.rows, &l.bank, a.host_light, a.host_ambient, 0x80));
+        // A gold weapon in hand is lit by light set 12 with a warm ambient derived from Ratchet's own
+        // (`update_item_tint_from_hero` L00 0x207330 / L01 0x228ac0, from `update_hero_color_and_item_tint` L00
+        // 0x2078a8 / L01 0x228fa8): `light::gold_lights` writes set 12 as the game does.
+        let lights: Option<light::MobyLights> = lighting.map(|l| {
+            if item.gold {
+                light::gold_lights(&item.rows, &l.bank, a.host_light, a.host_ambient, 0x80)
+            } else {
+                light::moby_lights(&item.rows, &l.bank, a.host_light, a.host_ambient, 0x80)
+            }
+        });
         let model = model_of(item);
         let mut rec = moby_render::extra_record(&model, lights.as_ref(), item.base);
         // The point lights (explosions, the Pyrocitor) reach the items as they reach every moby MobyProc draws

@@ -1840,9 +1840,10 @@ pub struct ExtraMobys {
     gold: HashMap<(u32, i32), GoldParts>,
 }
 
-/// The metal entities of one (slot, class) a gold weapon's patch reaches, their own map and the gold map.
+/// The metal entities of one (slot, class) a gold weapon's patch reaches (with the pass each was spawned with), their own
+/// map and the gold map.
 struct GoldParts {
-    ents: Vec<Entity>,
+    ents: Vec<(Entity, GsPass)>,
     own: Handle<Image>,
     gold: Handle<Image>,
     on: bool,
@@ -2027,15 +2028,22 @@ impl ExtraMobys {
     /// from `LevelCore::gold_map` by `LoadLevelCoreData`) into the class's first metal packet's ad-gif: the metal it
     /// textures ([`gold_chain`]) shines with the gold map instead of its own. A class without such metal is unchanged.
     /// The callers decide the flag (`rc_game::hero::items::gold_class`).
+    ///
+    /// The gold metal blends on display bytes ([`ordered_pass`], crate::display_blend) as the GS does, where the other
+    /// metal keeps the world's linear-light blend: the gold map's texel alpha is 60..0x80 (chrome and glass mostly
+    /// 13..30), so mixing in linear light pulls the result towards the brighter gold layer and washes out the body
+    /// texture under it (the gold Blaster's orange barrel stripe, the Pyrocitor's tank label).
     pub fn set_gold(&mut self, commands: &mut Commands, slot: u32, o_class: i32, on: bool) {
         let Some(g) = self.gold.get_mut(&(slot, o_class)).filter(|g| g.on != on) else { return };
         g.on = on;
         let (ents, image) = (g.ents.clone(), if on { g.gold.clone() } else { g.own.clone() });
         commands.queue(move |world: &mut World| {
-            let hs: Vec<_> = ents.iter().filter_map(|&e| world.get::<MeshMaterial3d<MobyMetalMaterial>>(e).map(|m| m.0.clone())).collect();
-            let mut mats = world.resource_mut::<Assets<MobyMetalMaterial>>();
-            for h in hs {
-                if let Some(mut m) = mats.get_mut(&h) { m.texture = image.clone(); }
+            let hs: Vec<_> = ents.iter().filter_map(|&(e, base)| world.get::<MeshMaterial3d<MobyMetalMaterial>>(e).map(|m| (e, base, m.0.clone()))).collect();
+            for (e, base, h) in hs {
+                let pass = if on { ordered_pass(base) } else { base };
+                if let Some(mut m) = world.resource_mut::<Assets<MobyMetalMaterial>>().get_mut(&h) { (m.texture, m.pass) = (image.clone(), pass); }
+                let Ok(mut ent) = world.get_entity_mut(e) else { continue };
+                if pass.state().display { ent.insert(crate::display_blend::DisplayEffect); } else { ent.remove::<crate::display_blend::DisplayEffect>(); }
             }
         });
     }
@@ -2091,7 +2099,7 @@ impl ExtraMobys {
                 if let Some(t) = &tracked { ec.insert(t.clone()); }
                 if pass.state().display { ec.insert(crate::display_blend::DisplayEffect); }
                 let e = ec.id();
-                if part.gold { if let Some(g) = self.gold.get_mut(&(slot, class.o_class)) { g.ents.push(e); } }
+                if part.gold { if let Some(g) = self.gold.get_mut(&(slot, class.o_class)) { g.ents.push((e, pass)); } }
                 commands.queue(move |world: &mut World| {
                     let h = world.resource_mut::<Assets<MobyMetalMaterial>>().add(mat);
                     if let Ok(mut ent) = world.get_entity_mut(e) { ent.insert(MeshMaterial3d(h)); }
