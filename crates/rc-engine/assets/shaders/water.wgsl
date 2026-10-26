@@ -36,6 +36,8 @@
 // * foam along the shore: thin water where the bed rises toward the surface (not over a flat shallow floor). At the
 //   shore line (no thickness) the result is the scene behind, so the edge has no seam.
 // A ripple water draw may sit params.misc.w over the game's height (water_render::SURFACE_LIFT), on Enhanced only.
+// Pokitaru's ocean (params.misc.w = 1 on a kind 0 draw, crate::ocean_water) takes its own constants (OCEAN_*) and, for a
+// reflection that meets nothing, the sky in the scene copy along the ray or its sky colour (params.ids.w) instead of the fog.
 //
 // The swell (crate::water_waves; look.sun.w = its scale, 0: none): on the vertices tagged SWELL_TAG (crate::sea_water's
 // split seas) the height of `swell_wave`'s sum times the vertex's shore damping and the far fade, passed on as `swell`;
@@ -51,9 +53,10 @@ struct WaterFog {
 }
 
 struct WaterParams {
-    // x = FIX / 128, y = kind, w = the Enhanced surface lift (game units; ripple water only).
+    // x = FIX / 128, y = kind, z = an even absorption or a chute's flow speed, w = the Enhanced surface lift (game units;
+    // ripple water only) or 1: Pokitaru's ocean (kind 0).
     misc: vec4<f32>,
-    // x = frame slot, y = ripple record's first word, z = water UV offset in the record.
+    // x = frame slot, y = ripple record's first word, z = water UV offset in the record, w = the ocean's sky (RGB).
     ids: vec4<u32>,
 }
 
@@ -277,10 +280,22 @@ fn view_to_coord(p: vec3<f32>) -> vec3<f32> {
     return vec3<f32>(ndc_to_frag_coord(ndc), max(abs(ndc.x), abs(ndc.y)));
 }
 
+// The sky along view direction `rd` (the ocean's miss): the scene copy where that direction meets the screen if the
+// sky shows there, else the ocean's sky colour (params.ids.w, RGB bytes).
+fn ocean_sky(vp: vec3<f32>, rd: vec3<f32>, size: vec2<i32>) -> vec3<f32> {
+    let s = params.ids.w;
+    let fallback = srgb_to_linear(vec3<f32>(f32(s & 0xffu), f32((s >> 8u) & 0xffu), f32((s >> 16u) & 0xffu)) / 255.0);
+    let c = view_to_coord(vp + rd * 4096.0);
+    if (c.x < 0.0 || c.z > 1.0) { return fallback; }
+    if (textureLoad(scene_depth, clamp(vec2<i32>(floor(c.xy)), vec2<i32>(0), size - 1), 0).r > 0.0) { return fallback; }
+    let col = textureSampleLevel(scene_color, scene_sampler, c.xy / vec2<f32>(size), 0.0).rgb;
+    return mix(fallback, col, 1.0 - smoothstep(0.85, 1.0, c.z));
+}
+
 // The reflection along `rd` from view position `vp`, traced against the scene copy (steps growing with the distance,
-// then halved four times around the first crossing); the fog colour when it misses.
-fn reflection(vp: vec3<f32>, rd: vec3<f32>, size: vec2<i32>) -> vec3<f32> {
-    let miss = srgb_to_linear(fog.color.rgb);
+// then halved four times around the first crossing, which counts when the ray is less than `tol` steps behind the
+// scene); `miss` when it meets nothing.
+fn reflection(vp: vec3<f32>, rd: vec3<f32>, size: vec2<i32>, miss: vec3<f32>, tol: f32) -> vec3<f32> {
     if (rd.z > 0.35) { return miss; }
     let len = max(0.3, -vp.z * 0.03);
     var p = vp;
@@ -291,7 +306,7 @@ fn reflection(vp: vec3<f32>, rd: vec3<f32>, size: vec2<i32>) -> vec3<f32> {
         let c = view_to_coord(p);
         if (c.x < 0.0 || c.z > 1.0) { break; }
         let sz = scene_z(vec2<i32>(floor(c.xy)), size);
-        if (sz > p.z && sz - p.z < step * 4.0) {
+        if (sz > p.z && sz - p.z < step * tol) {
             var lo = p - rd * step;
             var hi = p;
             for (var j = 0; j < 4; j += 1) {
@@ -325,6 +340,30 @@ fn planar(ssr: vec3<f32>, wp: vec3<f32>, n_world: vec3<f32>, frag: vec4<f32>, di
 // Wavelengths from the camera over which each ripple wave fades out (whole to RIPPLE_LOD, none from twice that): the
 // short ones would alias into sparkle in the distance.
 const RIPPLE_LOD: f32 = 30.0;
+
+// Pokitaru's ocean (params.misc.w = 1, crate::ocean_water): the ripple normals' share; the absorption per unit of path
+// (times params.misc.x), red first so the sand turns turquoise with depth, and the water's colour already scattered in
+// at the surface (the share of the bed lost off the shore line); the path's slant share (the absorbed path is the
+// bed's vertical depth plus this share of the rest of the view ray's run: low over the water the slant run hid the
+// shelves the Original shows); the share of the bed that always shows, red least (the art's sand shelves lie some 30
+// units down, which the Original's band shows at a quarter, its alpha 0x60); the refraction's bend (pixels, the grid seas' 18: the
+// art's mirrored scene under the water wobbled into rings); the caustics' fade (view depth: they shimmered into specks
+// on the far shelves); the crest shading; the Fresnel term's floor, power and cap; the slope's share in the reflection
+// and the glint; the reflection's hit tolerance (steps; the grid seas' 4 caught rays passing behind the islands, which
+// tore their reflection into rings); the glint's power and strength (smaller and softer than the grid seas'); the foam's share.
+const OCEAN_RIPPLE: f32 = 0.6;
+const OCEAN_ABSORB: vec3<f32> = vec3<f32>(1.0, 0.16, 0.16);
+const OCEAN_HAZE: f32 = 0.35;
+const OCEAN_SLANT: f32 = 0.3;
+const OCEAN_CLEAR: vec3<f32> = vec3<f32>(0.12, 0.35, 0.35);
+const OCEAN_BEND: f32 = 7.0;
+const OCEAN_CAUSTIC_FADE: vec2<f32> = vec2<f32>(25.0, 60.0);
+const OCEAN_CREST: f32 = 0.08;
+const OCEAN_FRESNEL: vec3<f32> = vec3<f32>(0.03, 5.0, 0.5);
+const OCEAN_SLOPE: f32 = 0.4;
+const OCEAN_SSR_TOL: f32 = 1.0;
+const OCEAN_GLINT: vec2<f32> = vec2<f32>(900.0, 0.8);
+const OCEAN_FOAM: f32 = 0.15;
 
 // The surface's height gradient over world xz from travelling sine waves: (direction, wavenumber, amplitude·wavenumber),
 // seen from horizontal distance d.
@@ -433,6 +472,8 @@ fn fragment(in: WaterVertexOutput) -> @location(0) vec4<f32> {
     }
 
     if (kind == 1u || kind == 3u) { return vec4<f32>(0.0); }
+    // params.misc.w = 1 on a kind 0 draw: Pokitaru's ocean (crate::ocean_water), clearer and lighter (OCEAN_* below).
+    let ocean = kind == 0u && params.misc.w > 0.5;
     let vp = position_ndc_to_view(frag_coord_to_ndc(in.position));
     let wp = (view.world_from_view * vec4<f32>(vp, 1.0)).xyz;
     let t_now = globals.time;
@@ -457,6 +498,7 @@ fn fragment(in: WaterVertexOutput) -> @location(0) vec4<f32> {
     }
     let swell_d = distance(wp.xz, view.world_position.xz);
     var n_world: vec3<f32>;
+    var g = vec2<f32>(0.0);
     var tilt: vec2<f32>;
     if (chute) {
         // Kind 4: the sloped sheet's normal tilted by the flowing height field (game flow dir -> Bevy (x, −y)).
@@ -469,7 +511,7 @@ fn fragment(in: WaterVertexOutput) -> @location(0) vec4<f32> {
         n_world = normalize(mix(n_geo, normalize(n_geo - along * gv - across * gu), shore));
         tilt = (n_world - n_geo).xz * 2.5;
     } else {
-        let g = wave_grad(wp.xz, t_now, swell_d) + in.ripple_grad + ring_grad(wp.xz, t_now) + swell_grad(wp.xz, t_now, swell_d) * swell;
+        g = wave_grad(wp.xz, t_now, swell_d) * select(1.0, OCEAN_RIPPLE, ocean) + in.ripple_grad + ring_grad(wp.xz, t_now) + swell_grad(wp.xz, t_now, swell_d) * swell;
         n_world = normalize(mix(vec3<f32>(0.0, 1.0, 0.0), normalize(vec3<f32>(-g.x, 1.0, -g.y)), shore));
         tilt = n_world.xz;
     }
@@ -478,7 +520,7 @@ fn fragment(in: WaterVertexOutput) -> @location(0) vec4<f32> {
     let dist = -vp.z;
 
     // The bed through the surface: the pixel bent by the waves, kept only where the bent pixel lies under the water.
-    let bend = tilt * (18.0 * clamp(select(thickness, max(thickness, 0.4), chute), 0.0, 2.0) / (1.0 + dist * 0.05));
+    let bend = tilt * (select(18.0, OCEAN_BEND, ocean) * clamp(select(thickness, max(thickness, 0.4), chute), 0.0, 2.0) / (1.0 + dist * 0.05));
     var coord = in.position.xy + vec2<f32>(bend.x, -bend.y);
     if (scene_z(vec2<i32>(floor(coord)), size) > vp.z) { coord = in.position.xy; }
     let ci = clamp(vec2<i32>(floor(coord)), vec2<i32>(0), size - 1);
@@ -490,8 +532,10 @@ fn fragment(in: WaterVertexOutput) -> @location(0) vec4<f32> {
         let bed_wp = (view.world_from_view * vec4<f32>(bed_vp, 1.0)).xyz;
         path = max(length(bed_vp - vp), 0.0);
         let under = max(wp.y - bed_wp.y, 0.0);
+        if (ocean) { path = mix(under, path, OCEAN_SLANT); }
         let sun_up = max(look.sun.y, 0.0);
-        let c = caustics(bed_wp.xz, t_now) * smoothstep(0.05, 0.4, under) * exp(-under * 0.35) * (0.35 + 0.65 * sun_up);
+        var c = caustics(bed_wp.xz, t_now) * smoothstep(0.05, 0.4, under) * exp(-under * 0.35) * (0.35 + 0.65 * sun_up);
+        if (ocean) { c *= 1.0 - smoothstep(OCEAN_CAUSTIC_FADE.x, OCEAN_CAUSTIC_FADE.y, dist); }
         bed = bed * (1.0 + c * 1.6);
     }
     // Absorption toward the water's own colour (the texture as the game drew it, darkened with depth).
@@ -500,13 +544,13 @@ fn fragment(in: WaterVertexOutput) -> @location(0) vec4<f32> {
     let deep = tint * select(0.55, look.misc.w, look.misc.w > 0.0);
     // params.misc.z: an even absorption per unit (crate::sea_water's translucent grids; 0: this coloured one), the
     // flow speed on a chute.
-    let absorb = select(vec3<f32>(0.30, 0.12, 0.07) * (0.6 + params.misc.x), vec3<f32>(params.misc.z), params.misc.z > 0.0 && !chute);
-    let trans = exp(-absorb * path);
+    let absorb = select(select(vec3<f32>(0.30, 0.12, 0.07) * (0.6 + params.misc.x), vec3<f32>(params.misc.z), params.misc.z > 0.0 && !chute), OCEAN_ABSORB * params.misc.x, ocean);
+    let trans = max(exp(-absorb * path) * (1.0 - select(0.0, OCEAN_HAZE, ocean) * shore), select(vec3<f32>(0.0), OCEAN_CLEAR, ocean));
     var col = bed * trans + deep * (1.0 - trans);
-    col = mix(col, tint, select(0.12, 0.4, chute) * shore);
+    col = mix(col, tint, select(select(0.12, 0.4, chute), 0.0, ocean) * shore);
     col = mix(col, tint, far);
     // The swell's crests lighter, its troughs darker (crate::water_waves::CREST, by the height over MAX_HEIGHT).
-    col = col * (1.0 + 0.35 * clamp(swell * swell_height(wp.xz, t_now, swell_d) / 0.3, -1.5, 1.5));
+    col = col * (1.0 + 0.35 * clamp(swell * swell_height(wp.xz, t_now, swell_d) / 0.3, -1.5, 1.5) * select(1.0, OCEAN_CREST / 0.35, ocean));
     if (chute) {
         // White streaks stretched along the flow and carried with it.
         let q = vec2<f32>(in.flow.x * 5.0, (in.flow.y - t_now * params.misc.z * 1.1) * 0.5);
@@ -516,18 +560,26 @@ fn fragment(in: WaterVertexOutput) -> @location(0) vec4<f32> {
 
     // Reflection (Fresnel, raised a little so the surface reads as water from above) and the key light's glint.
     let cos_v = max(dot(n, to_eye), 0.0);
-    let f = (0.08 + 0.92 * pow(1.0 - cos_v, 4.0)) * shore;
-    var r = reflection(vp, reflect(-to_eye, n), size);
+    let f = select(0.08 + 0.92 * pow(1.0 - cos_v, 4.0), OCEAN_FRESNEL.x + (1.0 - OCEAN_FRESNEL.x) * pow(1.0 - cos_v, OCEAN_FRESNEL.y), ocean) * shore;
+    // The ocean reflects and glints on a flatter normal (the slope times OCEAN_SLOPE): the reflected islands broken, not
+    // torn into rings, the glint fewer flecks gathered on the sun's path.
+    let k_s = select(1.0, OCEAN_SLOPE, ocean);
+    let n_s = normalize((view.view_from_world * vec4<f32>(normalize(mix(vec3<f32>(0.0, 1.0, 0.0), normalize(vec3<f32>(-g.x * k_s, 1.0, -g.y * k_s)), shore)), 0.0)).xyz);
+    let n_r = select(n, n_s, ocean);
+    let rd = reflect(-to_eye, n_r);
+    let miss = select(srgb_to_linear(fog.color.rgb), ocean_sky(vp, rd, size), ocean);
+    var r = reflection(vp, rd, size, miss, select(4.0, OCEAN_SSR_TOL, ocean));
     r = planar(r, wp, n_world, in.position, dist);
     let l = normalize((view.view_from_world * vec4<f32>(look.sun.xyz, 0.0)).xyz);
-    let glint = pow(max(dot(n, normalize(l + to_eye)), 0.0), 300.0) * 4.0 * smoothstep(0.0, 0.1, look.sun.y);
+    let gl = select(vec2<f32>(300.0, 4.0), OCEAN_GLINT, ocean);
+    let glint = pow(max(dot(n_r, normalize(l + to_eye)), 0.0), gl.x) * gl.y * smoothstep(0.0, 0.1, look.sun.y);
     // A chute is seen along its slope at grazing angles: its reflection is capped so the bed shows through.
-    col = mix(col, r, clamp(f, 0.0, select(0.9, 0.55, chute))) + vec3<f32>(1.0, 0.96, 0.88) * glint * shore;
+    col = mix(col, r, clamp(f, 0.0, select(select(0.9, 0.55, chute), OCEAN_FRESNEL.z, ocean))) + vec3<f32>(1.0, 0.96, 0.88) * glint * shore;
 
     if (chute) { return vec4<f32>(col, in.fade); }
     // Foam along the shore (thin water over a rising bed), broken up by drifting noise.
     let foam_n = smoothstep(0.1, 0.5, gnoise(wp.xz * 3.0 + vec2<f32>(t_now * 0.2, -t_now * 0.15)) + 0.35);
     let foam = (1.0 - smoothstep(0.05, 0.45, thickness)) * smoothstep(0.02, 0.1, thickness) * smoothstep(0.02, 0.1, rise) * foam_n;
-    col = mix(col, vec3<f32>(0.92, 0.96, 1.0), foam * 0.55 * (1.0 - far));
+    col = mix(col, vec3<f32>(0.92, 0.96, 1.0), foam * select(0.55, OCEAN_FOAM, ocean) * (1.0 - far));
     return vec4<f32>(col, 1.0);
 }

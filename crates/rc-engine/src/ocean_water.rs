@@ -10,11 +10,14 @@
 //!   times [`SWELL`]) and lifts it by the game's bob (`sea_z − base_z`: the `frame` record's z blend, z1 = z + 1);
 //! * per fine point, the swell's shore damping from the level collision (crate::water_waves::ShoreMap; the coarse tiles,
 //!   beyond the displacement, are open water);
-//! * one colour, [`tint`]: the band's near colour as the game draws it ([`shallow`]), part of the way to [`DEEP_TINT`].
-//!   The collision holds little of Pokitaru's bed (most probes meet nothing), so the depth comes from the scene copy
-//!   instead: the absorption over the visible bed keeps the shallows turquoise and deepens the water offshore;
-//! * the absorption a little under the grid seas' ([`ABSORB`]; the mirrored scene the art draws under the water fades
-//!   with its depth), the bed kept farther out ([`FAR_FADE`]).
+//! * one colour, [`OPEN`]: the Original's open water. The only bed the art draws is the sand shelves and the islands'
+//!   skirts; between them the scene copy holds the clear colour (no depth), which the shader reads as deep water, so
+//!   the open sea is [`OPEN`] (times [`DEEP`]) and the shelves show through it, turning turquoise with the path
+//!   through the water (the collision holds too little of the bed for a depth map: most probes meet nothing);
+//! * `water.wgsl`'s ocean look (`params.misc.w` = 1, its OCEAN_* constants): an absorption that keeps the sand plain
+//!   to a few units down ([`ABSORB`]), the sky in the scene copy (else [`SKY`]) for a reflection that meets nothing
+//!   (the grid seas take the fog colour, on Pokitaru a navy that darkened the whole sea), softer ripples and crests, a
+//!   lower Fresnel floor, a smaller and softer glint and a faint foam line; the bed kept farther out ([`FAR_FADE`]).
 //!
 //! A camera under the sea keeps the Original layers. The game's sea z, its collision and swimming are untouched.
 
@@ -38,17 +41,21 @@ pub const COARSE: f32 = 16.0;
 /// A tile is fine while its nearest point is within this of the camera (the displacement's end plus a tick's travel).
 pub const FINE_REACH: f32 = crate::water_waves::SWELL_FADE[1] + crate::water_waves::TESS_MARGIN;
 /// The swell's scale over crate::water_waves::scale (open water; the shore damping calms it as on the grid seas).
-pub const SWELL: f32 = 1.6;
-/// The open sea's blue (RGB bytes) and the share of it in [`tint`].
-pub const DEEP_TINT: [u8; 3] = [0x0c, 0x4a, 0x8c];
-pub const DEEP_SHARE: f32 = 0.4;
-/// `params.misc.x` (the FIX, which the Enhanced path reads only for the absorption, `0.6 + x` times its base rate):
-/// 0.56 of the grid seas' (x = 1): the bed shows through, the mirrored scene still fades.
-pub const ABSORB: f32 = 0.3;
+pub const SWELL: f32 = 1.0;
+/// The water's colour (RGB bytes): the Original's open water as drawn (the band at its 0x60 alpha over the GS clear
+/// colour, plus the layers), sampled from Original frames over the lagoon, taken back out of the level fog, its red
+/// lowered for the sky the surface reflects on top.
+pub const OPEN: [u8; 3] = [0x18, 0xbc, 0xb0];
+/// A reflected ray that meets nothing and leaves the screen or the sky: the sky's colour above the horizon (RGB bytes,
+/// `params.ids.w`; the grid seas take the fog colour, Pokitaru's navy).
+pub const SKY: [u8; 3] = [0x84, 0xbc, 0xe0];
+/// `params.misc.x` (the FIX, which the Enhanced path reads only for the absorption): the ocean's rate
+/// (`water.wgsl` OCEAN_ABSORB) times this, the sand clear to a few units down and turquoise beyond.
+pub const ABSORB: f32 = 0.15;
 /// The far fade's start and end (view depth; crate::sea_water::FAR_FADE for the grid seas), the deep share of the
-/// colour (crate::sea_water::DEEP).
-pub const FAR_FADE: [f32; 2] = [70.0, 220.0];
-pub const DEEP: f32 = 0.9;
+/// colour (crate::sea_water::DEEP): with no bed behind (the open water shows the clear colour), the colour times this.
+pub const FAR_FADE: [f32; 2] = [120.0, 300.0];
+pub const DEEP: f32 = 0.92;
 /// Before the grid seas' draws (crate::sea_water: `SEA_BAND + k`).
 const ORDER: f32 = SEA_BAND - 1.0;
 /// `water.wgsl`'s `frame` record (crate::water_render `FRAME_RECORD`).
@@ -65,20 +72,10 @@ pub struct OceanFrame {
     /// The band's reach (pvar `REACH`): the mesh's extent around the camera.
     pub reach: f32,
     pub fog: TfragFog,
-    /// [`shallow`]'s RGB bytes.
-    pub shallow: [u8; 3],
 }
 
-/// The band's near colour as the game draws it: FX 0x16's texel at ST 0 (RGBA) modulated by pvar 0 (`Ct·Cv >> 7`).
-pub fn shallow(texel: [u8; 4], pvar0: u32) -> [u8; 3] {
-    std::array::from_fn(|k| ((texel[k] as u32 * ((pvar0 >> (8 * k)) & 0xff)) >> 7).min(255) as u8)
-}
-
-/// The water's colour (RGBA, the alpha unread): [`shallow`], [`DEEP_SHARE`] of the way to [`DEEP_TINT`].
-pub fn tint(shallow: [u8; 3]) -> u32 {
-    let t = DEEP_SHARE;
-    (0..3).fold(0x8000_0000, |a, k| a | ((shallow[k] as f32 * (1.0 - t) + DEEP_TINT[k] as f32 * t).round() as u32) << (8 * k))
-}
+/// RGB bytes as the vertex colour / `params.ids.w` word (R low; the alpha 0x80, unread).
+pub fn rgba(c: [u8; 3]) -> u32 { (0..3).fold(0x8000_0000, |a, k| a | (c[k] as u32) << (8 * k)) }
 
 /// One tile's points (game), tags and triangles.
 #[derive(Default)]
@@ -90,7 +87,7 @@ struct Tile {
 
 /// Tile `(i, j)` at water `z`, split to [`FINE`] units with the shore damping from the lattice, else to [`COARSE`]
 /// undamped.
-fn tile(i: i32, j: i32, fine: bool, z: f32, shallow: [u8; 3], shore: &mut ShoreMap, probe: &mut dyn FnMut([f32; 3], [f32; 3]) -> Option<f32>) -> Tile {
+fn tile(i: i32, j: i32, fine: bool, z: f32, shore: &mut ShoreMap, probe: &mut dyn FnMut([f32; 3], [f32; 3]) -> Option<f32>) -> Tile {
     let mut t = Tile::default();
     let s = if fine { FINE } else { COARSE };
     let n = (TILE / s) as u32;
@@ -99,7 +96,7 @@ fn tile(i: i32, j: i32, fine: bool, z: f32, shallow: [u8; 3], shore: &mut ShoreM
             let (x, y) = (i as f32 * TILE + a as f32 * s, j as f32 * TILE + b as f32 * s);
             let damp = if fine { shore.damp(x, y, z, probe) } else { 1.0 };
             t.pos.push([x, y, z]);
-            t.tag.push([tint(shallow), SWELL_TAG | ((damp * 65535.0).round() as u32) << 8]);
+            t.tag.push([rgba(OPEN), SWELL_TAG | ((damp * 65535.0).round() as u32) << 8]);
         }
     }
     let at = |a: u32, b: u32| b * (n + 1) + a;
@@ -140,8 +137,8 @@ pub struct OceanWater {
     shown: bool,
     tiles: HashMap<(i32, i32, bool), Tile>,
     set: Vec<(i32, i32, bool)>,
-    /// The water z and colour the tiles were made for.
-    made_for: Option<(u32, [u8; 3])>,
+    /// The water z the tiles were made for.
+    made_for: Option<u32>,
     shore: ShoreMap,
     copy_size: UVec2,
     reported: bool,
@@ -197,11 +194,11 @@ pub fn draw(
         }
         return;
     };
-    if st.made_for != Some((o.base_z.to_bits(), o.shallow)) {
-        st.made_for = Some((o.base_z.to_bits(), o.shallow));
+    if st.made_for != Some(o.base_z.to_bits()) {
+        st.made_for = Some(o.base_z.to_bits());
         st.tiles.clear();
         st.set.clear();
-        println!("ocean water: Enhanced surface at z {} (reach {}), shallow colour {:02x?}", o.base_z, o.reach, o.shallow);
+        println!("ocean water: Enhanced surface at z {} (reach {})", o.base_z, o.reach);
     }
     let set = tile_set([o.cam[0], o.cam[1]], o.reach);
     let rebuild = set != st.set;
@@ -212,7 +209,7 @@ pub fn draw(
         let mut made = 0;
         for &(i, j, fine) in &set {
             if st.tiles.contains_key(&(i, j, fine)) { continue; }
-            let t = tile(i, j, fine, o.base_z, o.shallow, &mut st.shore, &mut probe);
+            let t = tile(i, j, fine, o.base_z, &mut st.shore, &mut probe);
             st.tiles.insert((i, j, fine), t);
             made += 1;
         }
@@ -252,7 +249,7 @@ pub fn draw(
                 let mat = materials.add(SeaWaterMaterial {
                     texture: image(&mut images),
                     fog: o.fog,
-                    params: WaterParams { misc: Vec4::new(ABSORB, 0.0, 0.0, 0.0), ids: UVec4::ZERO },
+                    params: WaterParams { misc: Vec4::new(ABSORB, 0.0, 0.0, 1.0), ids: UVec4::new(0, 0, 0, rgba(SKY)) },
                     frame: frame.clone(),
                     ripple: rings.clone(),
                     scene_depth: copy.depth.clone(),
@@ -288,18 +285,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn shallow_is_the_modulated_band_colour() {
-        assert_eq!(shallow([0x80, 0x80, 0x80, 0x80], 0x8040_a0ff), [0xff, 0xa0, 0x40]);
-        assert_eq!(shallow([0x40, 0xff, 0x00, 0x80], 0x0080_8080), [0x40, 0xff, 0x00]);
-    }
-
-    #[test]
-    fn tint_lies_between_the_band_and_the_deep_blue() {
-        let rgb = |c: u32| [c & 0xff, (c >> 8) & 0xff, (c >> 16) & 0xff].map(|x| x as u8);
-        assert_eq!(rgb(tint(DEEP_TINT)), DEEP_TINT);
-        let (s, t) = ([0x09, 0x9f, 0x7f], rgb(tint([0x09, 0x9f, 0x7f])));
-        for k in 0..3 { assert!(t[k].min(s[k].max(DEEP_TINT[k])) == t[k] && t[k] >= s[k].min(DEEP_TINT[k]), "{t:?}"); }
-        assert_eq!(tint(s) >> 24, 0x80);
+    fn rgba_packs_r_low() {
+        assert_eq!(rgba([0x3c, 0xb8, 0xae]), 0x80ae_b83c);
+        let c = rgba(OPEN);
+        assert!((c >> 8) & 0xff > c & 0xff && (c >> 16) & 0xff > c & 0xff, "turquoise: green and blue over red");
     }
 
     #[test]
@@ -323,8 +312,8 @@ mod tests {
     fn tiles_share_their_edges() {
         let mut shore = ShoreMap::default();
         let mut probe = |_: [f32; 3], _: [f32; 3]| None;
-        let a = tile(0, 0, true, 222.0, [0x30, 0xc0, 0xb0], &mut shore, &mut probe);
-        let b = tile(1, 0, true, 222.0, [0x30, 0xc0, 0xb0], &mut shore, &mut probe);
+        let a = tile(0, 0, true, 222.0, &mut shore, &mut probe);
+        let b = tile(1, 0, true, 222.0, &mut shore, &mut probe);
         let edge = |t: &Tile, x: f32| { let mut v: Vec<[i32; 2]> = t.pos.iter().filter(|p| p[0] == x).map(|p| [p[0] as i32, (p[1] * 8.0) as i32]).collect(); v.sort_unstable(); v };
         assert_eq!(edge(&a, TILE), edge(&b, TILE));
         assert_eq!(a.idx.len(), 32 * 32 * 6);

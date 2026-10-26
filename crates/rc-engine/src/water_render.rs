@@ -188,10 +188,10 @@ pub fn load(root: &Path, index: u32, gameplay: &[u8]) -> Result<LevelWater> {
 pub struct WaterParams {
     /// x = FIX / 128, y = kind (0/1 strip layer, 2 ripple water, 3 ripple env, 4 chute), z = an even absorption
     /// (Enhanced; crate::sea_water::clarity; 0 here) or a chute's flow speed, w = the Enhanced surface lift
-    /// ([`SURFACE_LIFT`]).
+    /// ([`SURFACE_LIFT`]; ripple water) or 1: Pokitaru's ocean (kind 0, crate::ocean_water).
     pub misc: Vec4,
     /// x = callback slot (record in `frame`), y = first word of the patch's `ripple` record, z = offset of its
-    /// water UVs in the record (words).
+    /// water UVs in the record (words), w = the ocean's sky colour (crate::ocean_water::SKY).
     pub ids: UVec4,
 }
 

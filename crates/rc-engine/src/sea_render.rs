@@ -587,10 +587,8 @@ fn draw(
                 // and the layers.
                 let surface = gfx.water.on() && cam[2] > run.sea_z;
                 if surface {
-                    let texel = fx.and_then(|f| f.get(OCEAN_BAND_FX)?.as_ref()).and_then(|t| t.rgba.get(..4)).map_or([0x80; 4], |c| [c[0], c[1], c[2], c[3]]);
-                    let pv = u32::from_le_bytes(m.pvars[..4].try_into().unwrap());
                     let reach = f32::from_le_bytes(m.pvars[gs::ocean_pvar::REACH..gs::ocean_pvar::REACH + 4].try_into().unwrap());
-                    ocean = Some(crate::ocean_water::OceanFrame { cam, base_z: run.base_z, sea_z: run.sea_z, reach, fog: level_fog, shallow: crate::ocean_water::shallow(texel, pv) });
+                    ocean = Some(crate::ocean_water::OceanFrame { cam, base_z: run.base_z, sea_z: run.sea_z, reach, fog: level_fog });
                 }
                 for (j, (fxi, additive, prims)) in ocean_groups(&m.pvars, run, t, cam, rows).into_iter().enumerate() {
                     if surface && (j == 0 || additive) { continue; }
