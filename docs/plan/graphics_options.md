@@ -91,6 +91,12 @@ Lighting, as it did not touch the Shadows row before it (`GraphicsSettings::with
   sun, against the build before it): Veldin, Novalis and Eudora show shafts from the sun's point cut by the
   buildings, rocks and trees; Original and Simple byte-identical; `RC_SHADOWS=0` no rays. `RC_SUN_RAYS_LOG=1` prints
   each level's verdict (crate::sky_sun).
+* Sun rays capped 2026-10-26 (third play test: too intense at some angles): facing Gemlik's red sun, which fills the
+  sky, the mask covers most of the view and the rays laid an orange wash over it (mean |Δ| 22 against the rays off);
+  what they add is now soft-capped, `l / (1 + Y(l) / 0.06)` (`sun_rays::KNEE`): 12.0, the sun's face no longer
+  blown out; what is left is a warm tint under the knee over the whole view (the foreground 9.6, against 10.9
+  uncapped), as the line to the sun crosses sky almost everywhere there. They carry no noise (a fixed radial blur), so no dither: only the faint radial streaks of the
+  sun's own texture.
 * The Port Options page (fourteen rows) keeps the Camera sub-page's frame and scrolls, four rows at a time (port.rs `VISIBLE`).
 
 ## Light shafts per level

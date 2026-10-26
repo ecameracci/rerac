@@ -1,6 +1,7 @@
 // Sun rays (crate::sun_rays): a half-resolution mask of the sky's sun disc and glow, blurred radially toward the
 // sun and added to the frame. view.params = (sun UV x, y, intensity, aspect), view.extra = (taps, the mask's falloff
-// radius in target UV heights, the luminance key's low and high ends).
+// radius in target UV heights, the luminance key's low and high ends); the composite's view.extra = (taps, the soft
+// cap's knee, sun_rays::KNEE).
 
 #import bevy_core_pipeline::fullscreen_vertex_shader::FullscreenVertexOutput
 #import rerac::fx_view::view
@@ -40,5 +41,7 @@ fn composite(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
         acc += textureSampleLevel(mask_tex, linear, tc, 0.0).rgb * weight;
         weight *= 0.95;
     }
-    return vec4<f32>(base.rgb + acc * (view.params.z / f32(taps)) * 4.0, base.a);
+    let rays = acc * (view.params.z / f32(taps)) * 4.0;
+    let capped = rays / (1.0 + dot(rays, vec3<f32>(0.2126, 0.7152, 0.0722)) / view.extra.y);
+    return vec4<f32>(base.rgb + capped, base.a);
 }

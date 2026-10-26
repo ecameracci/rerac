@@ -8,7 +8,8 @@
 //!    [`SPOT_SCALE`] × the sun spot's radius), keyed on their luminance between the sky's median and the sun's peak,
 //!    so the sun disc and its glow make the mask and the plain sky adds nothing; geometry in front of the sky masks
 //!    it, which makes the shafts.
-//! 2. **Composite:** [`TAPS`] samples of the mask along the line to the sun, each fainter, added to the frame.
+//! 2. **Composite:** [`TAPS`] samples of the mask along the line to the sun, each fainter, soft-capped under [`KNEE`]
+//!    and added to the frame.
 //!
 //! The sun is the sky's ([`SkySun`], crate::sky_sun: found in the shells at level load, turning with its shell),
 //! not the shadows' key light (crate::sun_shadow, raised to 60° and rarely where the sky shows its sun; the shadows
@@ -43,6 +44,10 @@ const MASK_FORMAT: TextureFormat = TextureFormat::Rgba16Float;
 const TAPS: u32 = 40;
 /// The shafts' brightness at full strength.
 const INTENSITY: f32 = 0.6;
+/// The soft cap's knee (sun_rays.wgsl `composite`): the rays add `l / (1 + Y(l) / KNEE)`, under `KNEE` in luminance,
+/// so a sun filling the sky (Gemlik) tints the frame instead of washing it out (2026-10-26 play test).
+const KNEE: f32 = 0.06;
+const LUMA: Vec3 = Vec3::new(0.2126, 0.7152, 0.0722);
 /// The mask's falloff radius, in sun spot radii (crate::sky_sun `Sun::radius`), and its range (target UV heights):
 /// a dome's wide glow (Novalis: 21°) would otherwise let every bright cloud on screen into the shafts.
 const SPOT_SCALE: f32 = 2.0;
@@ -115,6 +120,7 @@ fn init_pipelines(mut commands: Commands, assets: Res<AssetServer>, fullscreen: 
     });
 }
 
+#[allow(clippy::too_many_arguments)]
 fn prepare(
     mut commands: Commands,
     gfx: Option<Res<GraphicsSettings>>,
@@ -163,6 +169,10 @@ fn sun_on_screen(fx: &FxView, target: UVec2, to_light: Vec3) -> Option<(Vec2, f3
     Some((px / target.as_vec2().max(Vec2::ONE), k))
 }
 
+/// What the rays add, soft-capped under `knee` in luminance. Mirrored in the shader's `composite`.
+#[cfg_attr(not(test), allow(dead_code))]
+fn soft_cap(light: Vec3, knee: f32) -> Vec3 { light / (1.0 + light.dot(LUMA) / knee) }
+
 fn smoothstep(e0: f32, e1: f32, x: f32) -> f32 {
     let t = ((x - e0) / (e1 - e0)).clamp(0.0, 1.0);
     t * t * (3.0 - 2.0 * t)
@@ -210,6 +220,7 @@ fn rays_pass(
     let (Some(mask_pipe), Some(composite_pipe)) = (mask_pipe, composite_pipe) else { return };
     let device = ctx.render_device().clone();
     let buf = fx.buffer(&device, "sun rays view");
+    let composite_buf = FxView { extra: Vec4::new(TAPS as f32, KNEE, 0.0, 0.0), ..fx }.buffer(&device, "sun rays composite");
     let post = target.post_process_write();
     let (source, destination) = (post.source, post.destination);
     let mask_group = device.create_bind_group(
@@ -220,7 +231,7 @@ fn rays_pass(
     let composite_group = device.create_bind_group(
         "sun rays composite",
         &cache.get_bind_group_layout(&pipes.composite_layout),
-        &BindGroupEntries::with_indices(((0, buf.as_entire_binding()), (2, source), (3, &pipes.linear), (4, &mask.0.default_view))),
+        &BindGroupEntries::with_indices(((0, composite_buf.as_entire_binding()), (2, source), (3, &pipes.linear), (4, &mask.0.default_view))),
     );
     {
         let mut pass = ctx.begin_tracked_render_pass(RenderPassDescriptor {
@@ -299,5 +310,15 @@ mod tests {
         let low = Vec3::new(0.0, 3f32.to_radians().sin(), -1.0).normalize();
         let k_low = sun_on_screen(&view_looking(low), UVec2::new(1600, 900), low).unwrap().1;
         assert!(k_low > 0.2 && k_low < 0.35, "{k_low}");
+    }
+
+    #[test]
+    fn the_soft_cap_keeps_faint_rays_and_bounds_bright_ones() {
+        let faint = Vec3::splat(0.005);
+        assert!(soft_cap(faint, KNEE).dot(LUMA) > 0.9 * faint.dot(LUMA));
+        for y in [0.5, 2.0, 50.0] {
+            let capped = soft_cap(Vec3::new(1.0, 0.6, 0.2) * y, KNEE).dot(LUMA);
+            assert!(capped < KNEE, "{y}: {capped}");
+        }
     }
 }
