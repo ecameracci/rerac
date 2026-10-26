@@ -3,16 +3,19 @@
 //! splitmix64 hash of the level's own seed and the triangle / plant index.
 //!
 //! * **Grass**: candidate points over every LOD-0 tfrag triangle (`rc_formats::tfrag::tfrag_triangles(t, 0)`),
-//!   area-weighted at [`Density::clumps`] per square unit. A point is kept when its triangle faces up ([`faces_up`]),
-//!   the ground as drawn there reads as grass (the level-0 texel average under it times the baked vertex colour, the
-//!   GS MODULATE of tfrag.wgsl, opaque: [`is_grass`]), no other opaque, non-green tfrag lies just over it (a path or a
-//!   decal: [`Grid::covered`]), and a `coll_line` from [`RAY_ABOVE`] above to [`RAY_BELOW`] below first meets
-//!   walkable collision within [`GROUND_TOLERANCE`] of the drawn surface ([`ground_check`], [`walkable`]). A kept
+//!   area-weighted at [`Density::clumps`] per square unit, on every level but the stations ([`NO_FOLIAGE`]). A point
+//!   is kept when its triangle faces up ([`faces_up`]), the ground there is grass ground ([`grass_ground`]: a turf
+//!   texture, [`is_turf`]: enough grass texels and an even grain, whose level-0 texel average under the point reads as
+//!   grass ([`is_grass`]) both on its own and times the baked vertex colour, the GS MODULATE of tfrag.wgsl, opaque:
+//!   the baked light alone turns sand, paving and grey metal green on Aridia, Blarg, Pokitaru or Oltanis), no other
+//!   opaque tfrag that is not grass ground lies just over it (a path or a decal: [`Grid::covered`]), and a `coll_line`
+//!   from [`RAY_ABOVE`] above to [`RAY_BELOW`] below first meets walkable collision within [`GROUND_TOLERANCE`] of the
+//!   drawn surface ([`ground_hit`], [`ground_verdict`], [`walkable`]). A kept
 //!   point is a blade clump, or with the chances [`Density::ferns`] / [`Density::flowers`] a fern or a flower cluster
 //!   ([`Kind`]).
 //! * **Plant copies**: around each placed instance of the level's small plant shrub classes (crate::foliage
 //!   `plant_classes`), [`Density::copies`] more at a random yaw and scale on a ring, each on walkable collision
-//!   whose drawn surface there reads as grass.
+//!   whose drawn surface there is grass ground.
 
 use crate::graphics::Foliage;
 use rc_formats::collision::Collision;
@@ -37,6 +40,14 @@ pub const COVER_ABOVE: f32 = 0.6;
 /// pass's AREF 0x60: the pixel writes Z (tfrag_render.rs `alpha_mode`).
 pub const OPAQUE_TEXEL: u8 = 0xc0;
 pub const OPAQUE_VERTEX: u8 = 0x60;
+/// The least share of a texture's opaque texels that read as grass on their own for it to grow any ([`TexStats`]):
+/// the turf textures are 0.16 (Novalis' grass-and-dirt edges) to 1; the grey floors, sand, paving and glass that only
+/// read green under a level's green-tinted vertex light are 0.
+pub const MIN_GRASS_SHARE: f32 = 0.15;
+/// The most a turf texture's luma spreads ([`TexStats::luma_sd`]): turf is an even fine noise (3 to 34, the mixed
+/// grass-and-dirt edges the highest); the teal glowing panels of Blarg, Gemlik, Quartu and Veldin's finale, whose
+/// darker texels pass as blue-green, are 46 to 64.
+pub const MAX_LUMA_SD: f32 = 40.0;
 /// Collision surfaces nothing grows on (rc_game::hero::surface): 0 water, 1 hot floor, 2 magnetic, 3 sinking
 /// liquid, 4 sinking floor, 7 slippery, 8 / 0xc pits, 0xb liquid, 0xd deadly liquid, 0xe shallow water.
 pub const BARREN_SURFACES: [i32; 11] = [0, 1, 2, 3, 4, 7, 8, 0xb, 0xc, 0xd, 0xe];
@@ -52,6 +63,18 @@ pub const FERN_HEIGHT: [f32; 2] = [0.22, 0.34];
 pub const FERN_SPREAD: [f32; 2] = [0.4, 0.7];
 /// The share of flower clusters with yellow heads (the others white).
 pub const YELLOW_FLOWERS: f32 = 0.4;
+
+/// The levels that grow nothing whatever their textures (rc_game::game_state `LEVEL_COUNT` = 19; the travel and
+/// space scenes between planets are movies, no level): space stations and ships, where any green is lit metal,
+/// glowing panels or a planter.
+pub const NO_FOLIAGE: [(u32, &str); 3] = [
+    (6, "Blarg Station, Nebula G34: a space station"),
+    (13, "Gemlik Base, Oltanis Orbit: a space station"),
+    (17, "Drek's Fleet: space ships"),
+];
+
+/// Why level `level` grows nothing ([`NO_FOLIAGE`]), None where it may.
+pub fn no_foliage(level: u32) -> Option<&'static str> { NO_FOLIAGE.iter().find(|e| e.0 == level).map(|e| e.1) }
 
 /// One option value's numbers.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -156,6 +179,30 @@ impl Tex {
     }
 }
 
+/// A texture's whole-image numbers: size, the opaque texels' mean colour, the share of them that read as grass on
+/// their own ([`is_grass`]) and the spread (standard deviation) of their luma.
+#[derive(Clone, Copy, Debug)]
+pub struct TexStats {
+    pub width: u32,
+    pub height: u32,
+    pub mean: [u8; 3],
+    pub grass_share: f32,
+    pub luma_sd: f32,
+}
+
+pub fn texture_stats(t: &Tex) -> TexStats {
+    let (mut s, mut n, mut g, mut l1, mut l2) = ([0f64; 3], 0f64, 0f64, 0f64, 0f64);
+    for p in t.rgba.as_chunks::<4>().0.iter().filter(|p| p[3] >= OPAQUE_TEXEL) {
+        for k in 0..3 { s[k] += p[k] as f64; }
+        let l = 0.299 * p[0] as f64 + 0.587 * p[1] as f64 + 0.114 * p[2] as f64;
+        (l1, l2, n) = (l1 + l, l2 + l * l, n + 1.0);
+        g += is_grass([p[0], p[1], p[2]]) as u8 as f64;
+    }
+    let n1 = n.max(1.0);
+    let m = l1 / n1;
+    TexStats { width: t.width, height: t.height, mean: s.map(|v| (v / n1) as u8), grass_share: (g / n1) as f32, luma_sd: (l2 / n1 - m * m).max(0.0).sqrt() as f32 }
+}
+
 /// One LOD-0 tfrag triangle: world positions, UVs (S, T / 4096), the lit vertex colours (0x80 = 1.0) and its texture
 /// (index into [`PlanInput::textures`]).
 #[derive(Clone, Copy, Debug)]
@@ -167,7 +214,7 @@ pub struct Tri {
 }
 
 impl Tri {
-    fn normal(&self) -> [f32; 3] {
+    pub fn normal(&self) -> [f32; 3] {
         let [a, b, c] = self.p;
         cross(sub(b, a), sub(c, a))
     }
@@ -227,6 +274,9 @@ pub struct Grass {
     pub root: [u8; 3],
     pub tip: [u8; 3],
     pub seed: u32,
+    /// The tfrag triangle it grows on and the collision surface under it (crate::foliage `trace`).
+    pub tri: u32,
+    pub surface: i32,
 }
 
 /// A copy of [`PlantSource`] `src` at `pos` turned by `yaw` about Z and scaled by `scale`.
@@ -246,6 +296,9 @@ pub struct PlanStats {
     pub candidates: usize,
     pub steep: usize,
     pub not_grass: usize,
+    /// Of `not_grass`: on a texture that is not turf ([`is_turf`]), and on a texel green only as drawn (lit).
+    pub non_grass_texture: usize,
+    pub tinted: usize,
     pub covered: usize,
     pub no_ground: usize,
     pub off_surface: usize,
@@ -256,6 +309,8 @@ pub struct PlanStats {
     pub ferns: usize,
     pub copy_tries: usize,
     pub copies: usize,
+    /// The level grows nothing ([`NO_FOLIAGE`]): why.
+    pub no_foliage: Option<&'static str>,
     pub time: Duration,
 }
 
@@ -264,6 +319,8 @@ impl PlanStats {
         self.candidates += o.candidates;
         self.steep += o.steep;
         self.not_grass += o.not_grass;
+        self.non_grass_texture += o.non_grass_texture;
+        self.tinted += o.tinted;
         self.covered += o.covered;
         self.no_ground += o.no_ground;
         self.off_surface += o.off_surface;
@@ -292,7 +349,7 @@ pub enum Ground {
     Barren,
 }
 
-/// [`ground_check`] on a hit: its z, surface id and unit normal z.
+/// The ground under a drawn point at `visual_z` from its [`ground_hit`]: its z, surface id and unit normal z.
 pub fn ground_verdict(visual_z: f32, hit: Option<(f32, i32, f32)>) -> Ground {
     match hit {
         None => Ground::None,
@@ -310,10 +367,6 @@ pub fn ground_hit(col: &Collision, p: [f32; 3], above: f32, below: f32) -> Optio
         (h.point[2], h.surface_id(), (n[2] / len(n).max(1e-12)).abs())
     })
 }
-
-/// [`ground_hit`] over [`RAY_ABOVE`] .. [`RAY_BELOW`], judged by [`ground_verdict`].
-pub fn ground_check(col: &Collision, p: [f32; 3]) -> Ground { ground_verdict(p[2], ground_hit(col, p, RAY_ABOVE, RAY_BELOW)) }
-
 /// A collision surface id plants grow on (not one of [`BARREN_SURFACES`]).
 pub fn walkable(surface: i32) -> bool { !BARREN_SURFACES.contains(&surface) }
 
@@ -335,6 +388,15 @@ pub fn is_grass(rgb: [u8; 3]) -> bool {
     let hue = 60.0 * ((b - r) / (max - min) + 2.0);
     sat >= 0.18 && (70.0..=170.0).contains(&hue)
 }
+
+/// A turf texture: at least [`MIN_GRASS_SHARE`] of its texels read as grass and its luma spreads at most
+/// [`MAX_LUMA_SD`].
+pub fn is_turf(s: &TexStats) -> bool { s.grass_share >= MIN_GRASS_SHARE && s.luma_sd <= MAX_LUMA_SD }
+
+/// Drawn ground grass grows on: a turf texture ([`is_turf`]) whose texels under the point read as grass on their own
+/// (`raw`: the texture's colour, so sand or a grey floor lit green by the baked vertex colours does not pass) and as
+/// drawn (`drawn`: × the vertex colour, so turf in shadow or tinted away from green does not).
+pub fn grass_ground(raw: [u8; 3], drawn: [u8; 3], turf: bool) -> bool { turf && is_grass(raw) && is_grass(drawn) }
 
 /// A drawn colour: the texel average × the vertex colour (GS MODULATE, 0x80 = 1.0), clamped.
 pub fn modulate(tex: [u8; 3], col: [f32; 4]) -> [u8; 3] {
@@ -359,15 +421,18 @@ pub fn fern_colours(ground: [u8; 3]) -> ([u8; 3], [u8; 3]) {
     (root, tip)
 }
 
-/// The tfrags over a horizontal cell grid, for the cover test and the copies' drawn ground.
+/// The tfrags over a horizontal cell grid, for the cover test and the copies' drawn ground, and whether each texture
+/// is turf ([`is_turf`]).
 struct Grid {
     cells: HashMap<(i32, i32), Vec<u32>>,
+    turf: Vec<bool>,
 }
 
 impl Grid {
-    fn new(tris: &[Tri]) -> Self {
+    fn new(input: &PlanInput) -> Self {
+        let turf = input.textures.iter().map(|t| t.as_ref().is_some_and(|t| is_turf(&texture_stats(t)))).collect();
         let mut cells: HashMap<(i32, i32), Vec<u32>> = HashMap::new();
-        for (i, t) in tris.iter().enumerate() {
+        for (i, t) in input.tris.iter().enumerate() {
             let (mut lo, mut hi) = ([f32::MAX; 2], [f32::MIN; 2]);
             for p in &t.p {
                 for k in 0..2 { lo[k] = lo[k].min(p[k]); hi[k] = hi[k].max(p[k]); }
@@ -377,12 +442,15 @@ impl Grid {
                 for cx in cell(lo[0])..=cell(hi[0]) { cells.entry((cx, cy)).or_default().push(i as u32); }
             }
         }
-        Grid { cells }
+        Grid { cells, turf }
     }
 
     fn at(&self, x: f32, y: f32) -> &[u32] { self.cells.get(&(cell(x), cell(y))).map_or(&[], |v| v) }
 
-    /// Another opaque, non-green tfrag lies over `p` (from 0.03 under it to [`COVER_ABOVE`] over it).
+    fn turf(&self, tex: u32) -> bool { self.turf.get(tex as usize).copied().unwrap_or(false) }
+
+    /// Another opaque tfrag that is not grass ground ([`grass_ground`]) lies over `p` (from 0.03 under it to
+    /// [`COVER_ABOVE`] over it).
     fn covered(&self, input: &PlanInput, skip: u32, p: [f32; 3]) -> bool {
         self.at(p[0], p[1]).iter().filter(|&&j| j != skip).any(|&j| {
             let t = &input.tris[j as usize];
@@ -392,13 +460,13 @@ impl Grid {
             if !(-0.03..=COVER_ABOVE).contains(&dz) { return false; }
             let Some(Some(tex)) = input.textures.get(t.tex as usize) else { return false };
             let (rgb, a) = tex.sample(uv);
-            opaque(a, col[3]) && !is_grass(modulate(rgb, col))
+            opaque(a, col[3]) && !grass_ground(rgb, modulate(rgb, col), self.turf(t.tex))
         })
     }
 
-    /// The drawn ground nearest `z` at `(x, y)` (within 0.4) and its colour, when it is opaque.
-    fn ground(&self, input: &PlanInput, x: f32, y: f32, z: f32) -> Option<(f32, [u8; 3])> {
-        let mut best: Option<(f32, f32, [u8; 3])> = None;
+    /// The drawn ground nearest `z` at `(x, y)` (within 0.4), when it is opaque: its z and whether it is grass ground.
+    fn ground(&self, input: &PlanInput, x: f32, y: f32, z: f32) -> Option<(f32, bool)> {
+        let mut best: Option<(f32, f32, bool)> = None;
         for &j in self.at(x, y) {
             let t = &input.tris[j as usize];
             let Some(w) = t.weights_xy(x, y) else { continue };
@@ -407,7 +475,7 @@ impl Grid {
             if dz > 0.4 || best.is_some_and(|b| b.0 <= dz) { continue; }
             let Some(Some(tex)) = input.textures.get(t.tex as usize) else { continue };
             let (rgb, a) = tex.sample(uv);
-            if opaque(a, col[3]) { best = Some((dz, q[2], modulate(rgb, col))); }
+            if opaque(a, col[3]) { best = Some((dz, q[2], grass_ground(rgb, modulate(rgb, col), self.turf(t.tex)))); }
         }
         best.map(|b| (b.1, b.2))
     }
@@ -439,8 +507,11 @@ pub fn level_seed(level: u32) -> u64 { 0x666f_6c69_6167_6500 ^ (level as u64).wr
 /// its own stream, and the results are joined in triangle order.
 pub fn plan(input: &PlanInput, d: &Density) -> Plan {
     let t0 = Instant::now();
+    if let Some(why) = no_foliage(input.level) {
+        return Plan { grass: Vec::new(), copies: Vec::new(), stats: PlanStats { no_foliage: Some(why), time: t0.elapsed(), ..PlanStats::default() } };
+    }
     let seed = level_seed(input.level);
-    let grid = Grid::new(&input.tris);
+    let grid = Grid::new(input);
     let threads = std::thread::available_parallelism().map_or(1, |n| n.get()).clamp(1, 8);
     let chunk = input.tris.len().div_ceil(threads).max(1);
     let parts: Vec<(Vec<Grass>, PlanStats)> = std::thread::scope(|s| {
@@ -476,6 +547,7 @@ fn grass_range(input: &PlanInput, grid: &Grid, d: &Density, seed: u64, range: st
         st.candidates += n;
         if !faces_up(t.normal()) { st.steep += n; continue; }
         let Some(Some(tex)) = input.textures.get(t.tex as usize) else { st.not_grass += n; continue };
+        if !grid.turf(t.tex) { st.not_grass += n; st.non_grass_texture += n; continue; }
         for _ in 0..n {
             // Uniform on the triangle.
             let (r1, r2) = (rng.f().sqrt(), rng.f());
@@ -485,10 +557,16 @@ fn grass_range(input: &PlanInput, grid: &Grid, d: &Density, seed: u64, range: st
             let (pick, size) = (rng.f(), rng.f());
             let (rgb, a) = tex.sample(uv);
             let ground = modulate(rgb, col);
-            if !opaque(a, col[3]) || !is_grass(ground) { st.not_grass += 1; continue; }
+            if !opaque(a, col[3]) || !grass_ground(rgb, ground, true) {
+                st.not_grass += 1;
+                if opaque(a, col[3]) && is_grass(ground) { st.tinted += 1; }
+                continue;
+            }
             if grid.covered(input, ti as u32, p) { st.covered += 1; continue; }
             let Some(c) = input.collision.as_ref() else { st.no_ground += 1; continue };
-            match ground_check(c, p) {
+            let hit = ground_hit(c, p, RAY_ABOVE, RAY_BELOW);
+            let surface = hit.map_or(-1, |h| h.1);
+            match ground_verdict(p[2], hit) {
                 Ground::Ok => {}
                 Ground::None => { st.no_ground += 1; continue; }
                 Ground::OffSurface => { st.off_surface += 1; continue; }
@@ -498,10 +576,10 @@ fn grass_range(input: &PlanInput, grid: &Grid, d: &Density, seed: u64, range: st
                 let (root, tip) = fern_colours(ground);
                 let lerp = |r: [f32; 2]| r[0] + (r[1] - r[0]) * size;
                 // Larger than a clump, so kept further out.
-                Grass { kind: Kind::Fern, pos: p, yaw, height: lerp(FERN_HEIGHT), width: lerp(FERN_SPREAD), rank: rank * 0.6, root, tip, seed: bseed }
+                Grass { kind: Kind::Fern, pos: p, yaw, height: lerp(FERN_HEIGHT), width: lerp(FERN_SPREAD), rank: rank * 0.6, root, tip, seed: bseed, tri: ti as u32, surface }
             } else {
                 let (root, tip) = blade_colours(ground);
-                let mut g = Grass { kind: Kind::Blades, pos: p, yaw, height, width, rank, root, tip, seed: bseed };
+                let mut g = Grass { kind: Kind::Blades, pos: p, yaw, height, width, rank, root, tip, seed: bseed, tri: ti as u32, surface };
                 if pick < d.ferns + d.flowers {
                     g.kind = Kind::Flower { yellow: size < YELLOW_FLOWERS };
                     (g.height, g.width) = (height * FLOWER_RISE, 1.0);
@@ -534,8 +612,7 @@ fn plant_copies(input: &PlanInput, grid: &Grid, d: &Density, seed: u64, st: &mut
             // The first ground within 2.5 units up or down of the plant's own height, walkable and flat enough.
             let Some(h) = ground_hit(col, [x, y, s.origin[2]], 2.5, 2.5) else { continue };
             if ground_verdict(h.0, Some(h)) != Ground::Ok { continue; }
-            let Some((vz, rgb)) = grid.ground(input, x, y, h.0) else { continue };
-            if !is_grass(rgb) { continue; }
+            let Some((vz, true)) = grid.ground(input, x, y, h.0) else { continue };
             out.push(PlantCopy { src: si, pos: [x, y, vz], yaw, scale, rank, seed: cseed });
             st.copies += 1;
         }
@@ -632,11 +709,55 @@ mod tests {
         let input = |cover: Tri, tex: Tex| PlanInput { level: 1, tris: vec![ground, cover], textures: vec![Some(tex)], collision: None, plants: vec![] };
         let p = [1.0, 1.0, 0.8];
         let i = input(t, grey);
-        assert!(Grid::new(&i.tris).covered(&i, 0, p));
+        assert!(Grid::new(&i).covered(&i, 0, p));
         let i = input(t, green);
-        assert!(!Grid::new(&i.tris).covered(&i, 0, p));
+        assert!(!Grid::new(&i).covered(&i, 0, p));
         let i = input(high, Tex { width: 1, height: 1, rgba: vec![110, 110, 110, 0xff] });
-        assert!(!Grid::new(&i.tris).covered(&i, 0, p));
+        assert!(!Grid::new(&i).covered(&i, 0, p));
+    }
+
+    #[test]
+    fn grass_ground_reads_the_texture() {
+        // The feedback's ground: (raw texture mean, mean vertex colour), green as drawn under the level's light.
+        let lit = [
+            ([152, 138, 84], [40, 68, 76, 128]),     // Aridia's sand under its blue-green night light (markers 2, 3)
+            ([99, 101, 108], [42, 77, 31, 128]),     // Blarg's floor plates (6)
+            ([74, 78, 95], [81, 80, 47, 128]),       // Gemlik's metal floor (21)
+            ([196, 202, 53], [47, 69, 66, 128]),     // Rilgar's slime-yellow pipe rims (8, 9)
+            ([199, 200, 200], [58, 65, 51, 128]),    // Batalia's concrete wall top (14)
+            ([169, 171, 183], [66, 70, 51, 128]),    // Batalia's paving (15)
+            ([80, 91, 95], [133, 133, 85, 128]),     // Pokitaru's platform (18)
+            ([102, 112, 124], [57, 67, 58, 128]),    // Oltanis' wet pavement (22, 23)
+            ([109, 158, 178], [73, 70, 51, 128]),    // Kalebo's glass-covered trough (25)
+        ];
+        for (raw, col) in lit {
+            let drawn = modulate(raw, col.map(|c| c as f32));
+            assert!(!is_grass(raw) && !grass_ground(raw, drawn, true), "{raw:?} drawn {drawn:?}");
+        }
+        // The lawns: Novalis' spawn, Kerwan's start, Pokitaru's islands, Batalia's grass, Aridia's green patches.
+        for (raw, col) in [([66, 100, 35], [109, 100, 76]), ([62, 79, 31], [117, 110, 71]), ([53, 116, 19], [135, 135, 86]), ([113, 127, 72], [63, 68, 53]), ([61, 96, 30], [43, 72, 79])] {
+            let drawn = modulate(raw, [col[0] as f32, col[1] as f32, col[2] as f32, 128.0]);
+            assert!(grass_ground(raw, drawn, true), "{raw:?} drawn {drawn:?}");
+            // A green texel on a texture that is not turf grows nothing.
+            assert!(!grass_ground(raw, drawn, false));
+        }
+        let mixed = Tex { width: 4, height: 1, rgba: [[60u8, 110, 40, 0xff], [150, 135, 85, 0xff], [150, 135, 85, 0xff], [0, 0, 0, 0]].concat() };
+        let s = texture_stats(&mixed);
+        assert!((s.grass_share - 1.0 / 3.0).abs() < 1e-6 && s.mean == [120, 126, 70] && s.luma_sd > 0.0);
+        let stats = |share: f32, sd: f32| TexStats { width: 1, height: 1, mean: [0; 3], grass_share: share, luma_sd: sd };
+        // Turf (Novalis' edges, Kerwan's mixed ground); sand (0 grass texels); a teal glowing panel (Quartu's 93).
+        assert!(is_turf(&stats(0.16, 20.0)) && is_turf(&stats(0.23, 33.8)) && is_turf(&stats(1.0, 3.0)));
+        assert!(!is_turf(&stats(0.0, 5.6)) && !is_turf(&stats(0.38, 57.3)) && !is_turf(&stats(0.19, 46.4)));
+    }
+
+    #[test]
+    fn station_levels() {
+        for l in [6, 13, 17] { assert!(no_foliage(l).is_some(), "level {l}"); }
+        for l in [1, 2, 3, 5, 8, 11, 14, 16] { assert!(no_foliage(l).is_none(), "level {l}"); }
+        let green = Tex { width: 1, height: 1, rgba: vec![60, 120, 40, 0xff] };
+        let flat = Tri { p: [[0.0, 0.0, 0.0], [10.0, 0.0, 0.0], [0.0, 10.0, 0.0]], uv: [[0.0; 2]; 3], col: [[0x80; 4]; 3], tex: 0 };
+        let p = plan(&PlanInput { level: 6, tris: vec![flat], textures: vec![Some(green)], collision: None, plants: vec![] }, &density(Foliage::Lush).unwrap());
+        assert!(p.grass.is_empty() && p.stats.candidates == 0 && p.stats.no_foliage.is_some());
     }
 
     #[test]

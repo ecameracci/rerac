@@ -3,8 +3,9 @@
 //! entity, no buffer, no planning). Written from the standard GPU grass / scatter technique.
 //!
 //! * **Placement** ([`plan`], once per level and value, on a worker thread; frame-exact runs wait for it): grass
-//!   points over the LOD-0 tfrag triangles where the ground as drawn reads as grass and the collision mesh agrees
-//!   (walkable, nothing overhead), each a short blade clump, a little often a flower cluster or a fern
+//!   points over the LOD-0 tfrag triangles where the ground is a turf texture that reads as grass both on its own and
+//!   as drawn and the collision mesh agrees (walkable, nothing overhead), none on the space stations
+//!   (`plan::NO_FOLIAGE`), each a short blade clump, a little often a flower cluster or a fern
 //!   (`plan::Kind`), and copies of the level's small plant shrub classes ([`plant_classes`]: a world
 //!   radius of at most [`MAX_PLANT_RADIUS`], swaying or green) around their placed instances. Its inputs are copied out
 //!   of the level once ([`build_input`]) and kept for the level, so Moderate ↔ Lush only re-plans; the old plants stay
@@ -26,7 +27,8 @@
 //!   terrain, the tip lighter; ferns darker, `plan::fern_colours`); flower heads white or yellow round a yellow
 //!   centre, dimmed with the ground; copies with their source instance's `LightShrubs` palette and class texture.
 //!
-//! `RC_GFX_FOLIAGE=original|moderate|lush` sets the option at start (crate::graphics).
+//! `RC_GFX_FOLIAGE=original|moderate|lush` sets the option at start (crate::graphics); `RC_FOLIAGE_TRACE` prints
+//! where the grass grew by tfrag texture ([`trace`]).
 
 mod plan;
 
@@ -350,15 +352,67 @@ fn follow_option(
     for e in st.entities.drain(..) { commands.entity(e).try_despawn(); }
     let n = spawn_plan(&mut commands, &level.0, &plan, &mut st, &mut meshes, &mut images, &mut materials, &mut buffers);
     let s = &plan.stats;
+    if let Some(why) = s.no_foliage {
+        println!("foliage: {want:?}: none on this level ({why})");
+        st.shown = Some(want);
+        st.density = Some(density);
+        return;
+    }
     println!(
-        "foliage: {want:?}: {} grass points ({} flower clusters, {} ferns) of {} candidates ({} steep, {} not grass, {} under a path or \
-         decal, {} no ground, {} off the collision surface, {} barren), {} plant copies of {} tries ({} source plants), {n} chunks; \
-         placement {:.1} ms",
-        s.grass, s.flowers, s.ferns, s.candidates, s.steep, s.not_grass, s.covered, s.no_ground, s.off_surface, s.barren, s.copies, s.copy_tries,
+        "foliage: {want:?}: {} grass points ({} flower clusters, {} ferns) of {} candidates ({} steep, {} not grass ({} on a texture \
+         that is not, {} green only as lit), {} under a path or decal, {} no ground, {} off the collision surface, {} barren), {} plant \
+         copies of {} tries ({} source plants), {n} chunks; placement {:.1} ms",
+        s.grass, s.flowers, s.ferns, s.candidates, s.steep, s.not_grass, s.non_grass_texture, s.tinted, s.covered, s.no_ground, s.off_surface, s.barren, s.copies, s.copy_tries,
         st.input.as_ref().map_or(0, |i| i.plants.len()), s.time.as_secs_f64() * 1e3
     );
+    if let Some(input) = st.input.as_ref().filter(|_| std::env::var_os("RC_FOLIAGE_TRACE").is_some()) { trace(input, &plan); }
     st.shown = Some(want);
     st.density = Some(density);
+}
+
+/// `RC_FOLIAGE_TRACE=1` (the whole level) or `x,y,r` (the points within r of game x, y): per tfrag texture, its
+/// grass points, the raw texture's mean colour and grass-texel share, the points' mean vertex colour and drawn colour
+/// and their collision surfaces (dev: why a surface grows grass).
+fn trace(input: &PlanInput, plan: &Plan) {
+    let probe: Option<[f32; 3]> = std::env::var("RC_FOLIAGE_TRACE").ok().and_then(|v| {
+        let p: Vec<f32> = v.split(',').filter_map(|s| s.trim().parse().ok()).collect();
+        (p.len() == 3).then(|| [p[0], p[1], p[2]])
+    });
+    trace_at(input, plan, None);
+    if probe.is_some() { trace_at(input, plan, probe); }
+}
+
+fn trace_at(input: &PlanInput, plan: &Plan, probe: Option<[f32; 3]>) {
+    #[derive(Default)]
+    struct T { n: usize, col: [f32; 4], drawn: [f32; 3], surf: BTreeMap<i32, usize>, nz: f32 }
+    let mut by: BTreeMap<u32, T> = BTreeMap::new();
+    for g in &plan.grass {
+        if let Some(p) = probe { if (g.pos[0] - p[0]).hypot(g.pos[1] - p[1]) > p[2] { continue; } }
+        let t = &input.tris[g.tri as usize];
+        let e = by.entry(t.tex).or_default();
+        e.n += 1;
+        for v in &t.col { for (s, c) in e.col.iter_mut().zip(v) { *s += *c as f32 / 3.0; } }
+        for (s, c) in e.drawn.iter_mut().zip(g.root) { *s += c as f32 / 0.88; }
+        *e.surf.entry(g.surface).or_default() += 1;
+        let n = t.normal();
+        e.nz += n[2].abs() / (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt().max(1e-9);
+    }
+    let mut list: Vec<_> = by.into_iter().collect();
+    list.sort_by_key(|(_, t)| std::cmp::Reverse(t.n));
+    println!("foliage trace{}: {} textures", probe.map_or(String::new(), |p| format!(" at {p:?}")), list.len());
+    for (tex, t) in list.iter().take(40) {
+        let n = t.n as f32;
+        let raw = input.textures.get(*tex as usize).and_then(|x| x.as_ref()).map(plan::texture_stats);
+        println!(
+            "  tex {tex:4} {:5} pts  raw {}  vtx {:?}  drawn {:?}  nz {:.2}  surfaces {:?}",
+            t.n,
+            raw.map_or("-".into(), |s| format!("{}x{} mean {:?} grass {:.2} sd {:.1}", s.width, s.height, s.mean, s.grass_share, s.luma_sd)),
+            t.col.map(|v| (v / n) as u8),
+            t.drawn.map(|v| (v / n) as u8),
+            t.nz / n,
+            t.surf
+        );
+    }
 }
 
 /// Little-endian record writer (foliage.wgsl `FoliageInst`).
