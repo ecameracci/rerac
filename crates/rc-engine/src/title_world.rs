@@ -184,6 +184,11 @@ pub struct TitleWorldRt {
     movie_was: bool,
 }
 
+impl TitleWorldRt {
+    /// The cameras show the title world.
+    pub(crate) fn shown(&self) -> bool { self.shown }
+}
+
 pub struct TitleWorldPlugin;
 
 impl Plugin for TitleWorldPlugin {

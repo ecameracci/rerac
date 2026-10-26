@@ -8,10 +8,11 @@
 //! 2. **Composite:** [`TAPS`] samples of the mask along the line to the sun, each fainter, added to the frame.
 //!
 //! The sun is the key light ([`KeyLight`], crate::sun_shadow). The rays fade as it leaves the screen or nears the
-//! horizon and are skipped while it is behind the camera. With Lighting Original or Simple nothing runs.
+//! horizon and are skipped while it is behind the camera. With Lighting Original or Simple nothing runs, nor on the
+//! levels and in the space scenes crate::graphics [`LightShafts`] turns the shafts off (`SHAFT_LEVELS`).
 
 use crate::fx_view::{depth_defs, depth_entry, Fullscreen, FxView, Pipelines};
-use crate::graphics::GraphicsSettings;
+use crate::graphics::{GraphicsSettings, LightShafts};
 use crate::shadow_render::ShadowCamera;
 use crate::sun_shadow::KeyLight;
 use bevy::core_pipeline::{Core3d, Core3dSystems, FullscreenShader};
@@ -100,11 +101,12 @@ fn init_pipelines(mut commands: Commands, assets: Res<AssetServer>, fullscreen: 
 fn prepare(
     mut commands: Commands,
     gfx: Option<Res<GraphicsSettings>>,
+    shafts: Option<Res<LightShafts>>,
     device: Res<RenderDevice>,
     mut textures: ResMut<TextureCache>,
     views: Query<(Entity, &ExtractedCamera), With<ShadowCamera>>,
 ) {
-    let on = gfx.is_some_and(|g| g.lighting.enhanced());
+    let on = gfx.is_some_and(|g| g.lighting.enhanced()) && shafts.is_some_and(|s| s.0);
     for (e, cam) in &views {
         let Some(size) = cam.physical_target_size.filter(|_| on) else {
             commands.entity(e).remove::<RaysMask>();

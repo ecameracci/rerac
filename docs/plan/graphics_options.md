@@ -71,3 +71,33 @@ Lighting, as it did not touch the Shadows row before it (`GraphicsSettings::with
   so no rays); on a fly view toward the sun (`RC_PLAY_FLY=1`, `RC_SUN_DIR`) Enhanced is byte-identical to Dynamic and
   Simple differs from it only by the rays (about a third of the pixels, the sky brighter toward the sun).
 * The Port Options page (fourteen rows) keeps the Camera sub-page's frame and scrolls, four rows at a time (port.rs `VISIBLE`).
+
+## Light shafts per level
+
+Lighting Enhanced's light shafts (the sun rays, `sun_rays.rs`, and the volumetric light, `volumetric_light.rs`) run
+only on the levels of `graphics::SHAFT_LEVELS` (`LightShafts`, `shafts_on_level`), and never while the title world or a
+level transition's cards, movies and flight show (the space scenes: `Travel::in_transition`, `TitleWorldRt::shown`).
+From the 2026-10-26 play test: on levels without a sun lighting open air the shafts only veil or streak the view.
+`RC_LIGHT_SHAFTS=1|0` forces them on or off everywhere (testing).
+
+| Level | Shafts | Why |
+|---|---|---|
+| 00 Veldin | on | desert daylight |
+| 01 Novalis | on | daylight |
+| 02 Aridia | off | dust haze, no sun to cast them |
+| 03 Kerwan | on | daylight through the tunnels |
+| 04 Eudora | on | daylight in the forest |
+| 05 Rilgar | off | night |
+| 06 Nebula G34 | off | indoor station, no visible sun |
+| 07 Umbris | off | dark swamp, no visible sun |
+| 08 Batalia | off | rain |
+| 09 Gaspar | on | daylight |
+| 10 Orxon | off | night |
+| 11 Pokitaru | on | daylight |
+| 12 Hoven | off | night |
+| 13 Gemlik | on | the sun in its sky |
+| 14 Oltanis | off | overcast, no visible sun |
+| 15 Quartu | off | night, indoor factory |
+| 16 Kalebo III | on | daylight |
+| 17 Drek's fleet | on | the sun in its sky |
+| 18 Veldin | on | daylight |

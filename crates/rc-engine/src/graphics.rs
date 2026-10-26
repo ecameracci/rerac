@@ -11,7 +11,7 @@
 //! | [`AmbientOcclusion`] | Original (none: the shade is the artists' baked vertex colours), On (screen-space occlusion from the depth buffer) | crate::ao_render |
 //! | [`Water`] | Original (the GS blend of the water textures), Enhanced (clear by depth, reflections, a sun glint, foam at the shore) | crate::water_render, crate::scene_copy |
 //! | [`Particles`] | Original (sprites cut where they meet the world), Soft (faded by their depth in front of it) | crate::particle_render, crate::scene_copy |
-//! | [`Lighting`] | Original (the game's shadows), Simple (sun shadows in their place), Enhanced (Simple's shadows and every advanced lighting effect) | crate::shadow_render, crate::sun_shadow, crate::tie_lod ([`Lighting::game_shadows`], [`Lighting::sun_shadows`]); crate::sun_rays ([`Lighting::enhanced`]) |
+//! | [`Lighting`] | Original (the game's shadows), Simple (sun shadows in their place), Enhanced (Simple's shadows and every advanced lighting effect) | crate::shadow_render, crate::sun_shadow, crate::tie_lod ([`Lighting::game_shadows`], [`Lighting::sun_shadows`]); crate::sun_rays ([`Lighting::enhanced`], and per level [`LightShafts`]) |
 //!
 //! **The lighting gate:** a later lighting effect (volumetric light, global illumination) runs only while
 //! `GraphicsSettings::lighting.enhanced()` (main world, or the render world's extracted copy), as crate::sun_rays
@@ -251,6 +251,66 @@ impl GfxOption for Lighting {
     }
 }
 
+/// Lighting Enhanced's light shafts (crate::sun_rays, crate::volumetric_light) by level index: on where a sun lights
+/// open air, off where they only veil or streak the view (the play-test of 2026-10-26). docs/plan/graphics_options.md.
+pub const SHAFT_LEVELS: [(bool, &str); 19] = [
+    (true, "Veldin: desert daylight"),
+    (true, "Novalis: daylight"),
+    (false, "Aridia: dust haze, no sun to cast them"),
+    (true, "Kerwan: daylight through the tunnels"),
+    (true, "Eudora: daylight in the forest"),
+    (false, "Rilgar: night"),
+    (false, "Nebula G34: indoor station, no visible sun"),
+    (false, "Umbris: dark swamp, no visible sun"),
+    (false, "Batalia: rain"),
+    (true, "Gaspar: daylight"),
+    (false, "Orxon: night"),
+    (true, "Pokitaru: daylight"),
+    (false, "Hoven: night"),
+    (true, "Gemlik: the sun in its sky"),
+    (false, "Oltanis: overcast, no visible sun"),
+    (false, "Quartu: night, indoor factory"),
+    (true, "Kalebo III: daylight"),
+    (true, "Drek's fleet: the sun in its sky"),
+    (true, "Veldin: daylight"),
+];
+
+/// [`SHAFT_LEVELS`]' choice for a level (none past the table).
+pub fn shafts_on_level(level: u32) -> bool { SHAFT_LEVELS.get(level as usize).is_some_and(|l| l.0) }
+
+/// This frame's gate of the light shafts (main world, and the render world's copy): [`shafts_on_level`] for the
+/// loaded level, off while the title world or a level transition's cards, movies and flight show (the space
+/// scenes); `RC_LIGHT_SHAFTS=1|0` forces them on or off. The effects also need [`Lighting::enhanced`].
+#[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq, bevy::render::extract_resource::ExtractResource)]
+pub struct LightShafts(pub bool);
+
+/// `RC_LIGHT_SHAFTS`: Some(on) to force, None for the table.
+fn env_shafts() -> Option<bool> {
+    static FORCE: std::sync::OnceLock<Option<bool>> = std::sync::OnceLock::new();
+    *FORCE.get_or_init(|| match std::env::var("RC_LIGHT_SHAFTS").as_deref().map(str::trim) {
+        Ok("1") => Some(true),
+        Ok("0") => Some(false),
+        _ => None,
+    })
+}
+
+fn update_shafts(
+    travel: Option<Res<crate::travel_render::Travel>>,
+    title: Option<Res<crate::title_world::TitleWorldRt>>,
+    mut out: ResMut<LightShafts>,
+    mut logged: Local<Option<(u32, bool)>>,
+) {
+    let level = crate::level_load::level_index();
+    let space = travel.is_some_and(|t| t.in_transition()) || title.is_some_and(|t| t.shown());
+    let on = env_shafts().unwrap_or(!space && shafts_on_level(level));
+    if *logged != Some((level, on)) {
+        *logged = Some((level, on));
+        let why = SHAFT_LEVELS.get(level as usize).map_or("", |l| l.1);
+        println!("graphics: light shafts {} (level {level:02} {why}{}; RC_LIGHT_SHAFTS=0|1 forces)", if on { "on" } else { "off" }, if space { ", space scene" } else { "" });
+    }
+    if out.0 != on { out.0 = on; }
+}
+
 /// A preset: a value for every option but [`Lighting`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Preset {
@@ -383,8 +443,11 @@ impl Plugin for GraphicsPlugin {
         let s = GraphicsSettings::startup();
         if s != GraphicsSettings::default() { println!("graphics: {s:?} ({:?})", s.preset()); }
         app.insert_resource(s)
+            .init_resource::<LightShafts>()
             .add_plugins(bevy::render::extract_resource::ExtractResourcePlugin::<GraphicsSettings>::default())
-            .add_systems(PreUpdate, (apply_detail, apply_samples));
+            .add_plugins(bevy::render::extract_resource::ExtractResourcePlugin::<LightShafts>::default())
+            .add_systems(PreUpdate, (apply_detail, apply_samples))
+            .add_systems(PostUpdate, update_shafts);
     }
 }
 
@@ -460,5 +523,15 @@ mod tests {
         assert_eq!(s.preset(), Preset::Original);
         assert_eq!(s.with_preset(Preset::Enhanced).lighting, Lighting::Enhanced);
         assert_eq!(s.with_preset(Preset::Enhanced).with_preset(Preset::Original), s);
+    }
+
+    #[test]
+    fn shafts_follow_the_level_table() {
+        // The play-test's list: Aridia, Rilgar, Nebula G34, Umbris, Batalia, Orxon, Hoven, Oltanis, Quartu.
+        let off: Vec<u32> = (0..SHAFT_LEVELS.len() as u32).filter(|&l| !shafts_on_level(l)).collect();
+        assert_eq!(off, [2, 5, 6, 7, 8, 10, 12, 14, 15]);
+        assert!(shafts_on_level(1) && shafts_on_level(3) && shafts_on_level(13) && shafts_on_level(16));
+        assert!(!shafts_on_level(19) && !shafts_on_level(u32::MAX));
+        assert!(SHAFT_LEVELS.iter().all(|l| !l.1.is_empty()));
     }
 }
