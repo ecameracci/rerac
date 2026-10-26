@@ -29,6 +29,10 @@
 //! The main menu's Options also ends with a Quit Game the disc's has not ([`FRONT_QUIT_ACTION`]): ✕ on it closes the
 //! app at once, no confirmation (`MenuOut::quit`; the engine's front-end frame).
 //!
+//! **Scrolling** (port-only, beyond the camera list's look): the list shows the rows its stretched panel holds
+//! ([`LIST_ROWS`], [`ROW_STEP`]); the game's arrow (icon 0xe99e frame 6, the Epilogue's page arrows) marks rows hidden
+//! above and below.
+//!
 //! Records live at addresses no EE pointer can hold (0x7f00_xxxx), and the text ids are negative (the disc's
 //! ids are 0..=21500), so nothing here can collide with or be mistaken for game data.
 //!
@@ -511,12 +515,35 @@ pub fn draw(m: &mut PageMenu, w: u32, a: &MenuAssets, out: &mut Vec<MenuDraw>) -
         right(out, a, ww - 0xc, y, LIGHT_BLUE, a.msg(e.values.get(v).copied().unwrap_or(0)));
         y += step;
     }
+    // Rows hidden above / below: the Epilogue's arrow (`media::epilogue_arrows`: icon 0xe99e frame 6, 0x20 × 0x10
+    // texels), half its size, centred between the panel's edge and the first / last row shown.
+    let (more_above, more_below) = scroll_marks(top, shown);
+    let frame = a.frame(0xe99e, 6);
+    let (cx, gap) = (ww as f32 / 2.0, (step - 8) as f32 / 2.0);
+    // At angle 0 the arrow points right (`rotated`: a quarter clockwise); ±π/2 turn it to point up / down.
+    let half = std::f32::consts::FRAC_PI_2;
+    if more_above { out.push(super::map_page::rotated(frame, cx, gap.max(ARROW_W), ARROW_W, ARROW_H, half, 0x20, 0x10)); }
+    if more_below { out.push(super::map_page::rotated(frame, cx, (wh as f32 - gap).min(wh as f32 - ARROW_W), ARROW_W, ARROW_H, -half, 0x20, 0x10)); }
     2
 }
 
+/// The scroll arrows' half sizes (pixels; [`super::map_page::rotated`]'s `w` and `h`).
+const ARROW_W: f32 = 6.0;
+const ARROW_H: f32 = 10.0;
+
+/// Whether rows are hidden above and below when `shown` rows from `top` are drawn.
+pub fn scroll_marks(top: usize, shown: usize) -> (bool, bool) { (top > 0, top + shown < ENTRIES.len()) }
+
 #[cfg(test)]
 mod tests {
-    use super::next_choice;
+    use super::{next_choice, scroll_marks, ENTRIES, VISIBLE};
+
+    #[test]
+    fn scroll_marks_show_hidden_rows() {
+        assert_eq!(scroll_marks(0, VISIBLE), (false, true));
+        assert_eq!(scroll_marks(1, VISIBLE), (true, true));
+        assert_eq!(scroll_marks(ENTRIES.len() - VISIBLE, VISIBLE), (true, false));
+    }
 
     #[test]
     fn cycle_skips_unsupported_values() {

@@ -16,6 +16,10 @@
 //!   the display's own rhythm; otherwise 1/limit s (60 on a 144 Hz screen without variable refresh still shows some
 //!   frames longer than others). Vsync stays on, so a limit above the display's rate gives the display's rate.
 //!   The wait sleeps to 0.3 ms before the deadline, then yields until it (the yield loop costs CPU: keep it short).
+//!   At ~the limit the display's vsync is trusted only while it paces the loop: when the frames come measurably faster
+//!   than the limit (vsync forced off, a variable-refresh or captured display), the 1/limit s limiter takes over for
+//!   the rest of the session. Unpaced, the tick rule above runs a frame that is more than ¼ tick early (and the
+//!   remainder clamp drops the debt), so the whole game (movement, music, speech) ran up to a quarter fast.
 //! * **Unlimited**: no limiter, and the window presents without vsync.
 //!
 //! The limit is kept in the port settings file (`fps_limit = 30|60|120|unlimited`, crate::render_settings).
@@ -96,6 +100,10 @@ struct Pace {
     /// The limiter's next deadline and its period.
     next: Option<Instant>,
     period: Option<Duration>,
+    /// The frame interval's moving average (seconds; the ticks' clock).
+    avg: f64,
+    /// A ~60 Hz display whose vsync does not pace the loop: the 1/60 s limiter runs anyway (module docs).
+    unpaced: bool,
 }
 
 fn env_is(name: &str, v: &str) -> bool { std::env::var(name).is_ok_and(|x| x.trim() == v) }
@@ -107,7 +115,7 @@ impl Plugin for FramePacePlugin {
             // (a capture run otherwise renders as fast as the machine allows).
             app.insert_resource(FrameLimit::Fps60);
             if env_is("RC_FRAME_CAP", "1") {
-                app.insert_resource(Pace { limit: true, last: None, acc: 0.0, next: None, period: None }).add_systems(Last, wait);
+                app.insert_resource(Pace { limit: true, last: None, acc: 0.0, next: None, period: None, avg: TICK, unpaced: false }).add_systems(Last, wait);
             }
             return;
         }
@@ -115,7 +123,7 @@ impl Plugin for FramePacePlugin {
         let fps = FrameLimit::startup();
         if fps != FrameLimit::default() { println!("frame pace: FPS limit {} (settings file)", fps.key()); }
         app.insert_resource(fps)
-            .insert_resource(Pace { limit, last: None, acc: 0.0, next: None, period: None })
+            .insert_resource(Pace { limit, last: None, acc: 0.0, next: None, period: None, avg: TICK, unpaced: false })
             .insert_resource(TimeUpdateStrategy::FixedTimesteps(1))
             .add_systems(First, steps.before(bevy::time::TimeSystems));
         if limit { app.add_systems(Last, (present_mode, wait)); }
@@ -129,7 +137,9 @@ fn steps(mut pace: ResMut<Pace>, mut strategy: ResMut<TimeUpdateStrategy>, fps: 
         *strategy = TimeUpdateStrategy::FixedTimesteps(1);
         return;
     };
-    pace.acc += (now - last).as_secs_f64() / TICK;
+    let dt = (now - last).as_secs_f64();
+    pace.avg += (dt.min(4.0 * TICK) - pace.avg) * 0.05;
+    pace.acc += dt / TICK;
     let round = pace.limit && fps.hz().is_some_and(|h| h <= TICK_HZ);
     let n = if round {
         let mut n = pace.acc.round().max(0.0);
@@ -169,7 +179,11 @@ fn present_mode(fps: Res<FrameLimit>, mut windows: Query<&mut Window, With<Prima
 /// The limiter (module docs).
 fn wait(mut pace: ResMut<Pace>, fps: Res<FrameLimit>, monitors: Query<&Monitor, With<PrimaryMonitor>>) {
     let mhz = monitors.iter().next().and_then(|m| m.refresh_rate_millihertz);
-    let period = fps.hz().and_then(|hz| period_for(mhz, hz));
+    let mut period = fps.hz().and_then(|hz| period_for(mhz, hz));
+    if let Some(hz) = fps.hz() {
+        if period.is_none() && pace.avg < 0.97 / hz { pace.unpaced = true; }
+        if pace.unpaced { period = period.or(Some(Duration::from_secs_f64(1.0 / hz))); }
+    }
     if period != pace.period {
         pace.period = period;
         pace.next = None;

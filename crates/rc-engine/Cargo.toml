@@ -19,6 +19,8 @@ dev = ["bevy/dynamic_linking"]
 bevy = "0.19"
 rc-formats = { path = "../rc-formats" }
 rc-game = { path = "../rc-game" }
+# Going Commando's game logic (crate::rac2).
+rc-game2 = { path = "../rc-game2" }
 # Decompressed lumps through the Tier 1 engine cache (once per process).
 rc-data = { path = "../rc-data" }
 # The portable first start extracts the player's disc in-process (crate::first_run).

@@ -148,7 +148,8 @@ fn give_items() -> Option<Vec<usize>> {
 }
 
 /// `RC_PLAY` (default on; `0` = fly camera only).
-pub fn enabled() -> bool { !std::env::var("RC_PLAY").is_ok_and(|v| v.trim() == "0") }
+/// Going Commando has no game tick yet (its logic is rc-game2's, docs/plan/rac2_bringup.md §6.3 F).
+pub fn enabled() -> bool { !std::env::var("RC_PLAY").is_ok_and(|v| v.trim() == "0") && crate::disc_source::current() == crate::disc_source::Game::Rac1 }
 
 /// The boot's game state: a direct boot into level `index` (`load_game_state`) with the debug grants applied. Built
 /// once, before the boot's level load (its spawn bits, [`level_spawn_save`]), and handed to [`GameplayPlugin`].
@@ -203,6 +204,11 @@ pub fn boot_state(root: &std::path::Path, index: u32) -> Option<(GameState, Sess
     if std::env::var("RC_GAME_BEATEN").is_ok_and(|v| v.trim() == "1") {
         gs.global.game_beaten = 1;
         println!("game state: RC_GAME_BEATEN=1: Goodies on the pause menu");
+    }
+    // RC_SKILL_POINTS=all: every skill point earned (0x13d408, debug): the Goodies' Sketchbook and Epilogue unlock.
+    if std::env::var("RC_SKILL_POINTS").is_ok_and(|v| v.trim() == "all") {
+        for b in gs.global.skill_points.iter_mut() { *b = 1; }
+        println!("game state: RC_SKILL_POINTS=all: every skill point earned");
     }
     if let Some(ids) = give_items() {
         use rc_game::inventory::{debug_grant, GrantEquip};
@@ -381,6 +387,19 @@ fn item_data(lv: &crate::level_load::LoadedLevel) -> anyhow::Result<ItemTablesOu
         let targets = (0..16).map_while(|l| gadget::joint_list(&g.blob, &c.header, l).ok().map(|(_, b)| rc_formats::moby_anim::list_target(&b).unwrap_or(0xff))).collect();
         item_targets.push((g.moby.o_class as i16, targets));
         classes.push(ItemClass { o_class: g.moby.o_class as i16, anim: rc_formats::moby_anim::MobyAnimClass::new(c, seqs), scale: c.header.scale, chains });
+    }
+    // The Swingshot's hook (0xd1) is a class of the level, not of the gadget table (`0x2dcbf0`'s `CreateMoby`;
+    // crate::moby_attach draws it from there too): the claws' animation (rc_game::hero::swingshot's hook update) needs
+    // its sequences, or the hook stays on its first frame with the claws folded.
+    let hook = rc_game::hero::swingshot::HOOK_CLASS;
+    if !classes.iter().any(|c| c.o_class == hook) {
+        if let Some(ci) = lv.mobys.classes.iter().position(|c| c.o_class == hook as i32) {
+            let c = &lv.mobys.classes[ci].class;
+            let chains = crate::interact_render::class_blob(hook as i32)
+                .map(|b| (0..16).map_while(|l| gadget::joint_list(&b, &c.header, l).ok().map(|(a, _)| a)).collect())
+                .unwrap_or_default();
+            classes.push(ItemClass { o_class: hook, anim: lv.mobys.anim[ci].clone(), scale: c.header.scale, chains });
+        }
     }
     let ammo = tables.records.iter().map(|r| (r.has_ammo(), u16::from_le_bytes([r.0[0xe], r.0[0xf]]))).collect();
     Ok((ItemData { defs, hero_chains, classes }, ammo, weapon_defs, seconds, firsts, item_targets))
@@ -622,7 +641,7 @@ pub struct Play {
     /// `rc_game::hero::anim::HeroAnimCtl`).
     pub body_anim: Option<rc_game::hero::anim::BodyAnim>,
     /// Ratchet's moby (`0x1acc00[his gameplay instance]`) and animation instance.
-    hero_id: MobyId,
+    pub(crate) hero_id: MobyId,
     hero_k: Option<usize>,
     /// His class (index into `LevelMobys::classes` / `anim`), moby+0x2c scale, palette slots.
     class: usize,
@@ -1411,6 +1430,20 @@ fn setup(
         }
         Err(e) => eprintln!("gameplay: no body joint lists ({e:#}): Clank / Giant Clank's joint points sit at the body's origin"),
     }
+    // The scene actors' classes (rc_game::scene_actors, game modes 2 / 6): Ratchet's (0) head manipulator target (list
+    // 0x18) and the Clank actors' (10, 0x1a3, 0x555) joint lists 1 / 6 for their antenna sprite and 1 / 2 for the noggin.
+    // Without them the sprite sat at the actor's origin, his feet.
+    match class_joint_data_where(lv, |o| matches!(o, 0 | 10 | 0x1a3 | 0x555)) {
+        Ok(m) => {
+            for (o, l) in m {
+                let targets: Vec<u8> = l.iter().map(|(_, s)| rc_formats::moby_anim::list_target(s).unwrap_or(0xff)).collect();
+                svc.joint_targets.entry(o).or_insert(targets);
+                // (Class 0 is the hero moby's too: only its manipulator targets, so no other joint query on Ratchet changes.)
+                if o != 0 { svc.joint_lists.entry(o).or_insert_with(|| l.into_iter().map(|(a, _)| a).collect()); }
+            }
+        }
+        Err(e) => eprintln!("gameplay: the scene actors' classes: no joint lists ({e:#})"),
+    }
     // A ship class the level itself carries (Gemlik's placed 533, which `rc_game::travel::ship::adopt` makes the ship): its
     // joint lists from the level's class, as for any class (the canopy glass sits on joint list 0).
     match class_joint_data_where(lv, |o| rc_game::travel::ship::CLASSES.contains(&o)) {
@@ -1434,6 +1467,9 @@ fn setup(
     svc.groups = statics.groups(&lv.gameplay);
     // The "use" system: talk tables, text, talk slots, save values (crate::interact_render; before the load pass).
     crate::interact_render::install(&mut svc, lv, &statics.instance_to_moby, state.as_ref().map(|s| &s.0));
+    // InitLevelRenderGlobals: the ship it creates is the hook slot 0 (`MobyUnknown74Hook(ship, 0)`: the map's ship
+    // marker); an adopted ship (level 13's 533, 0x13e030 set by `0x2a2360`) is not created, so not hooked.
+    if let Some(id) = ship_id.filter(|_| !crate::level_load::ship_adopted()) { svc.interact.register_talk_mobys([(id, 0)]); }
     if let Some(gs) = &state {
         svc.counters.bolts = gs.0.global.bolts;
         // 0x15ee20 (the challenge-gated pads 1135 and gold-weapon offers read it) and 0x13e520.
@@ -1724,7 +1760,8 @@ fn drive_statics(p: &mut Play, lv: &crate::level_load::LoadedLevel, occl: &mut M
         // Moby +0x36, the occlusion word MobyProc tests: the game keeps 0 for "the loader's word" (the renderer
         // resolved it per instance) and writes 0x7f80 for a creature revived or moved elsewhere, a thrown crate, …
         occl.set_occlusion_word(ii, m.occlusion);
-        occl.look(ii, moby_render::MobyLook { alpha: m.alpha, mode: m.mode, glow: m.glow, shine_distance: m.b73, draw_dist: Some(m.draw_dist), late: None });
+        let scroll = p.svc.class_scroll.get(&m.o_class).copied().unwrap_or((0, 0));
+        occl.look(ii, moby_render::MobyLook { alpha: m.alpha, mode: m.mode, glow: m.glow, shine_distance: m.b73, draw_dist: Some(m.draw_dist), late: None, scroll });
         if let (Some(a), Some(k)) = (anim.as_deref_mut(), k) {
             a.drive(k, m.anim, p.svc.snapshots.get(id).and_then(|s| s.as_ref()), &m.joint_mods);
         }
@@ -1958,6 +1995,7 @@ fn death_reload(p: &mut Play, lv: &crate::level_load::LoadedLevel, state: Option
     p.svc.hits = Default::default();
     // The "use" system's talk slots and save values by the new instance → moby map (before the load pass, as the load).
     crate::interact_render::install(&mut p.svc, lv, &statics.instance_to_moby, state);
+    if let Some(id) = ship_id.filter(|_| !crate::level_load::ship_adopted()) { p.svc.interact.register_talk_mobys([(id, 0)]); }
     p.svc.build_grid(&mut p.game.mobys);
     p.reload_shown = shown;
     println!(
@@ -2088,6 +2126,8 @@ fn debug_dump(
         "dump: tick {} hero mode {} state {:#x} pos ({:.2}, {:.2}, {:.2}) body {:?} hero moby {} ratchet moby {} back {}",
         p.game.counter, h.mode, h.state, hp[0], hp[1], hp[2], h.bodies.moby, h.hero_moby(p.hero_id), p.hero_id, h.back.is_some()
     );
+    // The inspect overlay's lines (crate::debug_hud): the facing, the camera, the moby looked at.
+    for l in crate::debug_hud::lines(&p) { println!("dump: {l}"); }
     let shown = p.entities.iter().filter(|&&e| vis.get(e).is_ok_and(|v| v.get())).count();
     println!("dump: engine Ratchet draw: cached hidden {}, {} of {} entities visible", p.ratchet_hidden, shown, p.entities.len());
     let mut visible: std::collections::HashMap<u32, (usize, usize)> = Default::default();
@@ -2356,6 +2396,7 @@ fn tick(
         w.camera_yaw = cam.yaw().to_f32();
         w.camera_rows = cam.rows_f32();
         w.camera_class = cam.class;
+        w.camera_flyby_phase = cam.flyby_phase;
         w.coll = Some(coll);
         w.particles = parts.as_deref_mut().map(|p| &mut p.sys);
         w.view = view_cull.as_ref();
@@ -2591,7 +2632,7 @@ fn tick(
         let s = &p.ratchet.state;
         println!(
             "tick {:5}: state {:#04x} pos {:.4?} yaw {:+.4} air {:3} | anim {}:{} -> {}:{} t {:.3} | cam {:.3?} | {:?} | rng {:#010x} \
-             mobys {n_active} bolts {} free {} dyn {}/{} parts {} grass seq1 {} | hand {}:{} {:?} combo {} hit {} fr {:.2} tip {:.3?} | back {} | snd {} | hp {} inv {} | shake {:.4} {:.4}",
+             mobys {n_active} bolts {} free {} dyn {}/{} parts {} grass seq1 {} | hand {}:{} {:?} combo {} hit {} fr {:.2} tip {:.3?} | back {} | snd {} | hp {} energy {} inv {} | shake {:.4} {:.4} | arm grp {:#x} out {} raised {} layers {:?} recs8/9 {:.3} {:.3} r0..3 {:.3?} irows {:.2?} aim {:.2?}",
             p.game.counter - 2, h.state, h.position(), h.yaw().to_f32(), h.air_ticks, s.seq_a, s.frame_a, s.seq_b, s.frame_b, s.t,
             report.camera.pos_f32(), report.hero, p.game.rng.state, p.svc.counters.bolts, p.game.mobys.free_slots,
             p.dynamic.drawn, p.dynamic.live, particles.as_ref().map_or(0, |s| s.sys.pool.count),
@@ -2600,7 +2641,11 @@ fn tick(
             h.melee.combo, h.melee.hit, p.ratchet.frame.to_f32(), rc_game::hero::physics::to_f32x3(h.melee.tip),
             h.back.as_ref().map_or("-".to_string(), |b| format!("pack {}:{} clank {}:{}", b.pack.anim.seq_b, b.pack.anim.frame_b, b.clank.anim.seq_b, b.clank.anim.frame_b)),
             audio_cell.borrow().as_ref().map_or("-".to_string(), |a| { let st = a.stats(); format!("{} plays, class {}/{}", st.plays, st.class_slots, st.class_sounds) }),
-            h.health, h.f510, p.game.camera.shake[0].offset.to_f32(), p.game.camera.shake[1].offset.to_f32()
+            h.health, h.bodies.energy, h.f510, p.game.camera.shake[0].offset.to_f32(), p.game.camera.shake[1].offset.to_f32(),
+            h.group, h.f13f8, h.f13fa, h.weapons.layers.iter().map(|l| l.map(|l| (l.seq_b, l.weight))).collect::<Vec<_>>(),
+            h.idle.joints[rc_game::hero::idle::joint::ARM_L].cur[1], h.idle.joints[rc_game::hero::idle::joint::ARM].cur[1],
+            h.idle.joints[..4].iter().map(|j| (j.attached, j.cur)).collect::<Vec<_>>(),
+            h.items.slot.item.as_ref().map(|m| m.rows), rc_game::hero::physics::to_f32x3(h.aim_rows[0])
         );
     }
     // The swim's ripple disturbances (`RippleDisturb` 0x2b82a8 on every patch; it draws nothing, so after the tick is
@@ -2786,6 +2831,7 @@ fn upload_dynamic(
 ) {
     let m = &lv.mobys;
     let table = &p.game.mobys;
+    let scroll = &p.svc.class_scroll;
     let first = table.first_dynamic;
     let d = &mut p.dynamic;
     let ship = p.ship.map(|s| s.0);
@@ -2832,12 +2878,8 @@ fn upload_dynamic(
         let lights = m.lighting.as_ref().map(|l| light::moby_lights(&rows, &l.bank, mo.light, [mo.ambient[0], mo.ambient[1], mo.ambient[2]], 0x80));
         let mut rec = moby_render::extra_record(&model, lights.as_ref(), slot as u32 * d.pal_slots);
         moby_render::write_point_light(&mut rec, moby_render::point_light_merge(point_lights, sphere_centre(mo), &rows3(&mo.rows)));
-        // The pilot flame's class texture scroll (rc_game::moby_update::classes::pyro_glow, +0x04) [L: kept per moby; the
-        // game's is the class's, stepped by each flame].
-        if mo.o_class == rc_game::moby_update::classes::pyro_glow::CLASS {
-            let o = rc_game::hero::pyrocitor::glow_pv::SCROLL;
-            if let Some(b) = mo.pvars.get(o..o + 4) { moby_render::set_uv_scroll(&mut rec, 0, i32::from_le_bytes([b[0], b[1], b[2], b[3]]) as i16); }
-        }
+        // The class's texture scroll (`FUN_00263d90`: the Pyrocitor's pilot flame, Gemlik's fields, Qwark's shield).
+        if let Some(&(s, t)) = scroll.get(&mo.o_class) { moby_render::set_uv_scroll(&mut rec, s, t); }
         let at = slot * moby_render::EXTRA_RECORD_SIZE;
         if d.records[at..at + rec.len()] != rec[..] {
             d.records[at..at + rec.len()].copy_from_slice(&rec);
