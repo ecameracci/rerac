@@ -7,26 +7,33 @@
 //! 1. **March** (half resolution): each pixel's view ray from the camera to the depth-buffer surface or the open sea
 //!    ([`SeaLevel`]; none from under it), at most
 //!    [`LENGTH`] units ([`SKY_LENGTH`] toward the sky, so it does not wash out), in [`STEPS`] steps packed toward the
-//!    camera ([`step`]) from a per-pixel dithered start (interleaved gradient noise). Each step looks the sun's
+//!    camera ([`step`]) from a per-pixel dithered start that moves every frame ([`jitter`]: interleaved gradient
+//!    noise plus the golden ratio per frame, so no fixed screen pattern survives step 2). Each step looks the sun's
 //!    cascades up (crate::sun_shadow `SunCascades`, one comparison tap): a lit step adds `σ·T·dt` of a uniform thin
 //!    medium ([`DENSITY`] σ, extinction `T = exp(−σt)`), weighted by the shadow around it ([`Shafts`]: in full
 //!    within [`EDGE`] of a long shadow along the ray, [`OPEN`] in lit air far from one, so a shaded space with a lit
 //!    opening gets bold beams and open daylight stays clear), and the sum by the Henyey-Greenstein phase ([`phase`],
-//!    [`G`]: forward scattering, strongest looking toward the light). Into an RGBA16F target, the sample's view
-//!    distance in alpha.
-//! 2. **Composite** (full resolution): a 4×4 depth-aware (bilateral) blur of the march target, upsampled, less
+//!    [`G`] blended [`ISO`] with an isotropic phase, [`phase_mix`]: forward scattering, strongest looking toward the
+//!    light, without the blown-out peak). Into an RGBA16F target, the sample's view distance in alpha.
+//! 2. **Temporal** (half resolution): the march blended ([`BLEND`]) into the last frame's result reprojected by the
+//!    sample's surface ([`VolHistory`], two history targets in turn), each history texel kept only while it saw the
+//!    same surface ([`same_surface`]) and clamped to the march's 3×3 neighbourhood; on a cut ([`CUT`], a resize, the
+//!    shafts just turned on) or a disocclusion, the depth-weighted 3×3 mean. It runs per rendered frame from the
+//!    extracted views, so interpolated frames (frame smoothing) reproject as any other.
+//! 3. **Composite** (full resolution): a 4×4 depth-aware (bilateral) blur of the accumulated target, upsampled, less
 //!    [`FLATTEN`] of the light it shares with its surroundings ([`flatten`]: the depth-weighted mean of a disc of
 //!    [`FLAT_RADIUS`] of the target's height), added to the frame: light that is the same all around (lit air seen
 //!    from a shaded spot, a level's whole distance) is a grey veil, not a shaft, so only what stands out from its
-//!    surroundings (beams through an opening, cut by its edges) shows in full. The scene itself is not dimmed by the
-//!    medium (the game's fog already does that).
+//!    surroundings (beams through an opening, cut by its edges) shows in full, under a soft maximum ([`soft_cap`],
+//!    [`KNEE`]). The scene itself is not dimmed by the medium (the game's fog already does that).
 //!
 //! The colour is the key light's ([`VolumetricLight::tint`]: light set 0's light A, `ShadowGame::sun_color`) pulled
 //! [`FOG_MIX`] of the way toward the frame's fog colour (crate::game_camera `GameFog`), so it sits in the level's
 //! palette; its strength follows that light's brightness ([`strength`]: levels without a real sun get little or none)
 //! and fades out as the light nears the horizon. The shafts follow the shadow light (under Enhanced the key light's
 //! own elevation, at least 30°: crate::sun_shadow `min_elevation`), so they match the shadows on the ground.
-//! Nothing runs without the sun's cascades (`RC_SHADOWS=0`) or under Lighting Original or Simple.
+//! Nothing runs without the sun's cascades (`RC_SHADOWS=0`), under Lighting Original or Simple, or where
+//! crate::graphics [`LightShafts`] turns the shafts off (its per-level table, the space scenes).
 //!
 //! Tuned on Kerwan's first tunnel (`RC_LEVEL=3 RC_HERO_AT=264,116,54.5,1.5708`; its 35° key light does not reach
 //! inside, so the shafts are in the opening, cut by the arch and the vines; with `RC_SUN_DIR=0.4,-0.5,0.75` bold beams
@@ -36,13 +43,13 @@
 //! level: without it a grey veil over the whole distance), keeping the beams of Kerwan's first tunnel.
 //!
 //! Dev switches: `RC_VOLUMETRIC=0` off; a number scales the strength (`2`: twice as bright).
-//! `RC_VOLUMETRIC_TUNE=steps,density,g,length,sky,open,edge,shade,after_lit,flatten,flat_radius` overrides the
+//! `RC_VOLUMETRIC_TUNE=steps,density,g,length,sky,open,edge,shade,after_lit,flatten,flat_radius,iso,knee,blend` overrides the
 //! constants (an empty field keeps one); `RC_VOLUMETRIC_DEBUG=<gain>` shows the shafts alone, times the gain.
 
 use crate::fx_view::{depth_defs, depth_entry, Fullscreen, FxView, Pipelines};
 use crate::game_camera::GameFog;
 use crate::gameplay::Play;
-use crate::graphics::GraphicsSettings;
+use crate::graphics::{GraphicsSettings, LightShafts};
 use crate::shadow_render::{ShadowCamera, ShadowGame};
 use crate::sun_shadow::{KeyLight, SunCascades};
 use bevy::core_pipeline::{Core3d, Core3dSystems, FullscreenShader};
@@ -96,6 +103,17 @@ const DIM: f32 = 0.15;
 const BRIGHT: f32 = 0.6;
 /// The light where no game runs (the title world): white, at full brightness.
 const DEFAULT_COLOR: Vec3 = Vec3::ONE;
+/// The share of [`phase_mix`] that is isotropic: at full Henyey-Greenstein the forward peak blew out the view toward
+/// the light (Gemlik).
+const ISO: f32 = 0.5;
+/// [`soft_cap`]'s knee: the most luminance the shafts add, approached smoothly.
+const KNEE: f32 = 0.25;
+/// This frame's weight in the temporal accumulation (about `1 / BLEND` frames averaged).
+const BLEND: f32 = 0.1;
+/// A camera move in one frame (world units) past which the history is dropped (a cut).
+const CUT: f32 = 4.0;
+/// The golden ratio's fraction: [`jitter`]'s per-frame step.
+const GOLDEN: f32 = 0.618_034;
 
 /// The shafts' colour and strength this frame (0: nothing runs).
 #[derive(Resource, Clone, Copy, Default, PartialEq, ExtractResource)]
@@ -111,9 +129,32 @@ pub struct VolumetricLight {
 #[derive(Resource, Clone, Copy, Debug, Default, PartialEq, ExtractResource)]
 pub struct SeaLevel(pub Option<f32>);
 
-/// The view's half-resolution march target this frame (only while the shafts show).
+/// The view's half-resolution targets this frame (only while the shafts show): the march, and the two history
+/// textures the temporal pass ping-pongs (`history[cur]` written from `history[1 − cur]`).
 #[derive(Component)]
-struct ScatterTarget(CachedTexture);
+struct ScatterTarget {
+    march: CachedTexture,
+    history: [CachedTexture; 2],
+    cur: usize,
+    frame: u32,
+    /// The last frame's view, while its history may be reprojected ([`history_valid`]).
+    prev: Option<PrevView>,
+}
+
+/// A view as the history saw it.
+#[derive(Clone, Copy)]
+struct PrevView {
+    clip_from_world: Mat4,
+    eye: Vec3,
+    size: UVec2,
+}
+
+/// The render world's history bookkeeping: the last frame's view (None while the shafts are off) and a frame count.
+#[derive(Resource, Default)]
+struct VolHistory {
+    prev: Option<PrevView>,
+    frame: u32,
+}
 
 pub struct VolumetricLightPlugin;
 
@@ -125,6 +166,7 @@ impl Plugin for VolumetricLightPlugin {
             .add_systems(Last, update);
         let Some(render_app) = app.get_sub_app_mut(RenderApp) else { return };
         render_app
+            .init_resource::<VolHistory>()
             .add_systems(RenderStartup, init_pipelines)
             .add_systems(Render, prepare.in_set(RenderSystems::PrepareResources))
             .add_systems(Core3d, volumetric_pass.in_set(Core3dSystems::PostProcess).before(crate::sun_rays::SunRaysSet));
@@ -138,6 +180,35 @@ pub fn phase(cos_theta: f32, g: f32) -> f32 {
     let d = (1.0 + g * g - 2.0 * g * cos_theta).max(1e-4);
     (1.0 - g * g) / (4.0 * PI * d * d.sqrt())
 }
+
+/// [`phase`] blended with the isotropic `1/4π` by `iso` (0: Henyey-Greenstein alone): still integrates to 1, a lower
+/// forward peak. Mirrored in the shader.
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn phase_mix(cos_theta: f32, g: f32, iso: f32) -> f32 { iso / (4.0 * PI) + (1.0 - iso) * phase(cos_theta, g) }
+
+/// The added light under a soft maximum: `l / (1 + Y(l) / knee)` (`Y` the luminance), so the shafts never add more
+/// than `knee` and faint ones pass nearly unchanged. Mirrored in the shader's `composite`.
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn soft_cap(light: Vec3, knee: f32) -> Vec3 { light / (1.0 + light.dot(LUMA) / knee.max(1e-4)) }
+
+const LUMA: Vec3 = Vec3::new(0.2126, 0.7152, 0.0722);
+
+/// A pixel's march start offset on `frame`: its fixed interleaved-gradient value `base` (0..1) moved on by the golden
+/// ratio each frame, so every pixel runs through well-spread offsets the temporal pass averages (no fixed pattern).
+/// Mirrored in the shader's `march`.
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn jitter(base: f32, frame: u32) -> f32 { (base + GOLDEN * (frame % 4096) as f32).fract() }
+
+/// Whether last frame's history (`prev`) can be reprojected into a view of `size` with its eye at `eye`: the same
+/// target size and no cut.
+fn history_valid(prev: Option<&PrevView>, eye: Vec3, size: UVec2) -> bool {
+    prev.is_some_and(|p| p.size == size && p.eye.distance(eye) < CUT)
+}
+
+/// Whether a history texel that stored the view distance `stored` shows the surface now `expected` away from the
+/// previous eye (else it is a different surface: disocclusion, a moving object). Mirrored in the shader's `temporal`.
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn same_surface(stored: f32, expected: f32) -> bool { (stored - expected).abs() <= 0.05 * expected + 0.25 }
 
 /// Step `i` of `n` along a ray of `length`, its start dithered by `jitter` (0..1): (distance, length of the step).
 /// `t = length·u²` with `u = (i + jitter) / n` packs the steps toward the camera, where shafts are thin and near;
@@ -275,13 +346,13 @@ fn env_scale() -> f32 {
     *SCALE.get_or_init(|| std::env::var("RC_VOLUMETRIC").ok().and_then(|v| v.trim().parse::<f32>().ok()).map_or(1.0, |v| v.max(0.0)))
 }
 
-/// The march's steps, density, phase g, longest ray, sky ray, [`ShaftShape`] (open, edge, shade, after_lit) and
-/// [`flatten`]'s share and radius: the constants, or `RC_VOLUMETRIC_TUNE=` up to eleven numbers (an empty field
-/// keeps the constant).
-fn tune() -> [f32; 11] {
-    static TUNE: OnceLock<[f32; 11]> = OnceLock::new();
+/// The march's steps, density, phase g, longest ray, sky ray, [`ShaftShape`] (open, edge, shade, after_lit),
+/// [`flatten`]'s share and radius, [`ISO`], [`KNEE`] and [`BLEND`]: the constants, or `RC_VOLUMETRIC_TUNE=` up to
+/// fourteen numbers (an empty field keeps the constant).
+fn tune() -> [f32; 14] {
+    static TUNE: OnceLock<[f32; 14]> = OnceLock::new();
     *TUNE.get_or_init(|| {
-        let mut v = [STEPS as f32, DENSITY, G, LENGTH, SKY_LENGTH, OPEN, EDGE, SHADE, AFTER_LIT, FLATTEN, FLAT_RADIUS];
+        let mut v = [STEPS as f32, DENSITY, G, LENGTH, SKY_LENGTH, OPEN, EDGE, SHADE, AFTER_LIT, FLATTEN, FLAT_RADIUS, ISO, KNEE, BLEND];
         if let Ok(s) = std::env::var("RC_VOLUMETRIC_TUNE") {
             for (slot, f) in v.iter_mut().zip(s.split(',')) {
                 if let Ok(x) = f.trim().parse::<f32>() { *slot = x; }
@@ -298,18 +369,20 @@ fn debug_gain() -> f32 {
 }
 
 /// The frame's [`VolumetricLight`] from the key light, the fog and the option.
+#[allow(clippy::too_many_arguments)]
 fn update(
     gfx: Res<GraphicsSettings>,
     key: Res<KeyLight>,
     game: Option<Res<ShadowGame>>,
     play: Option<Res<Play>>,
     fog: Option<Res<GameFog>>,
+    shafts: Res<LightShafts>,
     mut out: ResMut<VolumetricLight>,
     mut logged: Local<Option<Vec3>>,
 ) {
     let color = game.filter(|_| play.is_some()).map_or(DEFAULT_COLOR, |g| g.sun_color());
     let fog = fog.map_or(Vec3::ONE, |f| Vec3::from_array(f.fog.color.map(|c| c as f32 / 255.0)));
-    let on = gfx.lighting.enhanced() && key.sun_shadows;
+    let on = gfx.lighting.enhanced() && key.sun_shadows && shafts.0;
     let want = VolumetricLight { tint: tint(color, fog), strength: if on { INTENSITY * strength(color, key.to_light.y) * env_scale() } else { 0.0 } };
     if on && *logged != Some(color) {
         *logged = Some(color);
@@ -333,6 +406,20 @@ struct VolParams {
     sea: Vec4,
     /// [`flatten`]'s share, the surroundings' radius in target pixels.
     flat: Vec4,
+    /// The history's view (the temporal pass's reprojection).
+    prev_clip_from_world: Mat4,
+    /// The history's eye (world); w: 1 while it is valid ([`history_valid`]).
+    prev_eye: Vec4,
+    /// This frame's [`BLEND`], the frame index ([`jitter`]), [`ISO`], [`KNEE`].
+    temporal: Vec4,
+}
+
+/// The passes: the march, the temporal accumulation, the composite.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum Stage {
+    March,
+    Temporal,
+    Composite,
 }
 
 #[derive(Resource)]
@@ -340,10 +427,11 @@ struct VolPipelines {
     /// (march, composite) × (single-sampled depth, multisampled).
     march_layout: [BindGroupLayoutDescriptor; 2],
     composite_layout: [BindGroupLayoutDescriptor; 2],
+    temporal_layout: BindGroupLayoutDescriptor,
     shader: Handle<Shader>,
     compare: Sampler,
-    /// (composite, depth multisampled, target format).
-    pipes: Pipelines<(bool, bool, TextureFormat)>,
+    /// (stage, depth multisampled, target format).
+    pipes: Pipelines<(Stage, bool, TextureFormat)>,
 }
 
 fn init_pipelines(mut commands: Commands, assets: Res<AssetServer>, fullscreen: Res<FullscreenShader>, device: Res<RenderDevice>) {
@@ -373,6 +461,13 @@ fn init_pipelines(mut commands: Commands, assets: Res<AssetServer>, fullscreen: 
             ),
         )
     };
+    let temporal = BindGroupLayoutDescriptor::new(
+        "volumetric light temporal",
+        &BindGroupLayoutEntries::with_indices(
+            ShaderStages::FRAGMENT,
+            ((0, uniform_buffer::<FxView>(false)), (6, unfiltered()), (7, uniform_buffer::<VolParams>(false)), (8, unfiltered())),
+        ),
+    );
     let compare = device.create_sampler(&SamplerDescriptor {
         label: Some("volumetric light compare"),
         mag_filter: FilterMode::Linear,
@@ -383,6 +478,7 @@ fn init_pipelines(mut commands: Commands, assets: Res<AssetServer>, fullscreen: 
     commands.insert_resource(VolPipelines {
         march_layout: [march(false), march(true)],
         composite_layout: [composite(false), composite(true)],
+        temporal_layout: temporal,
         shader: assets.load(SHADER_PATH),
         compare,
         pipes: Pipelines::new(&fullscreen),
@@ -395,28 +491,39 @@ fn prepare(
     vol: Option<Res<VolumetricLight>>,
     device: Res<RenderDevice>,
     mut textures: ResMut<TextureCache>,
-    views: Query<(Entity, &ExtractedCamera), With<ShadowCamera>>,
+    mut history: ResMut<VolHistory>,
+    views: Query<(Entity, &ExtractedCamera, &ExtractedView), With<ShadowCamera>>,
 ) {
     let on = gfx.is_some_and(|g| g.lighting.enhanced()) && vol.is_some_and(|v| v.strength > 0.0);
-    for (e, cam) in &views {
-        let Some(size) = cam.physical_target_size.filter(|_| on) else {
+    for (e, cam, ev) in &views {
+        let (Some(size), Some(fx)) = (cam.physical_target_size.filter(|_| on), FxView::of(cam, ev)) else {
             commands.entity(e).remove::<ScatterTarget>();
+            history.prev = None;
             continue;
         };
-        let t = textures.get(
-            &device,
-            TextureDescriptor {
-                label: Some("volumetric light"),
-                size: Extent3d { width: size.x.div_ceil(2).max(1), height: size.y.div_ceil(2).max(1), depth_or_array_layers: 1 },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: TextureDimension::D2,
-                format: SCATTER_FORMAT,
-                usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING,
-                view_formats: &[],
-            },
-        );
-        commands.entity(e).insert(ScatterTarget(t));
+        // Distinct labels: the cache hands each its own texture back every frame (the history persists).
+        let mut get = |label: &'static str| {
+            textures.get(
+                &device,
+                TextureDescriptor {
+                    label: Some(label),
+                    size: Extent3d { width: size.x.div_ceil(2).max(1), height: size.y.div_ceil(2).max(1), depth_or_array_layers: 1 },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: TextureDimension::D2,
+                    format: SCATTER_FORMAT,
+                    usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING,
+                    view_formats: &[],
+                },
+            )
+        };
+        let (march, h0, h1) = (get("volumetric light"), get("volumetric light history 0"), get("volumetric light history 1"));
+        let now = PrevView { clip_from_world: fx.clip_from_view * fx.view_from_world, eye: fx.world_from_view.w_axis.truncate(), size };
+        let prev = history.prev.filter(|p| history_valid(Some(p), now.eye, size));
+        let frame = history.frame;
+        commands.entity(e).insert(ScatterTarget { march, history: [h0, h1], cur: (frame & 1) as usize, frame, prev });
+        history.prev = Some(now);
+        history.frame = frame.wrapping_add(1);
     }
 }
 
@@ -439,7 +546,8 @@ fn volumetric_pass(
     let Some((sun, count)) = SunCascades::of([light], entity) else { return };
     let (Some(mut fx), Some(size)) = (FxView::of(cam, ev), cam.physical_target_size) else { return };
     fx.extra = (-light.transform.forward().as_vec3()).extend(0.0);
-    let [steps, density, g, length, sky, open, edge, shade, after_lit, flat, flat_radius] = tune();
+    let [steps, density, g, length, sky, open, edge, shade, after_lit, flat, flat_radius, iso, knee, blend] = tune();
+    let prev = scatter.prev;
     let params = VolParams {
         tint: (vol.tint * vol.strength).extend(count as f32),
         march: Vec4::new(steps.round().max(1.0), density, g, length),
@@ -447,10 +555,13 @@ fn volumetric_pass(
         shape: Vec4::new(open, edge.max(1.0), shade.max(1e-3), after_lit),
         sea: sea.and_then(|s| s.0).map_or(Vec4::ZERO, |y| Vec4::new(y, 1.0, 0.0, 0.0)),
         flat: Vec4::new(flat.clamp(0.0, 1.0), flat_radius.max(0.0) * size.y.div_ceil(2) as f32, 0.0, 0.0),
+        prev_clip_from_world: prev.map_or(Mat4::IDENTITY, |p| p.clip_from_world),
+        prev_eye: prev.map_or(Vec4::ZERO, |p| p.eye.extend(1.0)),
+        temporal: Vec4::new(blend.clamp(0.01, 1.0), (scatter.frame % 4096) as f32, iso.clamp(0.0, 1.0), knee.max(1e-4)),
     };
     let format = target.main_texture_format();
     let ms = depth.texture.sample_count() > 1;
-    let march_pipe = pipes.pipes.get(&cache, (false, ms, SCATTER_FORMAT), || Fullscreen {
+    let march_pipe = pipes.pipes.get(&cache, (Stage::March, ms, SCATTER_FORMAT), || Fullscreen {
         label: "volumetric light march",
         layout: pipes.march_layout[ms as usize].clone(),
         shader: pipes.shader.clone(),
@@ -460,7 +571,17 @@ fn volumetric_pass(
         blend: None,
         samples: 1,
     });
-    let composite_pipe = pipes.pipes.get(&cache, (true, ms, format), || Fullscreen {
+    let temporal_pipe = pipes.pipes.get(&cache, (Stage::Temporal, false, SCATTER_FORMAT), || Fullscreen {
+        label: "volumetric light temporal",
+        layout: pipes.temporal_layout.clone(),
+        shader: pipes.shader.clone(),
+        entry: "temporal",
+        defs: vec![],
+        format: SCATTER_FORMAT,
+        blend: None,
+        samples: 1,
+    });
+    let composite_pipe = pipes.pipes.get(&cache, (Stage::Composite, ms, format), || Fullscreen {
         label: "volumetric light composite",
         layout: pipes.composite_layout[ms as usize].clone(),
         shader: pipes.shader.clone(),
@@ -470,11 +591,12 @@ fn volumetric_pass(
         blend: None,
         samples: 1,
     });
-    let (Some(march_pipe), Some(composite_pipe)) = (march_pipe, composite_pipe) else { return };
+    let (Some(march_pipe), Some(temporal_pipe), Some(composite_pipe)) = (march_pipe, temporal_pipe, composite_pipe) else { return };
     let device = ctx.render_device().clone();
     let fx_buf = fx.buffer(&device, "volumetric light view");
     let sun_buf = crate::fx_view::uniform_buffer(&device, "volumetric light cascades", &sun);
     let params_buf = crate::fx_view::uniform_buffer(&device, "volumetric light params", &params);
+    let (accum, last) = (&scatter.history[scatter.cur].default_view, &scatter.history[1 - scatter.cur].default_view);
     let march_group = device.create_bind_group(
         "volumetric light march",
         &cache.get_bind_group_layout(&pipes.march_layout[ms as usize]),
@@ -487,11 +609,21 @@ fn volumetric_pass(
             (7, params_buf.as_entire_binding()),
         )),
     );
-    {
+    let temporal_group = device.create_bind_group(
+        "volumetric light temporal",
+        &cache.get_bind_group_layout(&pipes.temporal_layout),
+        &BindGroupEntries::with_indices((
+            (0, fx_buf.as_entire_binding()),
+            (6, &scatter.march.default_view),
+            (7, params_buf.as_entire_binding()),
+            (8, last),
+        )),
+    );
+    for (label, view, pipe, group) in [("volumetric light march", &scatter.march.default_view, march_pipe, &march_group), ("volumetric light temporal", accum, temporal_pipe, &temporal_group)] {
         let mut pass = ctx.begin_tracked_render_pass(RenderPassDescriptor {
-            label: Some("volumetric light march"),
+            label: Some(label),
             color_attachments: &[Some(RenderPassColorAttachment {
-                view: &scatter.0.default_view,
+                view,
                 depth_slice: None,
                 resolve_target: None,
                 ops: Operations { load: LoadOp::Clear(Default::default()), store: StoreOp::Store },
@@ -501,8 +633,8 @@ fn volumetric_pass(
             occlusion_query_set: None,
             multiview_mask: None,
         });
-        pass.set_render_pipeline(march_pipe);
-        pass.set_bind_group(0, &march_group, &[]);
+        pass.set_render_pipeline(pipe);
+        pass.set_bind_group(0, group, &[]);
         pass.draw(0..3, 0..1);
     }
     let post = target.post_process_write();
@@ -513,7 +645,7 @@ fn volumetric_pass(
             (0, fx_buf.as_entire_binding()),
             (1, depth.view()),
             (5, post.source),
-            (6, &scatter.0.default_view),
+            (6, accum),
             (7, params_buf.as_entire_binding()),
         )),
     );
@@ -623,6 +755,53 @@ mod tests {
         assert!(strength(Vec3::splat(0.3), up) > 0.0 && strength(Vec3::splat(0.3), up) < 1.0);
         assert_eq!(strength(Vec3::ONE, 0.0), 0.0);
         assert_eq!(strength(Vec3::ONE, -0.5), 0.0);
+    }
+
+    #[test]
+    fn the_mixed_phase_integrates_to_one_with_a_lower_peak() {
+        let n = 4000;
+        let sum: f32 = (0..n).map(|k| phase_mix(-1.0 + 2.0 * (k as f32 + 0.5) / n as f32, G, ISO) * 2.0 * PI * (2.0 / n as f32)).sum();
+        assert!((sum - 1.0).abs() < 0.01, "{sum}");
+        assert!(phase_mix(1.0, G, ISO) < 0.75 * phase(1.0, G));
+        assert!(phase_mix(1.0, G, ISO) / phase_mix(-1.0, G, ISO) < 0.5 * phase(1.0, G) / phase(-1.0, G));
+        assert_eq!(phase_mix(0.4, G, 0.0), phase(0.4, G));
+    }
+
+    #[test]
+    fn the_soft_cap_bounds_what_the_shafts_add() {
+        let faint = Vec3::splat(0.01);
+        assert!((soft_cap(faint, KNEE) - faint).length() < 0.001);
+        for l in [0.5, 2.0, 50.0] {
+            let y = soft_cap(Vec3::new(l, 0.8 * l, 0.5 * l), KNEE).dot(LUMA);
+            assert!(y < KNEE, "{l}: {y}");
+        }
+        // Monotonic: a brighter shaft stays brighter.
+        assert!(soft_cap(Vec3::splat(0.4), KNEE).x > soft_cap(Vec3::splat(0.2), KNEE).x);
+    }
+
+    #[test]
+    fn the_jitter_spreads_over_frames() {
+        // Any pixel's offsets over 16 frames leave no gap wider than 2/16 of the step.
+        for base in [0.0, 0.37, 0.91] {
+            let mut v: Vec<f32> = (0..16).map(|f| jitter(base, f)).collect();
+            assert!(v.iter().all(|x| (0.0..1.0).contains(x)));
+            v.sort_by(f32::total_cmp);
+            let gaps = v.windows(2).map(|w| w[1] - w[0]).chain([1.0 + v[0] - v[15]]);
+            assert!(gaps.fold(0.0f32, f32::max) < 2.0 / 16.0, "{base}: {v:?}");
+        }
+        assert_ne!(jitter(0.5, 1), jitter(0.5, 2));
+    }
+
+    #[test]
+    fn the_history_is_dropped_on_a_cut_or_a_resize() {
+        let p = PrevView { clip_from_world: Mat4::IDENTITY, eye: Vec3::ZERO, size: UVec2::new(1600, 900) };
+        assert!(history_valid(Some(&p), Vec3::new(0.5, 0.0, 0.2), p.size));
+        assert!(!history_valid(Some(&p), Vec3::new(CUT + 1.0, 0.0, 0.0), p.size));
+        assert!(!history_valid(Some(&p), Vec3::ZERO, UVec2::new(1280, 720)));
+        assert!(!history_valid(None, Vec3::ZERO, p.size));
+        // Its texels: the same surface within 5% (plus a quarter unit), not another one.
+        assert!(same_surface(20.4, 20.0) && same_surface(1.1, 1.0));
+        assert!(!same_surface(30.0, 20.0) && !same_surface(10_000.0, 20.0));
     }
 
     #[test]

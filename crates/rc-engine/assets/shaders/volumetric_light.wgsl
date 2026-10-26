@@ -30,6 +30,11 @@ struct VolParams {
     sea: vec4<f32>,
     // crate::volumetric_light::flatten: the share taken out, the surroundings' radius (target pixels).
     flat: vec4<f32>,
+    // The history's view and eye (w: 1 while valid).
+    prev_clip_from_world: mat4x4<f32>,
+    prev_eye: vec4<f32>,
+    // This frame's blend, the frame index, the phase's isotropic share, the soft cap's knee.
+    temporal: vec4<f32>,
 }
 
 #ifdef MULTISAMPLED
@@ -43,6 +48,7 @@ struct VolParams {
 @group(0) @binding(5) var source: texture_2d<f32>;
 @group(0) @binding(6) var scatter_tex: texture_2d<f32>;
 @group(0) @binding(7) var<uniform> vol: VolParams;
+@group(0) @binding(8) var history_tex: texture_2d<f32>;
 
 // The view distance a sky sample stores (no surface).
 const SKY_DIST: f32 = 1.0e4;
@@ -56,6 +62,13 @@ fn phase(cos_theta: f32, g: f32) -> f32 {
     let d = max(1.0 + g * g - 2.0 * g * cos_theta, 1.0e-4);
     return (1.0 - g * g) / (12.566371 * d * sqrt(d));
 }
+
+// crate::volumetric_light::phase_mix.
+fn phase_mix(cos_theta: f32, g: f32, iso: f32) -> f32 {
+    return iso / 12.566371 + (1.0 - iso) * phase(cos_theta, g);
+}
+
+const LUMA: vec3<f32> = vec3<f32>(0.2126, 0.7152, 0.0722);
 
 // crate::volumetric_light::Shafts::close: a lit run's weighted in-scattering. r = (Σ s, Σ s·exp(−d/edge),
 // Σ s·exp(d/edge), its length), d from its start; before / after: the weights of the shadows bounding it; cam: the
@@ -111,7 +124,8 @@ fn march(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     let forward = -ray_view.z;
     let n = i32(vol.march.x);
     let sigma = vol.march.y;
-    let jitter = fx_noise(in.position.xy);
+    // crate::volumetric_light::jitter.
+    let jitter = fract(fx_noise(in.position.xy) + 0.618034 * vol.temporal.y);
     // crate::volumetric_light::Shafts: the current lit run (see close_run; start < 0: none) and the weight of the
     // shadow before it, a run ended by the current shadow (pending), the current shadow's length (< 0: lit), the
     // weight of the last shadow, the camera's shade (< 0: not yet known).
@@ -156,8 +170,77 @@ fn march(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
         if (has_pending) { sum += close_run(pending, pending_before, w, cam); }
     }
     if (start >= 0.0) { sum += close_run(run, run_before, 0.0, max(cam, 0.0)); }
-    let light = vol.tint.rgb * sum * phase(dot(ray, view.extra.xyz), vol.march.z) * 12.566371;
+    let light = vol.tint.rgb * sum * phase_mix(dot(ray, view.extra.xyz), vol.march.z, vol.temporal.z) * 12.566371;
     return vec4<f32>(light, dist);
+}
+
+// The history texel's weight for a sample `expected` from the previous eye: crate::volumetric_light::same_surface.
+fn same_surface(stored: f32, expected: f32) -> bool {
+    return abs(stored - expected) <= 0.05 * expected + 0.25;
+}
+
+// Temporal accumulation (half resolution): this frame's march blended into the history reprojected to it (by the
+// sample's surface, or its direction toward the sky), each of the four history texels around the reprojected point
+// kept only while it saw the same surface; the history clamped to the march's 3×3 neighbourhood (mean ± 1.5σ) so a
+// moving shadow does not smear. No usable history (a cut, off screen, disoccluded): the depth-weighted 3×3 mean.
+@fragment
+fn temporal(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
+    let lo = vec2<i32>(textureDimensions(scatter_tex));
+    let p = clamp(vec2<i32>(floor(in.position.xy)), vec2<i32>(0), lo - 1);
+    let cur = textureLoad(scatter_tex, p, 0);
+    var mean = vec3<f32>(0.0);
+    var sq = vec3<f32>(0.0);
+    var near = vec3<f32>(0.0);
+    var near_w = 0.0;
+    for (var y = -1; y <= 1; y += 1) {
+        for (var x = -1; x <= 1; x += 1) {
+            let s = textureLoad(scatter_tex, clamp(p + vec2<i32>(x, y), vec2<i32>(0), lo - 1), 0);
+            mean += s.rgb;
+            sq += s.rgb * s.rgb;
+            let w = exp(-abs(s.a - cur.a) / (0.05 * min(cur.a, s.a) + 0.1));
+            near += s.rgb * w;
+            near_w += w;
+        }
+    }
+    mean /= 9.0;
+    let sigma = sqrt(max(sq / 9.0 - mean * mean, vec3<f32>(0.0)));
+    let fallback = vec4<f32>(near / near_w, cur.a);
+    if (vol.prev_eye.w < 0.5) { return fallback; }
+    let size = vol.extra.zw;
+    let coord = clamp(floor(in.uv * size), vec2<f32>(0.0), size - 1.0) + 0.5;
+    let ray = normalize((view.world_from_view * vec4<f32>(normalize(fx_view_pos(coord, 1.0)), 0.0)).xyz);
+    var clip: vec4<f32>;
+    var expected = SKY_DIST;
+    if (cur.a >= 0.5 * SKY_DIST) {
+        clip = vol.prev_clip_from_world * vec4<f32>(ray, 0.0);
+    } else {
+        let world = view.world_from_view[3].xyz + ray * cur.a;
+        clip = vol.prev_clip_from_world * vec4<f32>(world, 1.0);
+        expected = length(world - vol.prev_eye.xyz);
+    }
+    if (clip.w <= 1.0e-4) { return fallback; }
+    let ndc = clip.xy / clip.w;
+    let uv = (view.viewport.xy + (ndc * vec2<f32>(0.5, -0.5) + 0.5) * view.viewport.zw) / size;
+    if (any(uv < vec2<f32>(0.0)) || any(uv > vec2<f32>(1.0))) { return fallback; }
+    let h = uv * vec2<f32>(lo) - 0.5;
+    let b = floor(h);
+    let f = h - b;
+    var acc = vec3<f32>(0.0);
+    var acc_w = 0.0;
+    for (var j = 0; j <= 1; j += 1) {
+        for (var i = 0; i <= 1; i += 1) {
+            let q = vec2<i32>(b) + vec2<i32>(i, j);
+            if (any(q < vec2<i32>(0)) || any(q >= lo)) { continue; }
+            let t = textureLoad(history_tex, q, 0);
+            if (!same_surface(t.a, expected)) { continue; }
+            let w = select(1.0 - f.x, f.x, i == 1) * select(1.0 - f.y, f.y, j == 1);
+            acc += t.rgb * w;
+            acc_w += w;
+        }
+    }
+    if (acc_w < 0.05) { return fallback; }
+    let hist = clamp(acc / acc_w, mean - 1.5 * sigma, mean + 1.5 * sigma);
+    return vec4<f32>(mix(hist, cur.rgb, vol.temporal.x), cur.a);
 }
 
 fn view_dist(p: vec2<i32>) -> f32 {
@@ -214,7 +297,9 @@ fn composite(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
         }
     }
     let own = select(nearest, sum / weight, weight > 1.0e-3);
-    let light = own - vol.flat.x * min(own, surroundings(centre, z, own));
+    let kept = own - vol.flat.x * min(own, surroundings(centre, z, own));
+    // crate::volumetric_light::soft_cap.
+    let light = kept / (1.0 + dot(kept, LUMA) / vol.temporal.w);
     if (vol.extra.y > 0.5) { return vec4<f32>(light * vol.extra.y, 1.0); }
     return vec4<f32>(base.rgb + light, base.a);
 }

@@ -79,6 +79,14 @@ Lighting, as it did not touch the Shadows row before it (`GraphicsSettings::with
   air with `RC_SUN_DIR=0.4,-0.5,0.75` (like the user's reference); Kerwan's spawn and Novalis' spawn stay clear, the
   sky untouched. Novalis' spawn foreground is then all in a canopy's shadow (G-REN-068). `RC_NOVSYNC=1`, one PC:
   Novalis Simple 52 fps, Enhanced 47 (shafts off 47, floor 60° 46), Kerwan's tunnel 37 / 35.
+* Light shafts reworked 2026-10-26 (third play test: a strong dither, too intense at some angles). The volumetric
+  light's march starts at an interleaved-gradient offset moved by the golden ratio each frame; a temporal pass at half
+  resolution reprojects the previous result by the sample's depth (by direction for the sky), drops taps on another
+  surface, clamps it to the 3×3 neighbourhood and blends 10 % of the new frame in; the 4×4 bilateral upsample stays.
+  Its phase is half isotropic, half Henyey-Greenstein (g 0.3), and what it adds is soft-capped (`l / (1 + Y(l) / 0.25)`).
+  It reprojects per rendered frame from that frame's view, so frame smoothing's interpolated frames (its own branch)
+  should hold; not checked on screen with it (G-REN-200). Gemlik's haze and Kerwan's
+  tunnel beams are smooth; the tunnel opening keeps its shafts, softer.
 * The Port Options page (fourteen rows) keeps the Camera sub-page's frame and scrolls, four rows at a time (port.rs `VISIBLE`).
 
 ## Light shafts per level
