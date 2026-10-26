@@ -54,8 +54,9 @@
 //! **Water Enhanced** (port-only, crate::graphics): the surface groups of the liquid ports (the opaque ones and a grid's
 //! own translucent draw, crate::sea_water::surface_fix) whose image × vertex colours is clear water ([`judged_rgb`],
 //! [`grid_tint`]; the log names each verdict), seen from above, go to crate::sea_water (drawn after the scene copy by
-//! `water.wgsl`'s Enhanced path, Z written) instead of the opaque or display-blend pass; the effect groups, the other
-//! ports and every group with the option Original are drawn as above.
+//! `water.wgsl`'s Enhanced path, Z written) instead of the opaque or display-blend pass; seen from above, the ocean's
+//! band and layers give way to crate::ocean_water's surface (its wall stays); the other effect groups, the other ports
+//! and every group with the option Original are drawn as above.
 
 use crate::display_blend::DisplayEffect;
 use crate::fx_draw::{FxPrimMaterial, FxPrimParams, PrimBuf, LIST1_BIAS};
@@ -393,8 +394,6 @@ struct SeaDraw {
     clear: HashMap<(Tex, [u32; 3], u8), bool>,
     /// [`grid_tint`] by port.
     tints: HashMap<usize, [f32; 3]>,
-    /// The ocean's swell damping (Water Enhanced, crate::water_waves).
-    ocean_shore: crate::water_waves::ShoreMap,
 }
 
 pub struct SeaRenderPlugin;
@@ -403,9 +402,10 @@ impl Plugin for SeaRenderPlugin {
     fn build(&self, app: &mut App) {
         if !enabled() { return; }
         crate::sea_water::build(app);
+        crate::ocean_water::build(app);
         app.init_resource::<SeaDraw>()
             .add_systems(crate::level_switch::LevelUnload, (crate::level_switch::reset::<SeaDraw>, crate::level_switch::reset::<crate::volumetric_light::SeaLevel>))
-            .add_systems(PostUpdate, (draw, crate::sea_water::draw).chain().before(bevy::asset::AssetEventSystems));
+            .add_systems(PostUpdate, (draw, crate::sea_water::draw, crate::ocean_water::draw).chain().before(bevy::asset::AssetEventSystems));
     }
 }
 
@@ -498,8 +498,7 @@ fn draw(
     mut sea_level: ResMut<crate::volumetric_light::SeaLevel>,
     gfx: Res<crate::graphics::GraphicsSettings>,
     mut enhanced: ResMut<crate::sea_water::SeaWaterDraw>,
-    time: Res<Time>,
-    key: Option<Res<crate::sun_shadow::KeyLight>>,
+    mut enhanced_ocean: ResMut<crate::ocean_water::OceanWater>,
 ) {
     let st = state.into_inner();
     let Some(p) = play.as_deref() else { return };
@@ -513,8 +512,6 @@ fn draw(
     let to_game = |v: Vec3| [v.x, -v.z, v.y];
     let rows = [to_game(*cam_t.forward()), to_game(*cam_t.left())];
     let fx = level.0.particles.textures.as_ref().map(|t| t.fx_textures.as_slice());
-    let swell = if gfx.water.on() { crate::water_waves::scale() } else { 0.0 };
-    let sun = key.map_or(Vec3::Y, |k| k.to_light).to_array();
     let water = &p.svc.water;
     let cbs = &p.svc.draw_callbacks;
     let view = crate::particle_render::bsphere_view(cam_t, particles.map_or_else(|| crate::particle_render::view_tans(None), |s| s.view_tan));
@@ -530,6 +527,7 @@ fn draw(
         sea_level.0 = ocean;
     }
     let mut groups: Vec<Group> = Vec::new();
+    let mut ocean = None;
     // Per callback: its first group and whether its port is a liquid (crate::sea_water::liquid_port).
     let mut liquid: Vec<(usize, bool)> = Vec::new();
     // The grids' own draws (not their meshes'): the group, the record's FIX (crate::sea_water::surface_fix), the port.
@@ -585,13 +583,17 @@ fn draw(
             }
             (SeaKind::Ocean, SeaData::Ocean(t)) => {
                 if m.pvars.len() < 0x30 { continue; }
-                for (j, (fxi, additive, mut prims)) in ocean_groups(&m.pvars, run, t, cam, rows).into_iter().enumerate() {
-                    // Water Enhanced: the swell on the surface layers (crate::water_waves::swell_prims).
-                    if additive && swell > 0.0 {
-                        let coll = level.0.collision.as_ref();
-                        let mut probe = |a, b| crate::water_waves::probe_line(coll, a, b);
-                        prims = crate::water_waves::swell_prims(&prims, cam, time.elapsed_secs_wrapped(), swell, run.sea_z, sun, &mut st.ocean_shore, &mut probe);
-                    }
+                // Water Enhanced, seen from above: crate::ocean_water's surface in place of the band (the first group)
+                // and the layers.
+                let surface = gfx.water.on() && cam[2] > run.sea_z;
+                if surface {
+                    let texel = fx.and_then(|f| f.get(OCEAN_BAND_FX)?.as_ref()).and_then(|t| t.rgba.get(..4)).map_or([0x80; 4], |c| [c[0], c[1], c[2], c[3]]);
+                    let pv = u32::from_le_bytes(m.pvars[..4].try_into().unwrap());
+                    let reach = f32::from_le_bytes(m.pvars[gs::ocean_pvar::REACH..gs::ocean_pvar::REACH + 4].try_into().unwrap());
+                    ocean = Some(crate::ocean_water::OceanFrame { cam, base_z: run.base_z, sea_z: run.sea_z, reach, fog: level_fog, shallow: crate::ocean_water::shallow(texel, pv) });
+                }
+                for (j, (fxi, additive, prims)) in ocean_groups(&m.pvars, run, t, cam, rows).into_iter().enumerate() {
+                    if surface && (j == 0 || additive) { continue; }
                     groups.push(Group { tex: Tex::Fx(fxi, false), effect: Some(Blend::of(additive)), fog: level_fog, bias: bias + j as f32 * 0.25, prims });
                 }
             }
@@ -676,6 +678,7 @@ fn draw(
     }
     enhanced.pending = Some(clear_seas);
     enhanced.cam = cam;
+    enhanced_ocean.pending = Some(ocean);
     // Show the groups in slots 0.., hide the rest.
     let n = groups.len();
     for (k, g) in groups.into_iter().enumerate() {

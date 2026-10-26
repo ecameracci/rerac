@@ -99,6 +99,7 @@ mod saves;
 mod scene_render;
 mod sea_render;
 mod sea_water;
+mod ocean_water;
 mod screen_canvas;
 mod session;
 mod shadow_render;

@@ -23,7 +23,8 @@
 // Water Enhanced (crate::graphics; look.misc.x = 1, clear water only): the strip and ripple water passes (kinds 0, 2)
 // draw the whole surface from the opaque scene behind it (crate::scene_copy), opaque over the frame; their second
 // layers (kinds 1, 3) draw nothing. Per pixel:
-// * a wave normal: a sum of travelling sine waves over the world position and the frame time, plus the ripple
+// * a wave normal: a sum of travelling sine waves over the world position and the frame time (each fading out with the
+//   distance, RIPPLE_LOD wavelengths), plus the ripple
 //   module's slope on the ripple patches (from the patch's height grid, per vertex) and the expanding rings where
 //   Ratchet meets the water (`rings`, crate::water_render::WaterRings);
 // * the bed: the scene copy at the pixel bent by the waves (refraction; unbent where the bent pixel is in front of
@@ -321,8 +322,13 @@ fn planar(ssr: vec3<f32>, wp: vec3<f32>, n_world: vec3<f32>, frag: vec4<f32>, di
     return mix(ssr, m, mirror.state.x * on * smoothstep(0.0, 0.04, inside));
 }
 
-// The surface's height gradient over world xz from travelling sine waves: (direction, wavenumber, amplitude·wavenumber).
-fn wave_grad(xz: vec2<f32>, t: f32) -> vec2<f32> {
+// Wavelengths from the camera over which each ripple wave fades out (whole to RIPPLE_LOD, none from twice that): the
+// short ones would alias into sparkle in the distance.
+const RIPPLE_LOD: f32 = 30.0;
+
+// The surface's height gradient over world xz from travelling sine waves: (direction, wavenumber, amplitude·wavenumber),
+// seen from horizontal distance d.
+fn wave_grad(xz: vec2<f32>, t: f32, d: f32) -> vec2<f32> {
     var waves = array<vec4<f32>, 6>(
         vec4<f32>(0.96, 0.28, 1.6, 0.050),
         vec4<f32>(-0.42, 0.91, 2.3, 0.040),
@@ -334,10 +340,10 @@ fn wave_grad(xz: vec2<f32>, t: f32) -> vec2<f32> {
     var g = vec2<f32>(0.0);
     for (var i = 0; i < 6; i += 1) {
         let w = waves[i];
-        let d = w.xy;
         let k = w.z;
-        let phase = dot(d, xz) * k + t * sqrt(9.8 * k) * 0.35;
-        g += d * (w.w * k * cos(phase));
+        let l = 6.2831855 / k;
+        let phase = dot(w.xy, xz) * k + t * sqrt(9.8 * k) * 0.35;
+        g += w.xy * (w.w * k * cos(phase) * (1.0 - smoothstep(RIPPLE_LOD * l, 2.0 * RIPPLE_LOD * l, d)));
     }
     return g;
 }
@@ -463,7 +469,7 @@ fn fragment(in: WaterVertexOutput) -> @location(0) vec4<f32> {
         n_world = normalize(mix(n_geo, normalize(n_geo - along * gv - across * gu), shore));
         tilt = (n_world - n_geo).xz * 2.5;
     } else {
-        let g = wave_grad(wp.xz, t_now) + in.ripple_grad + ring_grad(wp.xz, t_now) + swell_grad(wp.xz, t_now, swell_d) * swell;
+        let g = wave_grad(wp.xz, t_now, swell_d) + in.ripple_grad + ring_grad(wp.xz, t_now) + swell_grad(wp.xz, t_now, swell_d) * swell;
         n_world = normalize(mix(vec3<f32>(0.0, 1.0, 0.0), normalize(vec3<f32>(-g.x, 1.0, -g.y)), shore));
         tilt = n_world.xz;
     }

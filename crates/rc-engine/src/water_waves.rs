@@ -15,8 +15,8 @@
 //! * The strip and ripple water (crate::water_render: Novalis's rivers and pools, the ripple patches) keep their
 //!   geometry (7–16-unit strip edges; the patches' own heights) and take the slope only, damped per pixel by the
 //!   vertical depth of the bed behind the surface (the scene copy).
-//! * The ocean 1111 (Pokitaru; an effect-only sea, no Enhanced surface) is tessellated and displaced on the CPU per tick
-//!   by crate::sea_render ([`swell_prims`]), its additive layers shaded by the slope toward the key light.
+//! * The ocean 1111 (Pokitaru) gets a surface of its own (crate::ocean_water: world tiles split once, displaced in the
+//!   vertex shader like the grid seas).
 //!
 //! **Shore damping** ([`ShoreMap`]): the level collision probed down vertical lines ([`PROBE`]) at the points of a
 //! [`LATTICE`]-unit lattice, cached; a point's depth is the water's z minus the first surface met (land, a pier or a
@@ -24,9 +24,10 @@
 //! deep). Each lattice node takes the shallowest depth within [`SHORE_RADIUS`] nodes through [`shore_damp`], and a
 //! point the bilinear blend of its four nodes: the swell dies within about ten units of land and over the shelves.
 //!
+//! [`height`] and [`grad`] are the shader's swell on the CPU, for its tests.
+//!
 //! `RC_WATER_WAVES=0` turns the swell off, `RC_WATER_WAVES_SCALE=<k>` scales its amplitude (docs/workflows/dev-switches.md).
 
-use crate::fx_draw::PrimBuf;
 use std::collections::HashMap;
 
 /// Per wave: Bevy xz direction (unit), wavenumber 2π/λ (λ = 22, 14, 9, 6 units), amplitude (slopes about 0.03–0.04
@@ -38,9 +39,12 @@ pub const WAVES: [[f32; 4]; 4] = [
     [0.92918, 0.36961, 1.05, 0.04],
 ];
 /// Phase offsets (radians), so the crests do not meet at the origin.
+#[cfg_attr(not(test), allow(dead_code))]
 pub const PHASE: [f32; 4] = [0.0, 1.7, 3.4, 5.1];
 /// Angular speed `ω = SPEED·√(G·k)` (deep water, slowed: the λ = 22 swell runs 3.5 units/s).
+#[cfg_attr(not(test), allow(dead_code))]
 pub const SPEED: f32 = 0.6;
+#[cfg_attr(not(test), allow(dead_code))]
 pub const G: f32 = 9.8;
 /// The swell's peak (the amplitudes' sum).
 pub const MAX_HEIGHT: f32 = 0.3;
@@ -48,6 +52,7 @@ const _: () = assert!(WAVES[0][3] + WAVES[1][3] + WAVES[2][3] + WAVES[3][3] <= M
 /// The displacement's far fade: whole to the first horizontal distance from the camera, none from the second (game
 /// units; the split reaches no farther). The slope carries on, each wave to [`WAVE_LOD`]·2 of its wavelengths.
 pub const SWELL_FADE: [f32; 2] = [50.0, 100.0];
+#[cfg_attr(not(test), allow(dead_code))]
 pub const WAVE_LOD: f32 = 8.0;
 /// Beyond the fade's end, the camera's travel between two ticks (the meshes are built per tick, drawn per frame).
 pub const TESS_MARGIN: f32 = 8.0;
@@ -66,10 +71,8 @@ pub const PROBE: [f32; 2] = [30.0, 20.0];
 pub const SKIP: f32 = 1.0;
 /// The water's colour under the reflection, lightened on the crests and darkened in the troughs: `1 + CREST·h/MAX_HEIGHT`
 /// (h the drawn height; `water.wgsl`).
+#[cfg_attr(not(test), allow(dead_code))]
 pub const CREST: f32 = 0.35;
-/// The ocean layers' shading by the slope (`1 + OCEAN_SHADE·(n·l − l_y)`), clamped to [`OCEAN_SHADE_RANGE`].
-pub const OCEAN_SHADE: f32 = 6.0;
-pub const OCEAN_SHADE_RANGE: [f32; 2] = [0.5, 1.6];
 
 /// The amplitude scale: 0 with `RC_WATER_WAVES=0`, else `RC_WATER_WAVES_SCALE` (default 1).
 pub fn scale() -> f32 {
@@ -85,19 +88,23 @@ fn smoothstep(a: f32, b: f32, x: f32) -> f32 {
     t * t * (3.0 - 2.0 * t)
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 fn phase(w: &[f32; 4], ph: f32, xz: [f32; 2], t: f32) -> f32 { (w[0] * xz[0] + w[1] * xz[1]) * w[2] - SPEED * (G * w[2]).sqrt() * t + ph }
 
 /// A wave's share at a horizontal distance `d` from the camera: whole to [`WAVE_LOD`] wavelengths, none from twice
 /// that (the short waves would alias in the distance; the long swell carries on).
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn wave_weight(w: &[f32; 4], d: f32) -> f32 {
     let l = std::f32::consts::TAU / w[2];
     1.0 - smoothstep(WAVE_LOD * l, 2.0 * WAVE_LOD * l, d)
 }
 
 /// The swell's height at Bevy world `xz`, time `t` (s), seen from `d` away ([`wave_weight`]).
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn height(xz: [f32; 2], t: f32, d: f32) -> f32 { WAVES.iter().zip(PHASE).map(|(w, ph)| wave_weight(w, d) * w[3] * phase(w, ph, xz, t).sin()).sum() }
 
 /// [`height`]'s gradient (d/dx, d/dz) at a fixed `d`; the surface normal is `(−gx, 1, −gz)` normalised.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn grad(xz: [f32; 2], t: f32, d: f32) -> [f32; 2] {
     WAVES.iter().zip(PHASE).fold([0.0; 2], |g, (w, ph)| {
         let c = wave_weight(w, d) * w[3] * w[2] * phase(w, ph, xz, t).cos();
@@ -109,6 +116,7 @@ pub fn grad(xz: [f32; 2], t: f32, d: f32) -> [f32; 2] {
 pub fn shore_damp(depth: f32) -> f32 { smoothstep(SHORE_DEPTH[0], SHORE_DEPTH[1], depth) }
 
 /// The swell's share at a horizontal distance from the camera.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn far_fade(dist: f32) -> f32 { 1.0 - smoothstep(SWELL_FADE[0], SWELL_FADE[1], dist) }
 
 /// The shore damping of one water surface (module doc): the probed bed heights and the node values, by lattice node.
@@ -246,42 +254,6 @@ pub fn tessellate(pos: &[[f32; 3]], uv: &[[f32; 2]], color: &[[f32; 4]], idx: &[
             }
         }
     }
-    out
-}
-
-/// The ocean's layer `prims` (crate::sea_render: the additive surface of 1111) split near `cam` (game), displaced by
-/// the swell at time `t` times `k`, the far fade and the shore damping (water at `z`), each point's colour shaded by
-/// its slope toward the key light `sun` (Bevy, unit).
-#[allow(clippy::too_many_arguments)]
-pub fn swell_prims(prims: &PrimBuf, cam: [f32; 3], t: f32, k: f32, z: f32, sun: [f32; 3], shore: &mut ShoreMap, probe: &mut dyn FnMut([f32; 3], [f32; 3]) -> Option<f32>) -> PrimBuf {
-    let (pos, uv, color, idx) = prims.parts();
-    // Bevy (x, y, z) = game (x, −z, y).
-    let game: Vec<[f32; 3]> = pos.iter().map(|p| [p[0], -p[2], p[1]]).collect();
-    let tess = tessellate(&game, uv, color, idx, [cam[0], cam[1]], SWELL_FADE[1] + TESS_MARGIN);
-    let mut out = PrimBuf::default();
-    let verts = tess.pos.iter().zip(&tess.uv).zip(&tess.color).zip(&tess.near).map(|(((p, st), c), &near)| {
-        let mut p = *p;
-        let mut shade = 1.0;
-        if near {
-            let d = ((p[0] - cam[0]).powi(2) + (p[1] - cam[1]).powi(2)).sqrt();
-            let a = k * far_fade(d) * shore.damp(p[0], p[1], z, probe);
-            if a > 0.0 {
-                let xz = [p[0], -p[1]];
-                let h = a * height(xz, t, d);
-                p[2] += h;
-                let g = grad(xz, t, d).map(|v| v * a);
-                let n = [-g[0], 1.0, -g[1]];
-                let l = (n[0] * n[0] + 1.0 + n[2] * n[2]).sqrt();
-                let ndl = (n[0] * sun[0] + n[1] * sun[1] + n[2] * sun[2]) / l;
-                let crest = 1.0 + CREST * (h / MAX_HEIGHT).clamp(-1.5, 1.5);
-                shade = ((1.0 + OCEAN_SHADE * (ndl - sun[1])) * crest).clamp(OCEAN_SHADE_RANGE[0], OCEAN_SHADE_RANGE[1]);
-            }
-        }
-        let byte = |x: f32| ((x * 128.0).round() as u32).min(255);
-        let rgba = byte(c[0] * shade) | byte(c[1] * shade) << 8 | byte(c[2] * shade) << 16 | byte(c[3]) << 24;
-        (p, *st, rgba)
-    });
-    out.triangles(verts, tess.idx.iter().copied());
     out
 }
 
