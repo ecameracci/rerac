@@ -104,7 +104,18 @@ pub(crate) struct StarSim {
 #[derive(Component)]
 struct StarDraw(usize);
 
+/// Pipeline key: Particles Enhanced's glowing stars (`STAR_GLOW` in sky_stars.wgsl).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct SkyStarKey {
+    glow: bool,
+}
+
+impl From<&SkyStarMaterial> for SkyStarKey {
+    fn from(m: &SkyStarMaterial) -> Self { SkyStarKey { glow: m.glow } }
+}
+
 #[derive(Asset, TypePath, AsBindGroup, Debug, Clone)]
+#[bind_group_data(SkyStarKey)]
 pub struct SkyStarMaterial {
     /// The sky texture with raw GS alpha (0..0x80), as `sky_render::sky_image` builds it.
     #[texture(0)]
@@ -115,6 +126,9 @@ pub struct SkyStarMaterial {
     pub sprites: Handle<ShaderBuffer>,
     /// Sort key: the reserved sky slot plus a sub-slot per group.
     pub bias: f32,
+    /// Particles Enhanced ([`crate::graphics::Particles::atmosphere`]): each star a soft emissive point with a halo and
+    /// a smooth twinkle.
+    pub glow: bool,
 }
 
 /// `One, OneMinusSrcAlpha` on premultiplied output: alpha As (0x44) or 0 (0x48) picks the equation.
@@ -135,9 +149,13 @@ impl Material for SkyStarMaterial {
         _pipeline: &MaterialPipeline,
         descriptor: &mut RenderPipelineDescriptor,
         layout: &MeshVertexBufferLayoutRef,
-        _key: MaterialPipelineKey<Self>,
+        key: MaterialPipelineKey<Self>,
     ) -> Result<(), SpecializedMeshPipelineError> {
         descriptor.primitive.cull_mode = None;
+        if key.bind_group_data.glow {
+            descriptor.vertex.shader_defs.push("STAR_GLOW".into());
+            if let Some(f) = descriptor.fragment.as_mut() { f.shader_defs.push("STAR_GLOW".into()); }
+        }
         // ZTST ALWAYS, ZMSK 1 (the state the previous shell left).
         if let Some(ds) = descriptor.depth_stencil.as_mut() {
             ds.depth_write_enabled = Some(false);
@@ -159,8 +177,25 @@ impl Plugin for SkyStarsPlugin {
             .add_systems(crate::level_switch::LevelPostStartup, setup)
             .add_systems(crate::level_switch::LevelUnload, crate::level_switch::remove::<StarSim>)
             .add_systems(FixedUpdate, star_frame.after(crate::particle_render::tick).after(crate::gameplay::GameTick))
-            .add_systems(PostUpdate, build_meshes);
+            .add_systems(PostUpdate, (build_meshes, follow_glow));
     }
+}
+
+/// The Particles option into the star materials (each is the level's or the title world's).
+fn follow_glow(g: Res<crate::graphics::GraphicsSettings>, mut materials: ResMut<Assets<SkyStarMaterial>>) {
+    let want = g.particles.atmosphere();
+    let ids: Vec<_> = materials.iter().filter(|(_, m)| m.glow != want).map(|(id, _)| id).collect();
+    for id in ids {
+        if let Some(mut m) = materials.get_mut(id) { m.glow = want; }
+    }
+}
+
+/// Particles Enhanced: a twinkler's colour is the mean of the game's per-frame noise (base − 0x20 + 4·15.5 per
+/// channel, [`rc_game::sky_stars`]' `twinkle`) and sky_stars.wgsl twinkles it smoothly instead; the records and the
+/// `rand` stream are the game's either way.
+fn mean_twinkle(base: u32) -> u32 {
+    let [r, g, b, a] = base.to_le_bytes();
+    u32::from_le_bytes([r.saturating_add(30), g.saturating_add(30), b.saturating_add(30), a])
 }
 
 fn setup(
@@ -229,6 +264,7 @@ pub(crate) fn spawn_stars(
             texture: images.add(crate::sky_render::sky_image(tex)),
             sprites: buffer.clone(),
             bias: slot as f32 * ORDER_SPACING + g as f32,
+            glow: false,
         });
         commands.spawn((
             Mesh3d(mesh.clone()),
@@ -292,18 +328,23 @@ fn build_meshes(
     cams: MainCamera,
     mut buffers: ResMut<Assets<ShaderBuffer>>,
     mut draws: Query<(&mut Visibility, &StarDraw)>,
+    g: Res<crate::graphics::GraphicsSettings>,
 ) {
     let Some(mut sim) = sim else { return };
     let Some((t, proj)) = cams.iter().next() else { return };
+    let glow = g.particles.atmosphere();
     let [fwd, left, up] = game_rows(t);
     // The view's tan_x / tan_y (0x16d0a0 / 0x16cf70 as `UpdateViewContext` sets them): the camera's real projection.
     let (tx, ty) = crate::particle_render::view_tans(proj);
     let (sec_x, sec_y) = ((1.0 + tx * tx).sqrt(), (1.0 + ty * ty).sqrt());
 
-    let StarSim { stars, groups, drawn: drawn_out, .. } = &mut *sim;
-    for g in groups.iter_mut() { g.1.clear(); }
+    let StarSim { stars, groups, drawn: drawn_out, frames, .. } = &mut *sim;
+    for g in groups.iter_mut() {
+        g.1.clear();
+        if glow { g.1.set_header(*frames as u32, 0); }
+    }
     let mut drawn = 0;
-    for r in &stars.stars {
+    for (i, r) in stars.stars.iter().enumerate() {
         if r.texture() < 0 { continue; }
         let Some(g) = groups.iter().position(|(t, _, _)| *t as i8 == r.texture()) else { continue };
         let p = Vec3::from_array(r.position_f32());
@@ -321,6 +362,13 @@ fn build_meshes(
         let b = [-s, 1.0625 * co];
         let dir = game_to_bevy(r.position_f32()).to_array();
         let tag = (r.alpha_reg() == 0x48) as u32;
+        if glow {
+            // c = (RGBA, additive | twinkler << 1, record index): the shader's halo, size and twinkle.
+            let twinkler = matches!(r.kind(), rc_game::sky_stars::KIND_TWINKLE | rc_game::sky_stars::KIND_TWINKLE_B);
+            let rgba = if twinkler { mean_twinkle(r.base_rgba()) } else { r.rgba() };
+            groups[g].1.push_raw([dir[0], dir[1], dir[2], a[0]], [a[1], b[0], b[1], 0.0], [rgba, tag | (twinkler as u32) << 1, i as u32, 0]);
+            continue;
+        }
         // Corners S+a, S+b, S−b, S−a (quad_mesh).
         groups[g].1.push(dir, a, b, r.rgba(), tag);
     }

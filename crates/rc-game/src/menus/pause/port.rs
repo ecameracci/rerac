@@ -260,8 +260,8 @@ pub enum Setting {
     AmbientOcclusion,
     /// The level-code water: value 0 Original, 1 Enhanced.
     Water,
-    /// Particle sprites against the world: value 0 Original (hard cut), 1 Soft, 2 Enhanced (Soft, and bright effects
-    /// light the world around them).
+    /// Particle sprites against the world: value 0 Original (hard cut), 1 Soft, 2 Enhanced (Soft, bright effects
+    /// light the world around them, the stars glow and twinkle, the rain and snow are restyled).
     Particles,
     /// Extra plants on the grassy ground: value 0 Original (the level's own only), 1 Moderate, 2 Lush.
     Foliage,

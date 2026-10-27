@@ -128,6 +128,12 @@ impl SpriteBuffer {
         self.count += 1;
     }
 
+    /// The header's two free words (y, z) the port-only shaders read (crate::weather_render, crate::sky_stars).
+    pub(crate) fn set_header(&mut self, y: u32, z: u32) {
+        self.bytes[4..8].copy_from_slice(&y.to_le_bytes());
+        self.bytes[8..12].copy_from_slice(&z.to_le_bytes());
+    }
+
     /// The buffer contents with this frame's count.
     pub(crate) fn contents(&mut self) -> Vec<u8> {
         self.bytes[0..4].copy_from_slice(&self.count.to_le_bytes());
@@ -322,9 +328,13 @@ impl Plugin for ParticlePlugin {
             .add_systems(crate::level_switch::LevelStartup, setup)
             .add_systems(crate::level_switch::LevelUnload, (crate::level_switch::remove::<ParticleSim>, crate::level_switch::remove::<ParticleMesh>))
             .add_systems(FixedUpdate, tick)
-            .add_systems(PostUpdate, (build_sprites.after(crate::fog_state::FogSet), follow_soft));
+            .add_systems(PostUpdate, (build_sprites.in_set(BuildSprites).after(crate::fog_state::FogSet), follow_soft));
     }
 }
+
+/// [`build_sprites`]'s set (crate::weather_render uploads its list after it).
+#[derive(SystemSet, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct BuildSprites;
 
 #[allow(clippy::too_many_arguments)]
 fn setup(
@@ -500,6 +510,7 @@ pub(crate) fn update_parts(sim: &mut ParticleSim, rng: Option<&mut Rng>) {
 }
 
 /// Pass 1 + pass 2 for this frame's camera: rewrite the sprite buffers in back-to-front order.
+#[allow(clippy::too_many_arguments)]
 fn build_sprites(
     sim: Option<ResMut<ParticleSim>>,
     mesh: Option<ResMut<ParticleMesh>>,
@@ -508,8 +519,11 @@ fn build_sprites(
     mut draws: Query<(&mut Visibility, &ParticleDraw)>,
     fog: Option<Res<crate::game_camera::GameFog>>,
     (frame, mut smooth, phase): (Res<crate::display::GameFrame>, ResMut<crate::frame_smooth::ParticleSmooth>, Res<crate::frame_smooth::TickPhase>),
+    mut weather: crate::weather_render::WeatherParams,
 ) {
     let (Some(mut sim), Some(mut mesh)) = (sim, mesh) else { return };
+    // Particles Enhanced: the weather's records go to crate::weather_render (pass 1 below is the same either way).
+    let mut weather = weather.frame(sim.sys.level, sim.tick, fog.as_deref());
     let Some((t, proj)) = cams.iter().next() else { return };
     let (eye, [fwd, left, up]) = camera(t);
     let (tx, ty) = view_tans(proj);
@@ -584,9 +598,11 @@ fn build_sprites(
 
     let ParticleMesh { sprites: groups, buffers: handles } = &mut *mesh;
     for g in groups.iter_mut() { g.clear(); }
+    let wind = sim.sys.weather.wind;
     for it in &items {
         let r = &sim.sys.pool.recs[it.index];
         let kind = r[1] & 3;
+        if weather.as_mut().is_some_and(|w| crate::weather_render::push(w, r, it.index, it.alpha, it.c.z, size_px, wind)) { continue; }
         if kind > 1 {
             // Kind 2 (L3): a one-pixel Gouraud line, untextured, ALPHA 0x44, the raw colours. Kind 3 (L4): the
             // textured ribbon p1 ± n̂·w1, p2 ± n̂·w1·k (n̂ ⟂ the ribbon and the view), colours 1, 1, 2, 2 with the

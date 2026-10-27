@@ -10,8 +10,26 @@
 //
 // Fragment: MODULATE (C = Ct·Cv >> 7, A = At·Av >> 7, At in GS units), no fog, then premultiplied output for
 // `One, OneMinusSrcAlpha`: rgb = Cs·As, alpha = As (0x44) or 0 (0x48, additive: every retail star).
+//
+// STAR_GLOW (Particles Enhanced, sky_stars.rs `SkyStarKey`): the quad grows to HALO × (0.8 .. 1.4 by the star's
+// brightness) of the game's; the game's sprite is drawn in its middle 1/grow, brightened, inside a two-lobe Gaussian
+// halo of the star's colour; c = (RGBA, additive | twinkler << 1, record index) and the header's y the star frames:
+// a twinkler (its RGBA the mean of the game's noise) scintillates smoothly from its index (a hash, never `rand`),
+// every star is tinted slightly warm or cool by it.
 
 #import bevy_pbr::mesh_view_bindings::view
+
+#ifdef STAR_GLOW
+const HALO: f32 = 2.5;
+
+fn hash(x: u32) -> u32 {
+    var v = x * 747796405u + 2891336453u;
+    v = ((v >> ((v >> 28u) + 4u)) ^ v) * 277803737u;
+    return (v >> 22u) ^ v;
+}
+
+fn unit(x: u32) -> f32 { return f32(hash(x) & 0xffffu) / 65535.0; }
+#endif
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(0) var tex: texture_2d<f32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(1) var tex_sampler: sampler;
@@ -42,6 +60,11 @@ struct StarVertexOutput {
     // Flat like the GS sprite (PRIM 0x54: no Gouraud).
     @location(1) @interpolate(flat) color: vec4<u32>,
     @location(2) @interpolate(flat) additive: u32,
+#ifdef STAR_GLOW
+    // The quad's growth over the game's sprite, and the twinkle factor × tint.
+    @location(3) @interpolate(flat) grow: f32,
+    @location(4) @interpolate(flat) shine: vec3<f32>,
+#endif
 }
 
 @vertex
@@ -62,6 +85,20 @@ fn vertex(v: StarVertex) -> StarVertexOutput {
     if (k == 1u) { corner = b; st = vec2<f32>(1.0, 0.0); }
     if (k == 2u) { corner = -b; st = vec2<f32>(0.0, 1.0); }
     if (k == 3u) { corner = -a; st = vec2<f32>(1.0, 1.0); }
+#ifdef STAR_GLOW
+    let c0 = s.c.x;
+    let bright = f32(c0 >> 24u) / 128.0 * f32(max(c0 & 0xffu, max((c0 >> 8u) & 0xffu, (c0 >> 16u) & 0xffu))) / 255.0;
+    let grow = HALO * (0.8 + 0.6 * saturate(bright * 2.5));
+    corner = corner * grow;
+    out.grow = grow;
+    let seed = s.c.z;
+    let t = f32(sprites.count.y) / 60.0;
+    let f = 1.2 + 2.4 * unit(seed);
+    let w = 0.6 * sin(t * f + 6.2831853 * unit(seed + 7u)) + 0.4 * sin(t * f * 2.37 + 6.2831853 * unit(seed + 13u));
+    let tw = select(1.0, 1.0 + 0.2 * w, (s.c.y & 2u) != 0u);
+    let warm = unit(seed + 29u) - 0.5;
+    out.shine = tw * (vec3<f32>(1.0) + 0.1 * warm * vec3<f32>(1.0, 0.15, -1.0));
+#endif
     let view_dir = (view.view_from_world * vec4<f32>(s.p.xyz, 0.0)).xyz;
     var clip = view.clip_from_view * vec4<f32>(view_dir, 1.0);
     // Game pixels per NDC unit across: 256, × the 16:9 widening (crate::display; as particle.wgsl).
@@ -73,6 +110,9 @@ fn vertex(v: StarVertex) -> StarVertexOutput {
     let c = s.c.x;
     out.color = vec4<u32>(c & 0xffu, (c >> 8u) & 0xffu, (c >> 16u) & 0xffu, c >> 24u);
     out.additive = s.c.y;
+#ifdef STAR_GLOW
+    out.additive = s.c.y & 1u;
+#endif
     return out;
 }
 
@@ -84,6 +124,20 @@ fn srgb_to_linear(c: vec3<f32>) -> vec3<f32> {
 
 @fragment
 fn fragment(in: StarVertexOutput) -> @location(0) vec4<f32> {
+#ifdef STAR_GLOW
+    let q = (in.uv - 0.5) * in.grow + 0.5;
+    let inside = all(q >= vec2<f32>(0.0)) && all(q <= vec2<f32>(1.0));
+    let tg = textureSampleLevel(tex, tex_sampler, clamp(q, vec2<f32>(0.0), vec2<f32>(1.0)), 0.0);
+    let cvg = vec3<f32>(in.color.rgb);
+    let avg = f32(in.color.a);
+    let csg = min(floor(round(tg.rgb * 255.0) * cvg / 128.0), vec3<f32>(255.0)) / 255.0;
+    let asg = select(0.0, min(floor(round(tg.a * 255.0) * avg / 128.0), 255.0) / 128.0, inside);
+    let r2 = dot(in.uv * 2.0 - 1.0, in.uv * 2.0 - 1.0);
+    let halo = 0.5 * exp(-r2 * 9.0) + 0.9 * exp(-r2 * 40.0);
+    let star = srgb_to_linear(min(cvg / 255.0 * 1.5, vec3<f32>(1.0))) * (avg / 128.0);
+    let rgb_g = (srgb_to_linear(csg) * asg * 1.15 + star * halo * 0.35) * in.shine;
+    return vec4<f32>(rgb_g, select(min(asg, 1.0), 0.0, in.additive != 0u));
+#else
     let t = textureSample(tex, tex_sampler, in.uv);
     // Texel in GS units: RGB 0..255, A 0..0x80 (sky_image stores the raw alpha as byte / 255).
     let ct = round(t.rgb * 255.0);
@@ -94,4 +148,5 @@ fn fragment(in: StarVertexOutput) -> @location(0) vec4<f32> {
     let a = min(floor(at * av / 128.0), 255.0);
     let as_ = a / 128.0;
     return vec4<f32>(srgb_to_linear(cs) * as_, select(min(as_, 1.0), 0.0, in.additive != 0u));
+#endif
 }
