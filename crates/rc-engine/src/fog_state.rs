@@ -22,6 +22,8 @@
 //!    [`UnderwaterTint`] full-screen pass on the main camera, after `bevy::ui_render::ui_pass`, blending in
 //!    display-encoded bytes like the GS (`assets/shaders/underwater_tint.wgsl`). The page menu's frames (mode 3: the pause
 //!    and map pages) draw no tint (`PageMenuModeRender` 0x21ab50 runs `PageMenuDraw` only); their snapshot has it.
+//!    Water Enhanced draws the alternate fog and the tint in the level's Enhanced water colour where it has one
+//!    (crate::underwater_render `enhanced_look`).
 //!
 //! Environment: `RC_FOG_ZONES=0` disables the zones (the level settings stay); `RC_UNDERWATER=1` / `=0` forces
 //! the underwater flag on / off; `RC_CAM_PATH=ex,ey,ez,tx,ty,tz;ex,ey,ez,tx,ty,tz` moves the camera linearly from
@@ -212,13 +214,17 @@ fn update_fog_state(
     travel: Option<Res<crate::travel_render::Travel>>,
     cams: MainCamera,
     hook: Option<Res<crate::hud_render::Hud2dHook>>,
+    g: Option<Res<crate::graphics::GraphicsSettings>>,
 ) {
     let Some(mut state) = state else { return };
     let state = &mut *state;
+    // Water Enhanced draws the level's own water colour under it (crate::underwater_render::enhanced_look); the
+    // game's look stays as its water managers leave it.
+    let colour = g.is_some_and(|g| g.water.on()).then(|| crate::underwater_render::surface_colour(crate::level_load::level_index())).flatten();
     // The Visibomb's missile view writes the level fog globals during the ticks (crate::visibomb_view).
     if let Some(p) = play.as_deref() { crate::visibomb_view::apply_fog(&p.svc.visibomb, &mut state.level, &mut state.underwater.flag, &mut state.visibomb); }
     // 1. UpdateFog (end of the previous frame's render): what this frame draws with.
-    let (mut view, far12) = fog_zones::update_fog(&state.level, state.underwater.flag, &state.look);
+    let (mut view, far12) = fog_zones::update_fog(&state.level, state.underwater.flag, &crate::underwater_render::enhanced_look(&state.look, colour));
     // A level transition's loops do not run UpdateFog: its own fog block stays (fog_zones::TRANSITION_FOG / FLIGHT_FOG).
     if let Some(f) = travel.as_deref().and_then(|t| t.transition_fog()) { view = f; }
     let view = LevelFog::from_globals(&view);
@@ -308,7 +314,7 @@ fn update_fog_state(
     // world (mode 3 `PageMenuModeRender` 0x21ab50: `PageMenuDraw` alone; the card dialog over a page) draws no tint: the
     // pause and map pages show the copied last frame, which already has it, under panels the tint does not reach.
     let menu = hook.is_some_and(|h| h.replace_hud);
-    let want = (state.underwater.flag && !menu).then(|| UnderwaterTint { rgba: UVec4::from_array(state.look.tint.map(u32::from)) });
+    let want = (state.underwater.flag && !menu).then(|| UnderwaterTint { rgba: UVec4::from_array(crate::underwater_render::enhanced_look(&state.look, colour).tint.map(u32::from)) });
     match (want, tint) {
         (Some(w), Some(have)) if *have == w => {}
         (Some(w), _) => { commands.entity(entity).insert(w); }

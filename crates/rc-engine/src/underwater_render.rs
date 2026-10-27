@@ -18,6 +18,12 @@
 //!    first) toward the water's colour, the alternate fog colour the game uses (`UnderwaterLook::fog`, 0x161204).
 //! 6. **A wobble** of the whole picture (a few pixels' sine offset of the read).
 //!
+//! **The water's colour.** Every level's water managers leave the Novalis overlay's navy in 0x161200.. (the alternate
+//! fog and the 50 % tint sprite). Where the Enhanced surface has a colour of its own ([`SURFACE_COLOURS`]: Pokitaru's
+//! turquoise ocean), the fog the frame is drawn with, the tint sprite and this pass take it instead ([`enhanced_look`],
+//! read by crate::fog_state), so under the water reads as the surface does from above (G-REN-103's tint at
+//! [`TINT_SHARE`] of its strength there). The game's look and its flag are unchanged; other levels keep the navy.
+//!
 //! The pass fades in and out over [`RAMP_SECS`] ([`ramp_step`]) when the flag flips, and runs only while that fade is
 //! above 0; with Water Original it never runs, so those frames are unchanged.
 //!
@@ -54,6 +60,7 @@ use bevy::render::view::{ExtractedView, ViewDepthTexture, ViewTarget};
 use bevy::render::{RenderApp, RenderStartup};
 use bevy::shader::Shader;
 use rc_game::collision_query::{coll_line, coll_line_m, QueryFlags};
+use rc_game::fog_zones::UnderwaterLook;
 
 const SHADER_PATH: &str = "shaders/underwater.wgsl";
 /// The fade in / out when the underwater flag flips (seconds).
@@ -189,6 +196,26 @@ pub fn scan_up(eye: [f32; 3], mut height: impl FnMut([f32; 3]) -> Option<f32>) -
     (0..=PROBE_UP as i32).find_map(|k| height([eye[0], eye[1], eye[2] + k as f32]))
 }
 
+/// The Enhanced water's own colour by level (RGB bytes) where its surface has one: Pokitaru (11), its ocean's open water
+/// (crate::ocean_water `OPEN` on feat/water-waves, kept equal by hand). Every other level keeps the game's colours.
+pub const SURFACE_COLOURS: &[(u32, [u8; 3])] = &[(11, [0x18, 0xbc, 0xb0])];
+/// The share of the game's tint sprite strength kept under a [`SURFACE_COLOURS`] water ([`enhanced_look`]).
+pub const TINT_SHARE: f32 = 0.6;
+
+/// [`SURFACE_COLOURS`]' entry for a level.
+pub fn surface_colour(level: u32) -> Option<[u8; 3]> { SURFACE_COLOURS.iter().find(|e| e.0 == level).map(|e| e.1) }
+
+/// The underwater colours drawn with Water Enhanced (crate::fog_state: the alternate fog `UpdateFog` swaps in and the
+/// tint sprite; this pass's water colour): the game's `look` with the level's [`surface_colour`] in place of the fog's
+/// and the tint's colour, the tint's alpha times [`TINT_SHARE`]. The game's own look (0x161200..) is not written.
+pub fn enhanced_look(look: &UnderwaterLook, colour: Option<[u8; 3]>) -> UnderwaterLook {
+    let Some(c) = colour else { return *look };
+    let mut out = *look;
+    out.fog.color = c;
+    out.tint = [c[0], c[1], c[2], (look.tint[3] as f32 * TINT_SHARE).round() as u8];
+    out
+}
+
 fn srgb_to_linear(b: u8) -> f32 {
     let c = b as f32 / 255.0;
     if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
@@ -211,7 +238,7 @@ fn follow(
     if amount <= 0.0 { return; }
     v.time = time.elapsed_secs_wrapped();
     let Some(state) = state else { return };
-    v.water = Vec3::from_array(state.look().fog.color.map(srgb_to_linear));
+    v.water = Vec3::from_array(enhanced_look(state.look(), surface_colour(crate::level_load::level_index())).fog.color.map(srgb_to_linear));
     if !flag { return; }
     let Some(eye) = cams.iter().next().map(|t| crate::game_camera::game_eye(t).to_array()) else { return };
     let found = state.mesh().and_then(|mesh| match play.as_deref() {
@@ -399,6 +426,21 @@ mod tests {
         assert_eq!(probe_surface([1.0, 2.0, 20.0], cast, |_| None), None);
         // The water just below the eye (the flag's margin) is found.
         assert_eq!(probe_surface([1.0, 2.0, 15.5], cast, |_| None), Some(15.0));
+    }
+
+    #[test]
+    fn pokitaru_takes_its_surface_colour_and_the_rest_keep_the_game_look() {
+        let game = UnderwaterLook::default();
+        let poki = enhanced_look(&game, surface_colour(11));
+        assert_eq!(poki.fog.color, [0x18, 0xbc, 0xb0]);
+        assert_eq!(poki.tint, [0x18, 0xbc, 0xb0, (0x40 as f32 * TINT_SHARE).round() as u8]);
+        assert_eq!((poki.fog.near_dist, poki.fog.far_dist, poki.fog.far_intensity), (game.fog.near_dist, game.fog.far_dist, game.fog.far_intensity));
+        let (g, b) = (poki.fog.color[1], poki.fog.color[2]);
+        assert!(g > poki.fog.color[0] * 4 && b > poki.fog.color[0] * 4, "turquoise, not navy");
+        for level in [1, 5, 9] {
+            assert_eq!(surface_colour(level), None);
+            assert_eq!(enhanced_look(&game, surface_colour(level)), game);
+        }
     }
 
     #[test]
