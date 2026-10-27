@@ -3,7 +3,8 @@
 //! lock the game to one of them.
 //!
 //! **Devices** ([`Gms::devices`], rebuilt every frame): the keyboard and mouse (always), a DualSense read from its HID
-//! reports (crate::dualsense) and each of Bevy's gamepads under its own name (an Xbox pad, a PDP pad, a DualShock 4; a
+//! reports (crate::dualsense) and each of Bevy's gamepads under its own name (an Xbox pad, a PDP pad, a DualShock 4;
+//! Valve's devices by their ids, [`valve_name`]: Steam Deck, Steam Controller, Steam Input; a
 //! DualSense's Bevy gamepad is left out while the pad is read directly, as crate::input_map::Pads does). The device that
 //! last gave input (a key or button pressed, a stick pushed past half way, R2 pulled) is the **Active** one.
 //!
@@ -97,6 +98,21 @@ impl Gms {
     }
 }
 
+/// Valve's USB vendor id.
+const VALVE: u16 = 0x28de;
+
+/// A Valve device's name by its product id, over the OS's (which is often generic): the Steam Deck's controls
+/// (0x1205), the Steam Controller wired or through its dongle (0x1102, 0x1142), Steam Input's virtual pad (0x11ff).
+fn valve_name(vendor: Option<u16>, product: Option<u16>) -> Option<&'static str> {
+    if vendor != Some(VALVE) { return None; }
+    match product? {
+        0x1205 => Some("Steam Deck"),
+        0x1102 | 0x1142 => Some("Steam Controller"),
+        0x11ff => Some("Steam Input"),
+        _ => None,
+    }
+}
+
 /// A name as the row shows it: ASCII, cut at a word to [`NAME_MAX`] with "...".
 fn row_name(name: &str) -> Vec<u8> {
     let ascii: String = name.chars().map(|c| if c.is_ascii() && !c.is_ascii_control() { c } else { ' ' }).collect();
@@ -128,7 +144,9 @@ pub fn track(
     for (e, g, name) in &gamepads {
         if ds.is_some() && crate::dualsense::is_dualsense(g) { continue; }
         let n = devices.len();
-        devices.push((DeviceKey::Gamepad(e), row_name(name.map_or(&format!("Controller {n}"), |n| n.as_str()))));
+        let fallback = format!("Controller {n}");
+        let label = valve_name(g.vendor_id(), g.product_id()).or(name.map(|n| n.as_str())).unwrap_or(&fallback);
+        devices.push((DeviceKey::Gamepad(e), row_name(label)));
         if g.get_just_pressed().next().is_some() || g.left_stick().length() > 0.5 || g.right_stick().length() > 0.5 {
             used = Some(DeviceKey::Gamepad(e));
         }
@@ -242,6 +260,16 @@ mod tests {
         assert_eq!(row_name("PDP Wired Controller for Xbox Series X"), b"PDP Wired Controller...");
         assert_eq!(row_name("Wireless Gamepad Controller XYZ"), b"Wireless Gamepad...");
         assert!(row_name("PDP Wired Controller for Xbox Series X").len() <= NAME_MAX);
+    }
+
+    #[test]
+    fn valve_devices_by_id() {
+        assert_eq!(valve_name(Some(VALVE), Some(0x1205)), Some("Steam Deck"));
+        assert_eq!(valve_name(Some(VALVE), Some(0x1142)), Some("Steam Controller"));
+        assert_eq!(valve_name(Some(VALVE), Some(0x11ff)), Some("Steam Input"));
+        assert_eq!(valve_name(Some(VALVE), Some(0x1234)), None);
+        assert_eq!(valve_name(Some(0x045e), Some(0x1205)), None);
+        assert_eq!(valve_name(None, None), None);
     }
 
     #[test]

@@ -2,6 +2,10 @@
 //! is, docs/plan/game_state.md): controller rumble and adaptive-trigger feel from what happens in the game, sent to a
 //! DualSense (crate::dualsense).
 //!
+//! **Other pads** ([`gamepad_rumble`]): the same two motors play on every other gamepad Bevy reads (gilrs force
+//! feedback: Xbox pads, and Steam Input's virtual pad, which Steam plays on a Steam Controller's or Steam Deck's
+//! haptics). Only the motors: the trigger effects and the lightbar are the DualSense's own.
+//!
 //! **Rumble.** Each game tick reads the state the game already keeps; an event starts a short pulse ([`PULSE_TICKS`])
 //! on the two motors:
 //! * a wrench swing hitting something (`Melee::hit` rising, once per swing: the jump attack's hit too);
@@ -469,6 +473,60 @@ fn haptics_frame(
     if fire.0 != point { fire.0 = point; }
 }
 
+/// Seconds a gamepad's rumble request lasts: it is sent again every [`RUMBLE_RESEND`] while the motors run, so the
+/// motors stop on their own if the app stalls.
+const RUMBLE_FOR: f32 = 2.0;
+const RUMBLE_RESEND: f32 = 1.0;
+
+/// The motors as they are sent to a gamepad, in 16 steps each (a fading pulse does not resend every frame); zero stays
+/// zero, so a weak pulse is still felt.
+fn rumble_key(heavy: u8, light: u8) -> (u8, u8) {
+    let q = |m: u8| if m == 0 { 0 } else { (m >> 4).max(1) };
+    (q(heavy), q(light))
+}
+
+/// Whether a gamepad last sent `last` (its key and when, seconds) is sent `want` now: on a change, and again before
+/// [`RUMBLE_FOR`] ends while the motors run.
+fn rumble_due(last: Option<((u8, u8), f32)>, want: (u8, u8), now: f32) -> bool {
+    match last {
+        None => want != (0, 0),
+        Some((key, at)) => key != want || (want != (0, 0) && now - at >= RUMBLE_RESEND),
+    }
+}
+
+/// What each gamepad was last sent: its [`rumble_key`] and when (seconds).
+type RumbleSent = std::collections::HashMap<Entity, ((u8, u8), f32)>;
+
+/// The motors [`haptics_frame`] set (crate::dualsense::DualSense::rumble) on every one of Bevy's gamepads the game
+/// reads (`crate::gms::Gms::allows`; a DualSense read from its reports gets them there instead), through
+/// `GamepadRumbleRequest` (bevy_gilrs): a stop, then the new strengths for [`RUMBLE_FOR`].
+fn gamepad_rumble(
+    pad: Option<Res<DualSense>>,
+    gamepads: Query<(Entity, &Gamepad)>,
+    gms: Option<Res<crate::gms::Gms>>,
+    time: Res<Time<Real>>,
+    mut requests: MessageWriter<bevy::input::gamepad::GamepadRumbleRequest>,
+    mut sent: Local<RumbleSent>,
+) {
+    use bevy::input::gamepad::{GamepadRumbleIntensity, GamepadRumbleRequest};
+    let Some(pad) = pad else { return };
+    let (heavy, light) = pad.rumble();
+    let ds = pad.get().is_some();
+    let now = time.elapsed_secs();
+    sent.retain(|e, _| gamepads.contains(*e));
+    for (e, g) in &gamepads {
+        let read = !(ds && crate::dualsense::is_dualsense(g)) && gms.as_ref().is_none_or(|m| m.allows(crate::gms::DeviceKey::Gamepad(e)));
+        let want = if read { rumble_key(heavy, light) } else { (0, 0) };
+        if !rumble_due(sent.get(&e).copied(), want, now) { continue; }
+        requests.write(GamepadRumbleRequest::Stop { gamepad: e });
+        if want != (0, 0) {
+            let intensity = GamepadRumbleIntensity { strong_motor: heavy as f32 / 255.0, weak_motor: light as f32 / 255.0 };
+            requests.write(GamepadRumbleRequest::Add { duration: std::time::Duration::from_secs_f32(RUMBLE_FOR), intensity, gamepad: e });
+        }
+        sent.insert(e, (want, now));
+    }
+}
+
 pub struct HapticsPlugin;
 
 impl Plugin for HapticsPlugin {
@@ -483,6 +541,7 @@ impl Plugin for HapticsPlugin {
         );
         println!("haptics: lightbar {:?}", s.lightbar);
         app.insert_resource(s).init_resource::<FirePoint>().add_systems(PostUpdate, haptics_frame);
+        if !crate::determinism::deterministic() { app.add_systems(PostUpdate, gamepad_rumble.after(haptics_frame)); }
     }
 }
 
@@ -592,5 +651,22 @@ mod tests {
         // The weapon effect's bytes: zones 3 and 6 (0x48), strength 8 stored as 7.
         assert_eq!(&weapon_feel(11).unwrap().base().0[..4], &[0x25, 0x48, 0x00, 7]);
         assert_eq!(fire_point(Trigger::OFF), 0.0);
+    }
+
+    #[test]
+    fn gamepads_get_the_motors() {
+        assert_eq!(rumble_key(0, 0), (0, 0));
+        assert_eq!(rumble_key(3, 255), (1, 15));
+        assert_eq!(rumble_key(0x40, 0x4f), (4, 4));
+        // Nothing to stop on a pad never sent anything; a start is sent at once.
+        assert!(!rumble_due(None, (0, 0), 0.0));
+        assert!(rumble_due(None, (4, 2), 0.0));
+        // Unchanged: again only while running and once RUMBLE_RESEND has passed.
+        assert!(!rumble_due(Some(((4, 2), 1.0)), (4, 2), 1.5));
+        assert!(rumble_due(Some(((4, 2), 1.0)), (4, 2), 2.0));
+        assert!(!rumble_due(Some(((0, 0), 1.0)), (0, 0), 9.0));
+        // A change (a stop included) at once.
+        assert!(rumble_due(Some(((4, 2), 1.0)), (0, 0), 1.01));
+        assert!(rumble_due(Some(((4, 2), 1.0)), (5, 2), 1.01));
     }
 }

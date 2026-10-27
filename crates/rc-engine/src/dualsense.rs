@@ -99,6 +99,9 @@ impl DualSense {
     /// The motor strengths to run at (0 = off, 255 = full): `heavy` the left (low-frequency) motor, `light` the right.
     pub fn set_rumble(&self, heavy: u8, light: u8) { self.0.rumble.store(u16::from_be_bytes([heavy, light]), Ordering::Relaxed); }
 
+    /// The motor strengths last set, as (heavy, light): crate::haptics also plays them on Bevy's gamepads.
+    pub fn rumble(&self) -> (u8, u8) { let [h, l] = self.0.rumble.load(Ordering::Relaxed).to_be_bytes(); (h, l) }
+
     /// The effect R2 should have.
     pub fn set_trigger(&self, t: Trigger) { *self.0.trigger.lock().unwrap_or_else(|e| e.into_inner()) = t; }
 

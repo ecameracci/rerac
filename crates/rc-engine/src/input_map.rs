@@ -39,7 +39,8 @@ play controls (PS2 pad):  left stick = WASD (Alt: half stick = walk) | right sti
                           Select = Tab or Backspace | d-pad = T/F/G/H | R3 = V
                           quick select: 1..8 (1 the top slot, then clockwise) or the numpad (8 up, 9 up-right, ...)
                           gamepad: sticks, South = X, East = O, West = [], North = /\\, bumpers L1/R1, triggers L2/R2,
-                          Start/Select, stick clicks L3/R3, d-pad; DualSense over USB or Bluetooth, touchpad click = Select
+                          Start/Select, stick clicks L3/R3, d-pad; DualSense over USB or Bluetooth, touchpad click = Select;
+                          Steam Controller / Steam Deck through Steam Input (as an Xbox pad, with rumble)
 engine keys:              F7 = fly camera <-> game camera (the fly camera takes the keys; the pad is neutral) |
                           R = respawn at the level's uid-0 moby | P = print the camera | the cursor is locked while the
                           game camera plays (free in menus and when the window loses focus)

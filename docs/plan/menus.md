@@ -588,7 +588,8 @@ sub-pages (`crates/rc-game/src/menus/pause/port.rs`, `PageMenu::install_port_pag
   hand swap are the game's) → `gameplay::QuickSelectMode` (key `quick_select`, `RC_QUICK_SELECT=classic|modern` at start);
   docs/plan/quick_select_pause.md.
   The controller rows (port-only: the game has no vibration) → `haptics::ControllerSettings`: Vibration: on / off and Vibration strength: Low / Medium / High (rumble from
-  game events), Fire button: Circle / R2 (R2 read as ○, at the held weapon's fire point; R1 still crouches) and Trigger
+  game events, on the DualSense and on every other pad: Xbox pads, a Steam Controller or Steam Deck through Steam
+  Input; `haptics::gamepad_rumble`), Fire button: Circle / R2 (R2 read as ○, at the held weapon's fire point; R1 still crouches) and Trigger
   effects: on / off (R2's per-weapon DualSense feel); keys `vibration` / `vibration_strength` / `fire_button` /
   `trigger_effects` in the settings file. A change of the vibration rows plays a short pulse at the new strength.
 * **Controller page** (port-only): Port Options shows `port::ENTRIES[..PORT_ROWS]`, its last row "Controller" (no
