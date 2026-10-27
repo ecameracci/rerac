@@ -7,9 +7,15 @@
 //! `WaterState::flat_surfaces`; the Enhanced seas and translucent pools block by block, [`flat_blocks`],
 //! crate::sea_water `SeaWaterDraw::planes`) that the camera is above ([`MIN_ABOVE`]) and whose rectangle is partly in
 //! the view frustum ([`visible_part`]: clipped by the near side and the four side planes, so a rectangle behind the eye
-//! or beside the view does not count); the one whose part in view is nearest the eye ([`polygon_distance`]) wins.
-//! What hides a region inside the frustum (the ground over a ripple patch) is not seen (G-REN-111). None: the mirror
-//! cameras are inactive (nothing drawn, no cost).
+//! or beside the view does not count); each scores the screen area of its part in view ([`screen_area`]) times the
+//! share of that part seen ([`seen_share`]: of a few points of it, [`sight_points`], those with a clear line to the eye
+//! through the level's collision mesh, `rc_game::collision_query::coll_line`, its water faces left out; beyond
+//! [`SEEN_REACH`] untested), the regions of one height adding up, and the plane covering the most of the screen wins
+//! ([`choose_plane`], every [`CHOOSE_EVERY`] frames, about 0.5 ms; the drawn one stays until another covers [`STICK`]
+//! times as much): on Rilgar's start beach the bay at 59.5 keeps it over the ripple pools at 61.2, which
+//! keep the screen-space reflection (G-REN-111). A change of plane fades ([`fade`]): the drawn one goes out over
+//! [`FADE_SECS`] to the screen-space reflection, then the new one comes in. None: the mirror cameras are inactive
+//! (nothing drawn, no cost).
 //!
 //! **The mirror view.** Two cameras draw into [`WaterMirror::image`] at half the main view's size, without
 //! multisampling: the sky layer (crate::sky_render's [`SKY_LAYER`], cleared to the level background, depth cleared)
@@ -29,10 +35,10 @@
 //! and moby frustum culls) is missing from it too (G-REN-110).
 //!
 //! **The water** (`water.wgsl` `planar`, bindings 11..13 of crate::water_render::WaterMaterial and
-//! crate::sea_water::SeaWaterMaterial): `mirror` = (1 while drawn, the plane's height); on pixels within 0.5..1.0 of
-//! the plane (Novalis's river strips lie 38.7..39.5) the mirror picture at the pixel, bent by the wave normal and faded out where the bent sample leaves the
-//! picture, takes the place of the screen-space reflection (the same Fresnel weight); every other water pixel keeps
-//! the screen-space one.
+//! crate::sea_water::SeaWaterMaterial): `mirror` = (the weight while drawn, [`fade`]; the plane's height); on pixels
+//! within 0.5..1.0 of the plane (Novalis's river strips lie 38.7..39.5) the mirror picture at the pixel, bent by the
+//! wave normal and faded out where the bent sample leaves the picture, takes the place of the screen-space reflection
+//! by that weight (the same Fresnel weight); every other water pixel keeps the screen-space one.
 //!
 //! `RC_WATER_MIRROR=0`: no mirror view (the screen-space reflection everywhere); `debug`: also shows the mirror
 //! picture in the frame's top-right corner (flipped back, as it reads in the water). Original: no camera is spawned
@@ -143,42 +149,108 @@ pub fn visible_part(clip_from_world: &Mat4, f: &FlatWater) -> Vec<Vec3> {
     poly.into_iter().map(|(p, _)| p).collect()
 }
 
-/// The distance from `eye` to a convex polygon on a horizontal plane (game points, [`visible_part`]): straight down
-/// when the eye is over it, else to its nearest edge.
-pub fn polygon_distance(eye: Vec3, poly: &[Vec3]) -> f32 {
-    let Some(first) = poly.first() else { return f32::INFINITY };
-    let dz = eye.z - first.z;
-    let e = eye.truncate();
-    let n = poly.len();
-    let cross = |k: usize| {
-        let (a, b) = (poly[k].truncate(), poly[(k + 1) % n].truncate());
-        (b - a).perp_dot(e - a)
-    };
-    let inside = n >= 3 && ((0..n).all(|k| cross(k) >= 0.0) || (0..n).all(|k| cross(k) <= 0.0));
-    if inside { return dz.abs(); }
-    let flat = (0..n)
-        .map(|k| {
-            let (a, b) = (poly[k].truncate(), poly[(k + 1) % n].truncate());
-            let ab = b - a;
-            let t = if ab.length_squared() > 0.0 { ((e - a).dot(ab) / ab.length_squared()).clamp(0.0, 1.0) } else { 0.0 };
-            e.distance(a + ab * t)
-        })
-        .fold(f32::INFINITY, f32::min);
-    (flat * flat + dz * dz).sqrt()
+/// The points of a region's part in view ([`visible_part`]) tested for a line of sight ([`seen_share`]): its centre, and its
+/// corners, edge midpoints and the corners' midpoints to the centre pulled [`SEEN_INSET`] toward it, [`SEEN_LIFT`] up.
+pub fn sight_points(part: &[Vec3]) -> Vec<Vec3> {
+    if part.is_empty() { return Vec::new(); }
+    let c = part.iter().copied().sum::<Vec3>() / part.len() as f32;
+    let lift = Vec3::new(0.0, 0.0, SEEN_LIFT);
+    let mut out = vec![c + lift];
+    for (k, &p) in part.iter().enumerate() {
+        let mid = p.lerp(part[(k + 1) % part.len()], 0.5);
+        for q in [p, mid, p.lerp(c, 0.5)] { out.push(q.lerp(c, SEEN_INSET) + lift); }
+    }
+    out
 }
 
-/// The plane to mirror (game z): of the regions the eye (game) is [`MIN_ABOVE`] over whose rectangle is partly in the
-/// view frustum ([`visible_part`]), the one whose visible part is nearest the eye ([`polygon_distance`]).
-pub fn choose_plane(eye: Vec3, clip_from_world: &Mat4, regions: &[FlatWater]) -> Option<f32> {
-    regions
+/// The share of a region's part in view ([`visible_part`]) seen from `eye`: of its [`sight_points`], those beyond
+/// [`SEEN_REACH`] and those with nothing between them and the eye (`blocked(eye, point)`; crate::water_mirror `place`
+/// asks the level's collision mesh, its water faces left out).
+pub fn seen_share(eye: Vec3, part: &[Vec3], blocked: &mut impl FnMut(Vec3, Vec3) -> bool) -> f32 {
+    let pts = sight_points(part);
+    if pts.is_empty() { return 0.0; }
+    pts.iter().filter(|p| p.distance(eye) > SEEN_REACH || !blocked(eye, **p)).count() as f32 / pts.len() as f32
+}
+
+/// Sight points farther than this from the eye (game units) count as seen untested ([`seen_share`]: far water is a thin
+/// band of the screen, and the long lines are the costly ones).
+pub const SEEN_REACH: f32 = 160.0;
+/// The plane choice runs every this many frames ([`choose_plane`]'s lines of sight; the [`fade`] between planes is
+/// longer).
+pub const CHOOSE_EVERY: u32 = 4;
+
+/// The screen area of a part in view ([`visible_part`]: in front of the eye), in NDC (the whole view is 4).
+pub fn screen_area(clip_from_world: &Mat4, part: &[Vec3]) -> f32 {
+    let ndc: Vec<Vec2> = part
         .iter()
-        .filter(|f| eye.z > f.z + MIN_ABOVE)
-        .filter_map(|f| {
-            let part = visible_part(clip_from_world, f);
-            (!part.is_empty()).then(|| (polygon_distance(eye, &part), f.z))
+        .map(|p| {
+            let c = *clip_from_world * game_to_bevy(p.to_array()).extend(1.0);
+            Vec2::new(c.x, c.y) / c.w.max(NEAR_W)
         })
-        .min_by(|a, b| a.0.total_cmp(&b.0))
-        .map(|(_, z)| z)
+        .collect();
+    let n = ndc.len();
+    (0..n).map(|k| ndc[k].perp_dot(ndc[(k + 1) % n])).sum::<f32>().abs() * 0.5
+}
+
+/// A sight point's pull toward the part's centre ([`sight_points`]: off the frustum's edges, where the ground meets the
+/// water).
+pub const SEEN_INSET: f32 = 0.15;
+/// A sight point's lift over its plane (game units; [`sight_points`]): above the water's own collision faces.
+pub const SEEN_LIFT: f32 = 0.15;
+/// How much more of the screen another plane must cover to take over from the drawn one ([`choose_plane`]).
+pub const STICK: f32 = 1.5;
+
+/// The plane to mirror (game z) and the planes' scores. Each region the eye (game) is [`MIN_ABOVE`] over whose
+/// rectangle is partly in the view frustum ([`visible_part`]) scores the screen area of that part ([`screen_area`])
+/// times the share of it seen ([`seen_share`]); the regions of one height ([`SAME_PLANE`]: a sea's blocks) add up. The
+/// plane covering the most of the screen wins (Rilgar's start: the bay over the beach's ripple pools at 61.2, which
+/// keep the screen-space reflection), but the `drawn` one stays until another covers [`STICK`] times as much. Nothing
+/// seen at all (lines cut by an invisible wall): by area alone.
+pub fn choose_plane(eye: Vec3, clip_from_world: &Mat4, regions: &[FlatWater], drawn: Option<f32>, mut blocked: impl FnMut(Vec3, Vec3) -> bool) -> (Option<f32>, Vec<(f32, f32)>) {
+    // (z, area, area seen) per height.
+    let mut planes: Vec<(f32, f32, f32)> = Vec::new();
+    for f in regions.iter().filter(|f| eye.z > f.z + MIN_ABOVE) {
+        let part = visible_part(clip_from_world, f);
+        if part.is_empty() { continue; }
+        let area = screen_area(clip_from_world, &part);
+        let seen = area * seen_share(eye, &part, &mut blocked);
+        match planes.iter_mut().find(|p| (p.0 - f.z).abs() <= SAME_PLANE) {
+            Some(p) => {
+                p.1 += area;
+                p.2 += seen;
+            }
+            None => planes.push((f.z, area, seen)),
+        }
+    }
+    let by_seen = planes.iter().any(|p| p.2 > 0.0);
+    let scores: Vec<(f32, f32)> = planes.iter().map(|p| (p.0, if by_seen { p.2 } else { p.1 })).collect();
+    let best = scores.iter().copied().max_by(|a, b| a.1.total_cmp(&b.1));
+    let kept = drawn.and_then(|d| scores.iter().copied().find(|p| (p.0 - d).abs() <= SAME_PLANE));
+    let choice = match (best, kept) {
+        (Some(b), Some(k)) if b.1 <= k.1 * STICK => Some(k.0),
+        (b, _) => b.map(|b| b.0),
+    };
+    (choice, scores)
+}
+
+/// Two choices this close (game units) are the same plane ([`fade`]: a sea's height moves with its swell; the shader
+/// reads the mirror within 0.5 of its plane at full weight).
+pub const SAME_PLANE: f32 = 0.5;
+/// The mirror's fade in and out (seconds; [`fade`]).
+pub const FADE_SECS: f32 = 0.2;
+
+/// The plane drawn and its weight after a frame of `dt` seconds (`water.wgsl` `mirror.x`), given the drawn one and this
+/// frame's choice ([`choose_plane`]): the same plane ([`SAME_PLANE`]) follows the choice and fades in; another choice
+/// (or none) fades the drawn one out over [`FADE_SECS`] (the water's screen-space reflection takes over) and then
+/// takes its place, so a change of plane is never a hard cut.
+pub fn fade(drawn: Option<f32>, weight: f32, want: Option<f32>, dt: f32) -> (Option<f32>, f32) {
+    let step = dt.max(0.0) / FADE_SECS;
+    match (drawn, want) {
+        (Some(d), Some(w)) if (d - w).abs() <= SAME_PLANE => (Some(w), (weight + step).min(1.0)),
+        (Some(d), _) if weight - step > 0.0 => (Some(d), weight - step),
+        (Some(_), None) | (None, None) => (None, 0.0),
+        (_, Some(w)) => (Some(w), step.min(1.0)),
+    }
 }
 
 /// The mirror view's world-from-view for a camera's `g` and the plane y = `h` (Bevy): R·G·F, R the reflection about
@@ -204,7 +276,7 @@ enum Mode {
 #[derive(Resource)]
 pub struct WaterMirror {
     pub image: Handle<Image>,
-    /// `(1 while the mirror is drawn, the plane's Bevy y, 0, 0)` (`water.wgsl` `mirror`).
+    /// `(the mirror's weight while drawn, [`fade`], else 0; the plane's Bevy y, 0, 0)` (`water.wgsl` `mirror`).
     pub params: Handle<ShaderBuffer>,
     size: UVec2,
     mode: Mode,
@@ -214,6 +286,12 @@ pub struct WaterMirror {
     /// This frame's mirror world-from-view ([`pin`]).
     view: Option<Affine3A>,
     regions: Vec<FlatWater>,
+    /// The plane drawn and its weight ([`fade`]).
+    drawn: Option<f32>,
+    weight: f32,
+    /// Frames counted for [`CHOOSE_EVERY`]; the last choice and the region count it saw.
+    age: u32,
+    chosen: (Option<f32>, usize),
     /// `debug`: the region count and plane last printed.
     logged: (usize, Option<f32>),
 }
@@ -236,7 +314,7 @@ impl Plugin for WaterMirrorPlugin {
         };
         let image = app.world_mut().resource_mut::<Assets<Image>>().add(target_image(UVec2::ONE));
         let params = app.world_mut().resource_mut::<Assets<ShaderBuffer>>().add(ShaderBuffer::new(&[0u8; 16], RenderAssetUsages::default()));
-        app.insert_resource(WaterMirror { image, params, size: UVec2::ONE, mode, cams: None, inset: None, view: None, regions: Vec::new(), logged: (0, None) }).add_systems(
+        app.insert_resource(WaterMirror { image, params, size: UVec2::ONE, mode, cams: None, inset: None, view: None, regions: Vec::new(), drawn: None, weight: 0.0, age: 0, chosen: (None, 0), logged: (0, None) }).add_systems(
             PostUpdate,
             (
                 place
@@ -314,6 +392,8 @@ fn place(
     water: Option<Res<crate::water_render::WaterState>>,
     sea: Option<Res<crate::sea_water::SeaWaterDraw>>,
     play: Option<Res<crate::gameplay::Play>>,
+    level: Option<Res<crate::Level>>,
+    time: Res<Time<Real>>,
     main: MainCam,
     mut cams: MirrorCams,
     mut images: ResMut<Assets<Image>>,
@@ -337,11 +417,29 @@ fn place(
     }
     let g_main = GlobalTransform::from(*t).affine();
     let clip_from_world = base.get_clip_from_view() * Mat4::from(g_main.inverse());
-    let plane = if m.regions.is_empty() { None } else { choose_plane(game_eye(t), &clip_from_world, &m.regions) };
-    if m.mode == Mode::Debug && (m.regions.len() != m.logged.0 || plane != m.logged.1) {
-        m.logged = (m.regions.len(), plane);
+    // Every face but the water's (surface 0, as the hero's capsule leaves it out) hides what is behind it.
+    use rc_game::collision_query::{coll_line, QueryFlags};
+    let coll = level.as_deref().and_then(|l| l.0.collision.as_ref());
+    let blocked = |a: Vec3, b: Vec3| coll.is_some_and(|c| coll_line(c, a.to_array(), b.to_array(), QueryFlags::TWO_SIDED | QueryFlags::exclude_surface(0)).is_some());
+    let t0 = std::time::Instant::now();
+    m.age = m.age.wrapping_add(1);
+    let due = m.age.is_multiple_of(CHOOSE_EVERY) || m.regions.len() != m.chosen.1;
+    // Between choices the chosen plane at this frame's height (a sea's moves with its swell).
+    let now = |z: f32| m.regions.iter().find(|f| (f.z - z).abs() <= SAME_PLANE).map(|f| f.z);
+    let (choice, scores) = match () {
+        _ if m.regions.is_empty() => (None, Vec::new()),
+        _ if due => choose_plane(game_eye(t), &clip_from_world, &m.regions, m.drawn, blocked),
+        _ => (m.chosen.0.and_then(now), Vec::new()),
+    };
+    if due { m.chosen = (choice, m.regions.len()); }
+    let cost = t0.elapsed().as_secs_f64() * 1e3;
+    (m.drawn, m.weight) = fade(m.drawn, m.weight, choice, time.delta_secs());
+    let plane = m.drawn;
+    if m.mode == Mode::Debug && (m.regions.len() != m.logged.0 || choice.map(|z| z.round()) != m.logged.1.map(|z| z.round())) {
+        m.logged = (m.regions.len(), choice);
         let list: Vec<String> = m.regions.iter().take(8).map(|f| format!("z {:.2} x {:.1}..{:.1} y {:.1}..{:.1}", f.z, f.min.x, f.max.x, f.min.y, f.max.y)).collect();
-        println!("water mirror: plane {plane:?} of {} flat regions [{}]", m.regions.len(), list.join("; "));
+        let s: Vec<String> = scores.iter().map(|(z, s)| format!("z {z:.2}: {s:.3}")).collect();
+        println!("water mirror: plane {choice:?} (scores {}; {cost:.2} ms; drawn {plane:?} at {:.2}) of {} flat regions [{}]", s.join(", "), m.weight, m.regions.len(), list.join("; "));
     }
 
     // The target: half the main view, 1×1 while nothing mirrors (every water material re-binds on a resize).
@@ -379,7 +477,7 @@ fn place(
         if matches!(c3.depth_load_op, Camera3dDepthLoadOp::Load) != world { c3.depth_load_op = load; }
     }
 
-    let words = [plane.is_some() as u32 as f32, plane.unwrap_or(0.0), 0.0, 0.0];
+    let words = [if plane.is_some() { m.weight } else { 0.0 }, plane.unwrap_or(0.0), 0.0, 0.0];
     let bytes: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
     crate::asset_write::set_buffer(&mut buffers, &m.params, &bytes);
 
@@ -436,6 +534,92 @@ mod tests {
 
     fn flat(z: f32, min: [f32; 2], max: [f32; 2]) -> FlatWater { FlatWater { z, min: Vec2::from(min), max: Vec2::from(max) } }
 
+    /// Nothing between the eye and any point.
+    fn clear(_: Vec3, _: Vec3) -> bool { false }
+
+    #[test]
+    fn the_plane_seen_over_most_of_the_screen_wins() {
+        // Rilgar's start: a patch at 61.2 near the eye, the bay at 59.5 beyond it.
+        let g = cam([340.0, 110.0, 65.0], [340.0, 150.0, 58.0]);
+        let clip = GameProjection::default().get_clip_from_view() * Mat4::from(g.inverse());
+        let eye = Vec3::new(340.0, 110.0, 65.0);
+        let patch = flat(61.2, [332.0, 112.0], [348.0, 128.0]);
+        let bay = flat(59.5, [300.0, 140.0], [380.0, 300.0]);
+        let area = |f: &FlatWater| screen_area(&clip, &visible_part(&clip, f));
+        let (a_patch, a_bay) = (area(&patch), area(&bay));
+        assert!(a_patch > a_bay && a_bay > 0.0 && a_patch < 4.0, "{a_patch} {a_bay}");
+        assert_eq!(choose_plane(eye, &clip, &[bay, patch], None, clear).0, Some(61.2));
+        // The sand at 62.9 over the patch's rectangle hides every point of it, and the bay's nearest points.
+        let sand = |a: Vec3, b: Vec3| {
+            let t = (62.9 - a.z) / (b.z - a.z);
+            let p = a.lerp(b, t);
+            (0.0..=1.0).contains(&t) && (332.0..=348.0).contains(&p.x) && (112.0..=128.0).contains(&p.y)
+        };
+        let mut s = sand;
+        assert_eq!(seen_share(eye, &visible_part(&clip, &patch), &mut s), 0.0);
+        let bay_seen = seen_share(eye, &visible_part(&clip, &bay), &mut s);
+        assert!(bay_seen > 0.3 && bay_seen < 1.0, "{bay_seen}");
+        let (choice, scores) = choose_plane(eye, &clip, &[bay, patch], None, sand);
+        assert_eq!(choice, Some(59.5));
+        assert_eq!(scores.len(), 2);
+        // Nothing seen at all within SEEN_REACH (a bay that ends inside it): by area alone.
+        let near_bay = flat(59.5, [300.0, 140.0], [380.0, 250.0]);
+        assert!(visible_part(&clip, &near_bay).iter().all(|p| p.distance(eye) < SEEN_REACH));
+        assert_eq!(choose_plane(eye, &clip, &[near_bay, patch], None, |_, _| true).0, Some(61.2));
+        // The far points of the long bay count as seen untested.
+        assert!(seen_share(eye, &visible_part(&clip, &bay), &mut |_, _| true) > 0.0);
+        let pts = sight_points(&visible_part(&clip, &patch));
+        assert!(pts.len() > 4 && pts.iter().all(|p| (p.z - 61.2 - SEEN_LIFT).abs() < 1e-4));
+    }
+
+    #[test]
+    fn the_drawn_plane_stays_until_another_covers_much_more() {
+        let g = cam([0.0, 0.0, 10.0], [0.0, 20.0, 5.0]);
+        let clip = GameProjection::default().get_clip_from_view() * Mat4::from(g.inverse());
+        let eye = Vec3::new(0.0, 0.0, 10.0);
+        // Two blocks of one sea at 2.0 (2.03: its swell) side by side, a pool at 4.0 a little bigger than either.
+        let (left, right) = (flat(2.0, [-6.0, 12.0], [0.0, 20.0]), flat(2.03, [0.0, 12.0], [6.0, 20.0]));
+        let pool = flat(4.0, [-4.0, 9.0], [4.0, 15.0]);
+        let area = |f: &FlatWater| screen_area(&clip, &visible_part(&clip, f));
+        let (a_l, a_r, a_p) = (area(&left), area(&right), area(&pool));
+        assert!(a_p > a_l && a_p > a_r && a_p < a_l + a_r, "{a_l} {a_r} {a_p}");
+        // The sea's blocks add up.
+        let (choice, scores) = choose_plane(eye, &clip, &[left, pool, right], None, clear);
+        assert_eq!(choice, Some(2.0));
+        assert_eq!(scores.len(), 2);
+        // The pool alone against the left block: it wins unless the block is drawn and it covers less than STICK times.
+        assert_eq!(choose_plane(eye, &clip, &[left, pool], None, clear).0, Some(4.0));
+        let kept = choose_plane(eye, &clip, &[left, pool], Some(2.01), clear).0;
+        assert_eq!(kept, if a_p > a_l * STICK { Some(4.0) } else { Some(2.0) });
+        assert_eq!(choose_plane(eye, &clip, &[pool], Some(2.0), clear).0, Some(4.0), "a drawn plane out of view gives way");
+    }
+
+    #[test]
+    fn a_change_of_plane_fades_out_then_in() {
+        let dt = FADE_SECS * 0.3;
+        let near = |got: (Option<f32>, f32), d: Option<f32>, w: f32| got.0 == d && (got.1 - w).abs() < 1e-5;
+        // In from nothing, to full.
+        let (mut d, mut w) = fade(None, 0.0, Some(59.5), dt);
+        assert!(near((d, w), Some(59.5), 0.3));
+        for _ in 0..5 { (d, w) = fade(d, w, Some(59.49), dt); }
+        assert_eq!((d, w), (Some(59.49), 1.0), "the same plane follows its swell");
+        // Another plane: the drawn one fades out first, then the new one comes in.
+        let mut steps = Vec::new();
+        for _ in 0..8 {
+            (d, w) = fade(d, w, Some(61.2), dt);
+            steps.push((d, w));
+        }
+        assert!(near(steps[0], Some(59.49), 0.7) && near(steps[1], Some(59.49), 0.4) && near(steps[2], Some(59.49), 0.1));
+        assert!(near(steps[3], Some(61.2), 0.3) && near(steps[4], Some(61.2), 0.6));
+        assert_eq!(steps[7], (Some(61.2), 1.0));
+        // Out to nothing.
+        for _ in 0..4 { (d, w) = fade(d, w, None, dt); }
+        assert_eq!((d, w), (None, 0.0));
+        // Back to the drawn plane mid-fade: it comes back in without a switch.
+        let (d2, w2) = fade(Some(1.0), 0.5, Some(3.0), dt);
+        assert!(near(fade(d2, w2, Some(1.0), dt), Some(1.0), 0.5));
+    }
+
     /// A camera at game `eye` looking at game `target` (Bevy world-from-view).
     fn cam(eye: [f32; 3], target: [f32; 3]) -> Affine3A {
         GlobalTransform::from(Transform::from_translation(game_to_bevy(eye)).looking_at(game_to_bevy(target), Vec3::Y)).affine()
@@ -464,12 +648,12 @@ mod tests {
         let above = flat(12.0, [-50.0, -50.0], [50.0, 50.0]);
         assert!(!visible_part(&clip, &ahead_far).is_empty() && !visible_part(&clip, &ahead_near).is_empty());
         assert!(visible_part(&clip, &behind).is_empty());
-        assert_eq!(choose_plane(eye, &clip, &[ahead_far, behind, above, ahead_near]), Some(4.0));
-        assert_eq!(choose_plane(eye, &clip, &[behind, above]), None);
+        assert_eq!(choose_plane(eye, &clip, &[ahead_far, behind, above, ahead_near], None, clear).0, Some(4.0));
+        assert_eq!(choose_plane(eye, &clip, &[behind, above], None, clear).0, None);
         // Just under the eye is not enough ([`MIN_ABOVE`]).
-        assert_eq!(choose_plane(eye, &clip, &[flat(9.95, [-5.0, 8.0], [5.0, 16.0])]), None);
+        assert_eq!(choose_plane(eye, &clip, &[flat(9.95, [-5.0, 8.0], [5.0, 16.0])], None, clear).0, None);
         // A plane the camera stands over counts even when its corners are all around the view.
-        assert_eq!(choose_plane(eye, &clip, &[flat(1.0, [-500.0, -500.0], [500.0, 500.0])]), Some(1.0));
+        assert_eq!(choose_plane(eye, &clip, &[flat(1.0, [-500.0, -500.0], [500.0, 500.0])], None, clear).0, Some(1.0));
     }
 
     #[test]
@@ -486,23 +670,17 @@ mod tests {
         assert!(visible_part(&clip, &under).is_empty());
         assert!(visible_part(&clip, &side).is_empty(), "{:?}", visible_part(&clip, &side));
         assert!(!visible_part(&clip, &ahead).is_empty());
-        assert_eq!(choose_plane(eye, &clip, &[under, side, ahead]), Some(2.0));
-        // Partly in view: the distance is to the part in view, not to the rectangle's part under the eye.
+        assert_eq!(choose_plane(eye, &clip, &[under, side, ahead], None, clear).0, Some(2.0));
+        // Partly in view: only the part in view counts, and its area is a share of the screen.
         let long = flat(3.0, [-2.0, -5.0], [2.0, 200.0]);
         let part = visible_part(&clip, &long);
         assert!(!part.is_empty() && part.iter().all(|p| p.y > 0.0 && p.z == 3.0));
-        assert!(polygon_distance(eye, &part) > 7.5);
-    }
-
-    #[test]
-    fn polygon_distance_is_down_inside_and_to_the_edge_outside() {
-        let sq = [Vec3::new(0.0, 0.0, 1.0), Vec3::new(4.0, 0.0, 1.0), Vec3::new(4.0, 4.0, 1.0), Vec3::new(0.0, 4.0, 1.0)];
-        assert_eq!(polygon_distance(Vec3::new(2.0, 2.0, 5.0), &sq), 4.0);
-        let mut rev = sq;
-        rev.reverse();
-        assert_eq!(polygon_distance(Vec3::new(2.0, 2.0, 5.0), &rev), 4.0);
-        assert!((polygon_distance(Vec3::new(7.0, 2.0, 5.0), &sq) - 5.0).abs() < 1e-6);
-        assert_eq!(polygon_distance(Vec3::ZERO, &[]), f32::INFINITY);
+        let a = screen_area(&clip, &part);
+        assert!(a > 0.0 && a < 4.0, "{a}");
+        // From over a plane larger than the view, looking a little down: about the screen under the horizon.
+        let floor = screen_area(&clip, &visible_part(&clip, &flat(1.0, [-5000.0, -5000.0], [5000.0, 5000.0])));
+        assert!((1.8..=2.6).contains(&floor), "{floor}");
+        assert_eq!(screen_area(&clip, &[]), 0.0);
     }
 
     #[test]

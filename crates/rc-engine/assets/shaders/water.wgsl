@@ -89,7 +89,7 @@ struct WaterRings {
 @group(#{MATERIAL_BIND_GROUP}) @binding(10) var<storage, read> rings: WaterRings;
 
 struct WaterMirror {
-    // x = 1 while the mirror view is drawn, y = its plane's world y.
+    // x = the mirror's weight while its view is drawn (0..1, crate::water_mirror `fade`), else 0; y = its plane's world y.
     state: vec4<f32>,
 }
 
@@ -251,7 +251,7 @@ fn reflection(vp: vec3<f32>, rd: vec3<f32>, size: vec2<i32>) -> vec3<f32> {
 // The planar reflection on the mirrored plane (crate::water_mirror): the mirror view at this pixel (drawn mirrored
 // left to right: read at −x), bent by the wave normal; `ssr` off the plane and where the bent sample leaves the view.
 fn planar(ssr: vec3<f32>, wp: vec3<f32>, n_world: vec3<f32>, frag: vec4<f32>, dist: f32) -> vec3<f32> {
-    if (mirror.state.x < 0.5) { return ssr; }
+    if (mirror.state.x <= 0.0) { return ssr; }
     let on = 1.0 - smoothstep(0.5, 1.0, abs(wp.y - mirror.state.y));
     if (on <= 0.0) { return ssr; }
     let tilt = (view.view_from_world * vec4<f32>(n_world.x, 0.0, n_world.z, 0.0)).xy;
@@ -259,7 +259,7 @@ fn planar(ssr: vec3<f32>, wp: vec3<f32>, n_world: vec3<f32>, frag: vec4<f32>, di
     let uv = vec2<f32>(0.5 - 0.5 * ndc.x, 0.5 - 0.5 * ndc.y);
     let inside = min(min(uv.x, 1.0 - uv.x), min(uv.y, 1.0 - uv.y));
     let m = textureSampleLevel(mirror_color, mirror_sampler, clamp(uv, vec2<f32>(0.0), vec2<f32>(1.0)), 0.0).rgb;
-    return mix(ssr, m, on * smoothstep(0.0, 0.04, inside));
+    return mix(ssr, m, mirror.state.x * on * smoothstep(0.0, 0.04, inside));
 }
 
 // The surface's height gradient over world xz from travelling sine waves: (direction, wavenumber, amplitude·wavenumber).
