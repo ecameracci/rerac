@@ -615,7 +615,9 @@ sub-pages (`crates/rc-game/src/menus/pause/port.rs`, `PageMenu::install_port_pag
   Port Options) titled "Gadgetron Movement System" (regular font: in the large one the title wraps and the label turns
   into a scroller) listing the connected controllers (`port::GmsList`, filled by the engine's `gms::Gms` before each tick):
   Active (the one last used) / Available, or with one locked by ✕: Locked / Off for the other pads (the keyboard stays
-  a fallback); same-named pads are numbered (Steam's virtual pads: "Steam Input 1", "Steam Input 2"). In a new game's Veldin (level 0
+  a fallback); same-named pads are numbered (Steam's virtual pads: "Steam Input 1", "Steam Input 2"), and a Steam
+  Input pad is listed only once it gives input and until 60 s without any (Steam keeps spare and unplugged virtual
+  pads open, with no disconnect: `gms::steam_listed`). In a new game's Veldin (level 0
   loaded with under `gms::NEW_GAME_PLAY_TIME` played) a text-only HelpDesk note (`port::text::GMS_HELP_TEXT`, no voice,
   no help record: `help::Help::request_port`) says what the GMS is. Once it has shown, the Help Log lists it last
   (`PageMenu::gms_in_log`; settings key `gms_help`), outside the saved log, so saves stay the game's.

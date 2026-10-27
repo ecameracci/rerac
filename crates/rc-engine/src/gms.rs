@@ -12,7 +12,8 @@
 //! keyboard and mouse stay a fallback, so a lock to a pad that reads nothing can still be freed. ✕ on it again goes
 //! back to all of them. While the locked device is unplugged the lock does not apply. The lock lasts for the run
 //! (devices are not identified across runs). Pads with the same name are numbered ("Steam Input 1", "Steam Input 2":
-//! Steam makes one virtual pad per controller it wraps).
+//! Steam makes one virtual pad per controller it wraps). A Steam Input pad is listed only from its first input and
+//! until [`STEAM_IDLE`] without any ([`steam_listed`]): Steam's spare and unplugged pads stay open and silent.
 //!
 //! **The HelpDesk note** (`port::text::GMS_HELP_TEXT`): in a new game on Veldin (level 0 loaded with under
 //! [`NEW_GAME_PLAY_TIME`] played) the help box shows what the Gadgetron Movement System is and where its options are,
@@ -113,10 +114,20 @@ fn valve_name(vendor: Option<u16>, product: Option<u16>) -> Option<&'static str>
     match product? {
         0x1205 => Some("Steam Deck"),
         0x1102 | 0x1142 => Some("Steam Controller"),
-        0x11ff => Some("Steam Input"),
+        0x11ff => Some(STEAM_INPUT),
         _ => None,
     }
 }
+
+/// Steam Input's virtual pad (0x11ff).
+const STEAM_INPUT: &str = "Steam Input";
+/// Seconds without input before a Steam Input pad leaves the list.
+const STEAM_IDLE: f32 = 60.0;
+
+/// Whether a Steam Input pad is listed, by when it last gave input (`None`: never this run). Steam can make a pad
+/// that never reads (a second one for a controller it sees twice) and keeps a pad after its controller is unplugged,
+/// with no disconnect either way; one off the list is ignored by the lock ([`Gms::effective_lock`]).
+fn steam_listed(last: Option<f32>, now: f32) -> bool { last.is_some_and(|t| now - t < STEAM_IDLE) }
 
 /// A name as the row shows it: ASCII, cut at a word to [`NAME_MAX`] with "...".
 fn row_name(name: &str) -> Vec<u8> { row_name_in(name, NAME_MAX) }
@@ -146,6 +157,15 @@ fn numbered(labels: &[String]) -> Vec<Vec<u8>> {
         .collect()
 }
 
+/// [`track`]'s state across frames.
+#[derive(Default)]
+pub struct Seen {
+    /// The DualSense's buttons last frame.
+    ds_held: u32,
+    /// Each Steam Input pad's last input ([`steam_listed`]).
+    steam_used: std::collections::HashMap<Entity, f32>,
+}
+
 /// Each frame, before the pads are sampled: the devices, and the one that gave input.
 pub fn track(
     mut gms: ResMut<Gms>,
@@ -153,8 +173,12 @@ pub fn track(
     mouse: Res<ButtonInput<MouseButton>>,
     gamepads: Query<(Entity, &Gamepad, Option<&Name>)>,
     dualsense: Option<Res<DualSense>>,
-    mut ds_held: Local<u32>,
+    time: Res<Time<Real>>,
+    mut seen: Local<Seen>,
 ) {
+    let now = time.elapsed_secs();
+    let Seen { ds_held, steam_used } = &mut *seen;
+    steam_used.retain(|e, _| gamepads.contains(*e));
     let ds = dualsense.as_ref().and_then(|d| d.get());
     let mut devices = vec![(DeviceKey::Keyboard, "Keyboard and mouse".to_string())];
     let mut used = (keys.get_just_pressed().next().is_some() || mouse.get_just_pressed().next().is_some()).then_some(DeviceKey::Keyboard);
@@ -168,11 +192,15 @@ pub fn track(
     let mut pads: Vec<_> = gamepads.iter().filter(|(_, g, _)| !(ds.is_some() && crate::dualsense::is_dualsense(g))).collect();
     pads.sort_by_key(|(e, ..)| *e);
     for (e, g, name) in pads {
-        let label = valve_name(g.vendor_id(), g.product_id()).map(str::to_string).or(name.map(|n| n.as_str().to_string()));
-        devices.push((DeviceKey::Gamepad(e), label.unwrap_or_else(|| format!("Controller {}", devices.len()))));
-        if g.get_just_pressed().next().is_some() || g.left_stick().length() > 0.5 || g.right_stick().length() > 0.5 {
-            used = Some(DeviceKey::Gamepad(e));
+        let gave = g.get_just_pressed().next().is_some() || g.left_stick().length() > 0.5 || g.right_stick().length() > 0.5;
+        let valve = valve_name(g.vendor_id(), g.product_id());
+        if valve == Some(STEAM_INPUT) {
+            if gave || g.get_pressed().next().is_some() { steam_used.insert(e, now); }
+            if !steam_listed(steam_used.get(&e).copied(), now) { continue; }
         }
+        let label = valve.map(str::to_string).or(name.map(|n| n.as_str().to_string()));
+        devices.push((DeviceKey::Gamepad(e), label.unwrap_or_else(|| format!("Controller {}", devices.len()))));
+        if gave { used = Some(DeviceKey::Gamepad(e)); }
     }
     if let Some(k) = used { gms.active = Some(k); }
     if gms.active.is_some_and(|a| !devices.iter().any(|(k, _)| *k == a)) { gms.active = None; }
@@ -286,6 +314,14 @@ mod tests {
         assert_eq!(row_name("PDP Wired Controller for Xbox Series X"), b"PDP Wired Controller...");
         assert_eq!(row_name("Wireless Gamepad Controller XYZ"), b"Wireless Gamepad...");
         assert!(row_name("PDP Wired Controller for Xbox Series X").len() <= NAME_MAX);
+    }
+
+    #[test]
+    fn steam_pads_listed_while_used() {
+        assert!(!steam_listed(None, 5.0), "never used: a spare pad");
+        assert!(steam_listed(Some(5.0), 5.0));
+        assert!(steam_listed(Some(5.0), 5.0 + STEAM_IDLE - 1.0));
+        assert!(!steam_listed(Some(5.0), 5.0 + STEAM_IDLE), "silent: unplugged");
     }
 
     #[test]
