@@ -56,9 +56,10 @@
 //! [`grid_tint`]; the log names each verdict), seen from above, go to crate::sea_water (drawn after the scene copy by
 //! `water.wgsl`'s Enhanced path, Z written) instead of the opaque or display-blend pass; those whose colour is lava,
 //! mud or sludge (crate::liquid_render::verdict) go to crate::liquid_render, from either side, with the later passes of
-//! their mesh set (Gaspar's two-pass lava flows); seen from above, the ocean's band and layers give way to
-//! crate::ocean_water's surface (its wall stays); the other effect groups, the other ports, the other kinds and every
-//! group with the option Original are drawn as above.
+//! their mesh set (Gaspar's two-pass lava flows); the Hoven liquid's opaque groups go there as ice (its scrolls slowed,
+//! its additive pass not drawn: crate::liquid_render `hoven_scroll`, `added_mean`); seen from above, the ocean's band
+//! and layers give way to crate::ocean_water's surface (its wall stays); the other effect groups, the other ports, the
+//! other kinds and every group with the option Original are drawn as above.
 
 use crate::display_blend::DisplayEffect;
 use crate::fx_draw::{FxPrimMaterial, FxPrimParams, PrimBuf, LIST1_BIAS};
@@ -400,6 +401,14 @@ struct SeaDraw {
     kinds: HashMap<(Tex, [u32; 3], u8), LiquidKind>,
     /// [`grid_tint`] by port.
     tints: HashMap<usize, [f32; 3]>,
+    /// [`rgb_average`] of FX textures (Hoven's ice: its added pass).
+    fx_avg: HashMap<usize, [f32; 3]>,
+}
+
+/// The average RGB (bytes) of RGBA pixels.
+fn rgb_average(rgba: &[u8]) -> [f32; 3] {
+    let n = (rgba.len() / 4).max(1) as f32;
+    rgba.as_chunks::<4>().0.iter().fold([0.0f32; 3], |a, p| [a[0] + p[0] as f32, a[1] + p[1] as f32, a[2] + p[2] as f32]).map(|s| s / n)
 }
 
 pub struct SeaRenderPlugin;
@@ -550,6 +559,9 @@ fn draw(
     let mut passes: Vec<(usize, usize, gs::MeshSt)> = Vec::new();
     // The grids' own draws (not their meshes'): the group, the record's FIX (crate::sea_water::surface_fix), the port.
     let mut grid_own: Vec<(usize, u8, usize)> = Vec::new();
+    // Hoven's opaque groups drawn as ice (crate::liquid_render) and the mean colour of the pass they replace.
+    let mut ice_groups: Vec<usize> = Vec::new();
+    let mut ice_add = Vec3::ZERO;
     // The animated images of this tick, made once each.
     let mut made: Vec<GridAnim> = Vec::new();
     let mut anim = |a: GridAnim, st: &mut SeaDraw, images: &mut Assets<Image>| -> bool {
@@ -614,11 +626,23 @@ fn draw(
                 }
             }
             (SeaKind::Hoven, SeaData::Hoven(h)) => {
+                // Water Enhanced's ice (crate::liquid_render): the opaque layers drift slowly, the added pass gives way
+                // to its mean colour.
+                let ice = crate::liquid_render::hoven_ice(gfx.water.on());
+                let scroll = |speed: [f32; 2], game: [f32; 2]| if ice { crate::liquid_render::hoven_scroll(speed, counter) } else { game };
                 if gs::hoven_group1_drawn(&m.pvars, &p.svc.volumes, cam) {
-                    groups.push(Group { tex: Tex::Fx(HOVEN_G1_FX, false), effect: None, fog: level_fog, bias, prims: strip_prims(&h.groups[0], run.g1_scroll, None) });
+                    if ice { ice_groups.push(groups.len()); }
+                    groups.push(Group { tex: Tex::Fx(HOVEN_G1_FX, false), effect: None, fog: level_fog, bias, prims: strip_prims(&h.groups[0], scroll(h.g1_speed, run.g1_scroll), None) });
                 }
-                groups.push(Group { tex: Tex::Fx(HOVEN_FX[0], false), effect: None, fog: level_fog, bias: bias + 1.0, prims: strip_prims(&h.groups[1], run.scroll[0], None) });
-                groups.push(Group { tex: Tex::Fx(HOVEN_FX[1], true), effect: Some(Blend::Add), fog: level_fog, bias: bias + 2.0, prims: strip_prims(&h.groups[1], run.scroll[1], Some(h.fix2)) });
+                if ice { ice_groups.push(groups.len()); }
+                groups.push(Group { tex: Tex::Fx(HOVEN_FX[0], false), effect: None, fog: level_fog, bias: bias + 1.0, prims: strip_prims(&h.groups[1], scroll(h.layer_speed[0], run.scroll[0]), None) });
+                let added = strip_prims(&h.groups[1], run.scroll[1], Some(h.fix2));
+                if ice {
+                    let avg = *st.fx_avg.entry(HOVEN_FX[1]).or_insert_with(|| fx.and_then(|f| f.get(HOVEN_FX[1])?.as_ref()).map_or([0.0; 3], |t| rgb_average(&t.rgba)));
+                    ice_add = crate::liquid_render::added_mean(avg, &added, h.fix2);
+                } else {
+                    groups.push(Group { tex: Tex::Fx(HOVEN_FX[1], true), effect: Some(Blend::Add), fog: level_fog, bias: bias + 2.0, prims: added });
+                }
             }
             (SeaKind::GridSet, SeaData::GridSet(g)) => {
                 // 854's callback `0x2ea048`: the shared image and fog (`0x2a4818`), the gated records, the fog restore.
@@ -689,7 +713,8 @@ fn draw(
                 groups.push(g);
                 continue;
             };
-            let kind = tex_kind(st, &level.0.sea, fx, g.tex, tint, fix, &g.prims);
+            let ice = ice_groups.contains(&i);
+            let kind = if ice { LiquidKind::Ice } else { tex_kind(st, &level.0.sea, fx, g.tex, tint, fix, &g.prims) };
             let water_here = kind == LiquidKind::Water && crate::sea_water::from_above(&g.prims, cam[2]);
             if water_here || kind.drawn_here() {
                 let img = match g.tex {
@@ -703,7 +728,9 @@ fn draw(
                         let second = pass.and_then(|p| passes.iter().find(|q| q.1 == p.1 && q.0 > p.0));
                         let flow = crate::liquid_render::layer_flow(pass.as_ref().map(|p| &p.2), second.map(|q| &q.2));
                         if let Some(p) = pass { taken.push(p.1); }
-                        looks.push(crate::liquid_render::LiquidGroup { image, fog: g.fog, prims: g.prims, kind, flow });
+                        let grid = if own.is_some() { crate::liquid_render::st_per_unit(&g.prims) } else { 0.0 };
+                        let add = if ice { ice_add } else { Vec3::ZERO };
+                        looks.push(crate::liquid_render::LiquidGroup { image, fog: g.fog, prims: g.prims, kind, flow, grid, add });
                     }
                     continue;
                 }

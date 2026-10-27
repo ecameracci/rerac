@@ -1,18 +1,27 @@
 //! **Port-only (Water Enhanced, crate::graphics; docs/plan/graphics_options.md "Water"): the other liquids.** The
 //! liquid-port surfaces crate::sea_render judges (crate::sea_water::surface_fix, `judged_rgb`: the image × the vertex
 //! colours) get a kind ([`classify`]): clear water goes to crate::sea_water as before; lava, mud and sludge are drawn
-//! here (`liquid.wgsl`) instead of their Original draw; ice and anything doubtful stay Original (Hoven's ice is level
-//! geometry, not a liquid draw). crate::water_render's ripple patches that are not clear water take sludge only
+//! here (`liquid.wgsl`) instead of their Original draw; anything doubtful stays Original. Ice is never judged by colour:
+//! Hoven's liquid 1901 (grey 57 under green vertex colours) is ice by its port ([`hoven_scroll`]).
+//! crate::water_render's ripple patches that are not clear water take sludge only
 //! ([`patch_verdict`]: Gemlik's acid pools) and draw it in `water.wgsl`. The looks live in `liquid_look.wgsl`
 //! (`rerac::liquid_look`, [`keep_look_module`]). Each keeps the draw's own colour (the texture as the game modulates
 //! and fogs it) and adds a procedural surface over it:
 //! * **lava**: a dark crust of that colour with bright, emissive cracks (the zero lines of two gradient-noise layers in
 //!   the draw's ST, so they ride the original scroll; the second layer drifts at the second pass's relative speed,
 //!   [`flow_velocity`]), and a slow glow pulse. Gaspar's lava flows draw two passes (FIX 0x80, then 0x60 scrolled
-//!   twice as fast, rc_game::water::sea `gaspar_extras`): the look takes both, so the 0x60 pass is not drawn;
+//!   twice as fast, rc_game::water::sea `gaspar_extras`): the look takes both, so the 0x60 pass is not drawn. A liquid
+//!   grid's blocks each restart the ST (crate::sea_render::grid_prims_into): its layers lie on the world plane at the
+//!   grid's ST scale instead ([`LiquidGroup::grid`], [`st_per_unit`]), so they neither repeat block by block nor
+//!   break at the block edges (Umbris 460, Gaspar 317);
 //! * **mud**: thick and dark, opaque, low-frequency bulges rising and settling in world space, lit by the key light
 //!   (crate::sun_shadow::KeyLight) with a sharp highlight and a Fresnel sky (the fog colour, brightened);
-//! * **sludge**: murky, a weak emissive tint of its colour, slow ripples and bubbles that swell and pop.
+//! * **sludge**: murky, a weak emissive tint of its colour, slow ripples and bubbles that swell and pop;
+//! * **ice** (Hoven's slush): flat and still. The game scrolls its two layers (FX 0x2f opaque, FX 0x30 added over it
+//!   at `fix2`) against each other, which reads as rolling waves; here the opaque layers drift at [`ICE_DRIFT`] of
+//!   their speed, the added pass is not drawn and its mean colour goes on top instead ([`LiquidGroup::add`]), the
+//!   texture's pattern is mostly smoothed out and taken toward a pale ice blue, with cloudy patches, cracks, frost
+//!   flecks, a sky sheen and a sharp glint (`ICE`).
 //!
 //! Drawn as opaque world surfaces (the main pass, Z written; a translucent grid, Oltanis's FIX 0x40 mud, becomes
 //! opaque), with the level's or the grid's fog, seen from either side. Not in
@@ -64,14 +73,15 @@ impl LiquidKind {
         [LiquidKind::Water, LiquidKind::Lava, LiquidKind::Mud, LiquidKind::Sludge, LiquidKind::Ice, LiquidKind::Original].into_iter().find(|k| k.name() == s.trim().to_ascii_lowercase())
     }
 
-    /// Whether this module draws the kind (`liquid.wgsl` `params.misc.x`: 1 lava, 2 mud, 3 sludge).
-    pub fn drawn_here(self) -> bool { matches!(self, LiquidKind::Lava | LiquidKind::Mud | LiquidKind::Sludge) }
+    /// Whether this module draws the kind (`liquid.wgsl` `params.misc.x`: 1 lava, 2 mud, 3 sludge, 4 ice).
+    pub fn drawn_here(self) -> bool { matches!(self, LiquidKind::Lava | LiquidKind::Mud | LiquidKind::Sludge | LiquidKind::Ice) }
 
     fn shader_id(self) -> f32 {
         match self {
             LiquidKind::Lava => 1.0,
             LiquidKind::Mud => 2.0,
             LiquidKind::Sludge => 3.0,
+            LiquidKind::Ice => 4.0,
             _ => 0.0,
         }
     }
@@ -82,7 +92,7 @@ impl LiquidKind {
 /// and Umbris 100, 17, 0), mud (a mid brown: Oltanis 101, 79, 58), sludge (green or purple over the rest, and a dark
 /// olive with almost no blue: Umbris's swamp 1018, 16, 14, 7); grey (Kerwan's 994, 140), the other dark liquids
 /// (Aridia's quicksand 854, 25, 23, 15: below 40 on every channel) and anything else stay Original. Ice is never judged
-/// by colour (a pale ice reads as water or grey): no liquid draw is ice.
+/// by colour (a pale ice reads as water or grey): Hoven's liquid is ice by its port (crate::sea_render).
 pub fn classify(rgb: [u8; 3]) -> LiquidKind {
     if crate::sea_water::clear_liquid(rgb) { return LiquidKind::Water; }
     let [r, g, b] = rgb.map(f32::from);
@@ -143,6 +153,50 @@ const LAVA_FINE: Vec4 = Vec4::new(0.85, 3.0, 3.7, 6.0);
 /// [`layer_flow`] without a second pass: ST per second and offset.
 pub const DRIFT: Vec4 = Vec4::new(0.011, -0.017, 0.5, 0.0);
 
+/// The ice look (`liquid_look.wgsl` ICE): the texture's own pattern kept over its smoothed colour, the share taken
+/// toward a pale ice blue, the cracks' and frost's strength, the sky sheen's share of the Fresnel term. The shader
+/// holds it; this copy is the tests'.
+#[cfg(test)]
+const ICE: Vec4 = Vec4::new(0.25, 0.65, 0.3, 0.6);
+
+/// Ice's drift: the share of the game's scroll speed its layers keep (module doc).
+pub const ICE_DRIFT: f32 = 0.05;
+
+/// Whether Hoven's liquid 1901 is drawn as ice (Water Enhanced with the switches: `RC_LIQUID_FX=0` or a forced kind
+/// other than ice keep it Original).
+pub fn hoven_ice(water_on: bool) -> bool { water_on && enabled() && forced().is_none_or(|k| k == LiquidKind::Ice) }
+
+/// An ice layer's ST scroll at tick `counter`: the game's speed (ST per second, rc_game::water::sea `HovenData`) times
+/// [`ICE_DRIFT`], wrapped to one tile (the textures repeat).
+pub fn hoven_scroll(speed: [f32; 2], counter: u64) -> [f32; 2] {
+    let t = (counter % (60 * 60 * 60)) as f32 / 60.0;
+    speed.map(|v| (v * ICE_DRIFT * t).rem_euclid(1.0))
+}
+
+/// The mean colour an additive pass adds (display, 0..1): the texture's average RGB (bytes) under MODULATE by the strips'
+/// average vertex colour (bytes / 128), times `fix` / 128 (`Cs·FIX + Cd`).
+pub fn added_mean(tex_avg: [f32; 3], prims: &PrimBuf, fix: u8) -> Vec3 {
+    let (_, _, color, _) = prims.parts();
+    let n = color.len().max(1) as f32;
+    let cv = color.iter().fold(Vec3::ZERO, |a, c| a + Vec3::new(c[0], c[1], c[2])) / n;
+    (Vec3::from_array(tex_avg) * cv * (fix as f32 / 128.0) / 255.0).min(Vec3::ONE)
+}
+
+/// A flat draw's ST per world unit (the square root of the ratio of the ST area to the world area of its first
+/// triangle that has both; 0: none). A liquid grid's ST is the same scale everywhere ([`LiquidGroup::grid`]).
+pub fn st_per_unit(prims: &PrimBuf) -> f32 {
+    let (pos, uv, _, idx) = prims.parts();
+    for t in idx.as_chunks::<3>().0 {
+        let [a, b, c] = t.map(|i| i as usize);
+        let (Some(pa), Some(pb), Some(pc)) = (pos.get(a), pos.get(b), pos.get(c)) else { continue };
+        // Bevy xz: the world plane.
+        let w = ((pb[0] - pa[0]) * (pc[2] - pa[2]) - (pc[0] - pa[0]) * (pb[2] - pa[2])).abs();
+        let s = ((uv[b][0] - uv[a][0]) * (uv[c][1] - uv[a][1]) - (uv[c][0] - uv[a][0]) * (uv[b][1] - uv[a][1])).abs();
+        if w > 1e-4 && s > 1e-8 { return (s / w).sqrt(); }
+    }
+    0.0
+}
+
 /// One surface of this tick: the image (as crate::sea_render resolved it), the fog, the primitives, the kind and the
 /// second layer's flow ([`layer_flow`]).
 pub struct LiquidGroup {
@@ -151,17 +205,24 @@ pub struct LiquidGroup {
     pub prims: PrimBuf,
     pub kind: LiquidKind,
     pub flow: Vec4,
+    /// A liquid grid's own draw: its ST per world unit ([`st_per_unit`]; the look's layers on the world plane); 0: in
+    /// the draw's ST.
+    pub grid: f32,
+    /// The mean colour of a pass the look replaces (display, 0..1; ice: Hoven's added layer, [`added_mean`]).
+    pub add: Vec3,
 }
 
 /// `liquid.wgsl`'s static uniform.
 #[derive(Clone, Copy, Debug, Default, PartialEq, ShaderType)]
 pub struct LiquidParams {
-    /// x = the kind (1 lava, 2 mud, 3 sludge).
+    /// x = the kind (1 lava, 2 mud, 3 sludge, 4 ice), y = [`LiquidGroup::grid`].
     pub misc: Vec4,
     /// [`layer_flow`].
     pub flow: Vec4,
     /// xyz = toward the key light (world).
     pub sun: Vec4,
+    /// xyz = [`LiquidGroup::add`].
+    pub add: Vec4,
 }
 
 #[derive(Asset, TypePath, AsBindGroup, Debug, Clone)]
@@ -271,7 +332,7 @@ pub fn draw(
             hide(&mut vis, &mut st.slots[k]);
             continue;
         }
-        let params = LiquidParams { misc: Vec4::new(g.kind.shader_id(), 0.0, 0.0, 0.0), flow: g.flow, sun };
+        let params = LiquidParams { misc: Vec4::new(g.kind.shader_id(), g.grid, 0.0, 0.0), flow: g.flow, sun, add: g.add.extend(0.0) };
         if let Some((e, mesh, mat, shown)) = &mut st.slots[k] {
             g.prims.update(&mut meshes, mesh);
             if materials.get(&*mat).is_none_or(|m| m.texture != g.image || m.fog != g.fog || m.params != params) {
@@ -344,7 +405,30 @@ mod tests {
         }
         assert_eq!(LiquidKind::parse(" Lava "), Some(LiquidKind::Lava));
         assert_eq!(LiquidKind::parse("magma"), None);
-        assert!(!LiquidKind::Ice.drawn_here() && !LiquidKind::Water.drawn_here() && LiquidKind::Sludge.drawn_here());
+        assert!(LiquidKind::Ice.drawn_here() && !LiquidKind::Water.drawn_here() && LiquidKind::Sludge.drawn_here());
+        // No colour is ice: Hoven's liquid is, by its port.
+        for c in [[57u8, 57, 57], [200, 220, 240], [240, 240, 240]] { assert_ne!(classify(c), LiquidKind::Ice, "{c:?}"); }
+        assert!(!hoven_ice(false));
+    }
+
+    #[test]
+    fn a_grid_gets_its_st_scale_and_ice_drifts_slowly() {
+        // A strip of 2-unit cells at ST 0.5 a cell (Bevy points from game ones): 0.25 ST per unit.
+        let mut b = PrimBuf::default();
+        b.strip([([10.0, 20.0, 35.0], [0.0, 0.0], 0x8080_8080), ([12.0, 20.0, 35.0], [0.5, 0.0], 0x8080_8080), ([10.0, 22.0, 35.0], [0.0, 0.5], 0x8080_8080), ([12.0, 22.0, 35.0], [0.5, 0.5], 0x8080_8080)]);
+        assert!((st_per_unit(&b) - 0.25).abs() < 1e-6, "{}", st_per_unit(&b));
+        assert_eq!(st_per_unit(&PrimBuf::default()), 0.0);
+        // The ice's scroll: ICE_DRIFT of the speed, wrapped; none at tick 0.
+        assert_eq!(hoven_scroll([0.3, -0.2], 0), [0.0, 0.0]);
+        let s = hoven_scroll([0.3, -0.2], 600);
+        assert!((s[0] - 0.3 * ICE_DRIFT * 10.0).abs() < 1e-5 && (s[1] - (1.0 - 0.2 * ICE_DRIFT * 10.0)).abs() < 1e-5, "{s:?}");
+        assert!(hoven_scroll([5.0, 7.0], 123_457).iter().all(|v| (0.0..1.0).contains(v)));
+        // The added pass's mean: texture × vertex colour (0x80 = 1) × FIX / 128.
+        let m = added_mean([100.0, 200.0, 50.0], &b, 0x40);
+        assert!((m - Vec3::new(100.0, 200.0, 50.0) / 255.0 * 0.5).length() < 1e-5, "{m}");
+        let look = include_str!("../assets/shaders/liquid_look.wgsl");
+        let line = format!("const ICE: vec4<f32> = vec4<f32>({:?}, {:?}, {:?}, {:?});", ICE.x, ICE.y, ICE.z, ICE.w);
+        assert!(look.contains(&line), "{line}");
     }
 
     #[test]
