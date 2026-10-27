@@ -6,8 +6,10 @@
 //! images are the main camera's target size, so a material reads them at its own fragment position.
 //!
 //! The copy runs only while an option needs it (the colour only for the water); otherwise the images stay 1×1 and
-//! nothing is drawn, so Original frames are unchanged. A resize re-binds every [`WaterMaterial`] and
-//! [`ParticleMaterial`] (Bevy keeps a material's bind group until the material changes).
+//! nothing is drawn, so Original frames are unchanged. A resize makes new images and points every [`WaterMaterial`]
+//! and [`ParticleMaterial`] at them: resizing the images in place left materials bound to the old size's textures
+//! (never written, so depth 0 and black: Rilgar's slide pool drew Enhanced's deep colour over its floor), while a new
+//! handle makes Bevy rebuild the bind group once the new image is prepared.
 //!
 //! What the copy lacks: the shadow casters drawn after the shadow pass (crate::moby_render's late draws, only while
 //! the game's shadow volumes are on), the blended draws and the effects.
@@ -107,15 +109,14 @@ fn follow(
     }
     let size = if want_depth { cams.iter().next().and_then(Camera::physical_target_size).unwrap_or(UVec2::ONE) } else { UVec2::ONE };
     if size == copy.size || size.x == 0 || size.y == 0 { return; }
-    let extent = Extent3d { width: size.x, height: size.y, depth_or_array_layers: 1 };
-    for h in [copy.depth.clone(), copy.color.clone()] {
-        if let Some(mut img) = images.get_mut(&h) { img.resize(extent); }
-    }
+    copy.depth = images.add(target_image(size, DEPTH_FORMAT));
+    copy.color = images.add(target_image(size, COLOR_FORMAT));
     copy.size = size;
-    let ids: Vec<_> = water.ids().collect();
-    for id in ids { water.get_mut(id); }
-    let ids: Vec<_> = particles.ids().collect();
-    for id in ids { particles.get_mut(id); }
+    for (_, m) in water.iter_mut() {
+        m.scene_depth = copy.depth.clone();
+        m.scene_color = copy.color.clone();
+    }
+    for (_, m) in particles.iter_mut() { m.scene_depth = copy.depth.clone(); }
 }
 
 #[derive(Resource)]
