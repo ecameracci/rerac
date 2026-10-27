@@ -8,9 +8,11 @@
 //! DualSense's Bevy gamepad is left out while the pad is read directly, as crate::input_map::Pads does). The device that
 //! last gave input (a key or button pressed, a stick pushed past half way, R2 pulled) is the **Active** one.
 //!
-//! **Lock** ([`Gms::lock`]): ✕ on a row reads only that device (Locked, the others Off); ✕ on it again goes back to all
-//! of them. While the locked device is unplugged the lock does not apply, so the game never ends up without input. The
-//! lock lasts for the run (devices are not identified across runs).
+//! **Lock** ([`Gms::lock`]): ✕ on a row reads only that device among the pads (Locked, the other pads Off); the
+//! keyboard and mouse stay a fallback, so a lock to a pad that reads nothing can still be freed. ✕ on it again goes
+//! back to all of them. While the locked device is unplugged the lock does not apply. The lock lasts for the run
+//! (devices are not identified across runs). Pads with the same name are numbered ("Steam Input 1", "Steam Input 2":
+//! Steam makes one virtual pad per controller it wraps).
 //!
 //! **The HelpDesk note** (`port::text::GMS_HELP_TEXT`): in a new game on Veldin (level 0 loaded with under
 //! [`NEW_GAME_PLAY_TIME`] played) the help box shows what the Gadgetron Movement System is and where its options are,
@@ -71,8 +73,9 @@ impl Gms {
     /// The lock while its device is connected.
     fn effective_lock(&self) -> Option<DeviceKey> { self.lock.filter(|l| self.devices.iter().any(|(k, _)| k == l)) }
 
-    /// Whether input from `k` reaches the game.
-    pub fn allows(&self, k: DeviceKey) -> bool { self.effective_lock().is_none_or(|l| l == k) }
+    /// Whether input from `k` reaches the game. The keyboard always does: a lock to a pad that reads nothing (one of
+    /// Steam's virtual pads for another controller) must not leave the game, and the page that frees it, without input.
+    pub fn allows(&self, k: DeviceKey) -> bool { k == DeviceKey::Keyboard || self.effective_lock().is_none_or(|l| l == k) }
 
     /// The GMS page's rows: each device and its status.
     pub fn rows(&self) -> Vec<GmsRow> {
@@ -83,7 +86,9 @@ impl Gms {
                 name: name.clone(),
                 status: match lock {
                     Some(l) if l == *k => gms_status::LOCKED,
-                    Some(_) => gms_status::OFF,
+                    Some(_) if *k != DeviceKey::Keyboard => gms_status::OFF,
+                    Some(_) if self.active == Some(*k) => gms_status::ACTIVE,
+                    Some(_) => gms_status::AVAILABLE,
                     None if self.active == Some(*k) => gms_status::ACTIVE,
                     None => gms_status::AVAILABLE,
                 },
@@ -114,13 +119,31 @@ fn valve_name(vendor: Option<u16>, product: Option<u16>) -> Option<&'static str>
 }
 
 /// A name as the row shows it: ASCII, cut at a word to [`NAME_MAX`] with "...".
-fn row_name(name: &str) -> Vec<u8> {
+fn row_name(name: &str) -> Vec<u8> { row_name_in(name, NAME_MAX) }
+
+fn row_name_in(name: &str, max: usize) -> Vec<u8> {
     let ascii: String = name.chars().map(|c| if c.is_ascii() && !c.is_ascii_control() { c } else { ' ' }).collect();
     let ascii = ascii.trim();
-    if ascii.len() <= NAME_MAX { return ascii.as_bytes().to_vec(); }
-    let cut = &ascii[..NAME_MAX - 3];
-    let cut = if ascii.as_bytes()[NAME_MAX - 3] == b' ' { cut } else { cut.rsplit_once(' ').map_or(cut, |(a, _)| a) };
+    if ascii.len() <= max { return ascii.as_bytes().to_vec(); }
+    let cut = &ascii[..max - 3];
+    let cut = if ascii.as_bytes()[max - 3] == b' ' { cut } else { cut.rsplit_once(' ').map_or(cut, |(a, _)| a) };
     format!("{}...", cut.trim_end()).into_bytes()
+}
+
+/// The rows' names with a number after each name that more than one device has (in list order, from 1), the name cut
+/// to leave room for it.
+fn numbered(labels: &[String]) -> Vec<Vec<u8>> {
+    labels
+        .iter()
+        .enumerate()
+        .map(|(i, l)| {
+            if labels.iter().filter(|o| *o == l).count() < 2 { return row_name(l); }
+            let suffix = format!(" {}", labels[..=i].iter().filter(|o| *o == l).count());
+            let mut name = row_name_in(l, NAME_MAX - suffix.len());
+            name.extend_from_slice(suffix.as_bytes());
+            name
+        })
+        .collect()
 }
 
 /// Each frame, before the pads are sampled: the devices, and the one that gave input.
@@ -133,30 +156,31 @@ pub fn track(
     mut ds_held: Local<u32>,
 ) {
     let ds = dualsense.as_ref().and_then(|d| d.get());
-    let mut devices = vec![(DeviceKey::Keyboard, b"Keyboard and mouse".to_vec())];
+    let mut devices = vec![(DeviceKey::Keyboard, "Keyboard and mouse".to_string())];
     let mut used = (keys.get_just_pressed().next().is_some() || mouse.get_just_pressed().next().is_some()).then_some(DeviceKey::Keyboard);
     if let Some(p) = ds {
-        devices.push((DeviceKey::DualSense, b"DualSense".to_vec()));
+        devices.push((DeviceKey::DualSense, "DualSense".to_string()));
         let pressed = p.buttons & !*ds_held != 0;
         if pressed || p.left.length() > 0.5 || p.right.length() > 0.5 || p.r2 > 0.3 { used = Some(DeviceKey::DualSense); }
         *ds_held = p.buttons;
     }
-    for (e, g, name) in &gamepads {
-        if ds.is_some() && crate::dualsense::is_dualsense(g) { continue; }
-        let n = devices.len();
-        let fallback = format!("Controller {n}");
-        let label = valve_name(g.vendor_id(), g.product_id()).or(name.map(|n| n.as_str())).unwrap_or(&fallback);
-        devices.push((DeviceKey::Gamepad(e), row_name(label)));
+    // In connection order, so the numbers of same-named pads stay put.
+    let mut pads: Vec<_> = gamepads.iter().filter(|(_, g, _)| !(ds.is_some() && crate::dualsense::is_dualsense(g))).collect();
+    pads.sort_by_key(|(e, ..)| *e);
+    for (e, g, name) in pads {
+        let label = valve_name(g.vendor_id(), g.product_id()).map(str::to_string).or(name.map(|n| n.as_str().to_string()));
+        devices.push((DeviceKey::Gamepad(e), label.unwrap_or_else(|| format!("Controller {}", devices.len()))));
         if g.get_just_pressed().next().is_some() || g.left_stick().length() > 0.5 || g.right_stick().length() > 0.5 {
             used = Some(DeviceKey::Gamepad(e));
         }
     }
     if let Some(k) = used { gms.active = Some(k); }
     if gms.active.is_some_and(|a| !devices.iter().any(|(k, _)| *k == a)) { gms.active = None; }
-    gms.devices = devices;
+    let labels: Vec<String> = devices.iter().map(|(_, l)| l.clone()).collect();
+    gms.devices = devices.into_iter().map(|(k, _)| k).zip(numbered(&labels)).collect();
 }
 
-/// The keyboard's input as the game reads it: none while another device is locked.
+/// The keyboard's input as the game reads it (always, [`Gms::allows`]: the fallback under any lock).
 pub fn keyboard<'a>(
     gms: Option<&Gms>,
     keys: &'a ButtonInput<KeyCode>,
@@ -240,13 +264,15 @@ mod tests {
         let st = |g: &Gms| g.rows().iter().map(|r| r.status).collect::<Vec<_>>();
         assert_eq!(st(&g), vec![gms_status::AVAILABLE, gms_status::ACTIVE, gms_status::AVAILABLE]);
         assert!(g.allows(DeviceKey::Keyboard) && g.allows(DeviceKey::DualSense));
-        // ✕ on the Xbox pad: only it is read.
+        // ✕ on the Xbox pad: only it among the pads; the keyboard stays a fallback.
         g.pick(2);
-        assert_eq!(st(&g), vec![gms_status::OFF, gms_status::OFF, gms_status::LOCKED]);
-        assert!(!g.allows(DeviceKey::Keyboard) && !g.allows(DeviceKey::DualSense));
+        assert_eq!(st(&g), vec![gms_status::AVAILABLE, gms_status::OFF, gms_status::LOCKED]);
+        assert!(g.allows(DeviceKey::Keyboard) && !g.allows(DeviceKey::DualSense));
+        g.active = Some(DeviceKey::Keyboard);
+        assert_eq!(st(&g)[0], gms_status::ACTIVE);
         // Unplugged: the lock does not apply.
         let saved = g.devices.pop();
-        assert!(g.allows(DeviceKey::Keyboard));
+        assert!(g.allows(DeviceKey::DualSense));
         g.devices.extend(saved);
         // ✕ on it again: all of them.
         g.pick(2);
@@ -260,6 +286,16 @@ mod tests {
         assert_eq!(row_name("PDP Wired Controller for Xbox Series X"), b"PDP Wired Controller...");
         assert_eq!(row_name("Wireless Gamepad Controller XYZ"), b"Wireless Gamepad...");
         assert!(row_name("PDP Wired Controller for Xbox Series X").len() <= NAME_MAX);
+    }
+
+    #[test]
+    fn same_names_are_numbered() {
+        let l = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let n = numbered(&l(&["Keyboard and mouse", "Steam Input", "Xbox Controller", "Steam Input"]));
+        assert_eq!(n, vec![b"Keyboard and mouse".to_vec(), b"Steam Input 1".to_vec(), b"Xbox Controller".to_vec(), b"Steam Input 2".to_vec()]);
+        let long = numbered(&l(&["PDP Wired Controller for Xbox Series X"; 2]));
+        assert_eq!(long[1], b"PDP Wired... 2");
+        assert!(long.iter().all(|x| x.len() <= NAME_MAX));
     }
 
     #[test]
