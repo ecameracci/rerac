@@ -68,6 +68,10 @@ pub const FRONDS: usize = 7;
 const FROND_ROWS: usize = 12;
 /// The largest plant shrub copied (world radius of the class's bounding sphere on its instance).
 pub const MAX_PLANT_RADIUS: f32 = 1.75;
+/// How far over its origin a plant shrub's bounding sphere may start (world units): a class drawn clear of its origin
+/// (Orxon's green lamp heads, class 28, over the posts beside the ship's pad) does not grow from the ground, and its
+/// copies on the grass float.
+pub const MAX_PLANT_LIFT: f32 = 0.15;
 /// One record (foliage.wgsl `FoliageInst`).
 const RECORD: usize = 96;
 /// The grass's wind: ShrubProc's mode 1 (the halved sway).
@@ -229,15 +233,17 @@ struct PlantPart {
     sampler: bevy::image::ImageSamplerDescriptor,
 }
 
-/// The level's small plant classes: a world radius of at most [`MAX_PLANT_RADIUS`] on every instance, not hidden
-/// (`mode_bits & 1`), with a mesh (billboard F ≠ 0), and swaying (`mode_bits & 6`) or green on average.
+/// The level's small plant classes: a world radius of at most [`MAX_PLANT_RADIUS`] and a bounding sphere reaching
+/// down to within [`MAX_PLANT_LIFT`] of the origin on every instance, not hidden (`mode_bits & 1`), with a mesh
+/// (billboard F ≠ 0), and swaying (`mode_bits & 6`) or green on average.
 fn plant_classes(level: &LoadedLevel) -> Vec<bool> {
     let s = &level.shrubs;
     let mut small = vec![true; s.classes.len()];
     for (ii, inst) in s.instances.iter().enumerate() {
         if let Some(ci) = s.class_of[ii] {
-            let r = rc_formats::shrub_light::instance_centre(&s.classes[ci].class, inst)[3];
-            if !(r > 0.0 && r <= MAX_PLANT_RADIUS) { small[ci] = false; }
+            let c = rc_formats::shrub_light::instance_centre(&s.classes[ci].class, inst);
+            let (r, lift) = (c[3], c[2] - c[3] - inst.matrix[3][2]);
+            if !(r > 0.0 && r <= MAX_PLANT_RADIUS) || lift > MAX_PLANT_LIFT { small[ci] = false; }
         }
     }
     s.classes
@@ -372,7 +378,8 @@ fn follow_option(
 
 /// `RC_FOLIAGE_TRACE=1` (the whole level) or `x,y,r` (the points within r of game x, y): per tfrag texture, its
 /// grass points, the raw texture's mean colour and grass-texel share, the points' mean vertex colour and drawn colour
-/// and their collision surfaces (dev: why a surface grows grass).
+/// and their collision surfaces (dev: why a surface grows grass); with `x,y,r` also the plant copies there and their
+/// sources.
 fn trace(input: &PlanInput, plan: &Plan) {
     let probe: Option<[f32; 3]> = std::env::var("RC_FOLIAGE_TRACE").ok().and_then(|v| {
         let p: Vec<f32> = v.split(',').filter_map(|s| s.trim().parse().ok()).collect();
@@ -380,6 +387,11 @@ fn trace(input: &PlanInput, plan: &Plan) {
     });
     trace_at(input, plan, None);
     if probe.is_some() { trace_at(input, plan, probe); }
+    let Some(p) = probe else { return };
+    for c in plan.copies.iter().filter(|c| (c.pos[0] - p[0]).hypot(c.pos[1] - p[1]) <= p[2]) {
+        let s = &input.plants[c.src];
+        println!("  copy of shrub class {} (instance {} at {:?}) at {:?}", s.class, s.instance, s.origin, c.pos);
+    }
 }
 
 fn trace_at(input: &PlanInput, plan: &Plan, probe: Option<[f32; 3]>) {
