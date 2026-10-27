@@ -97,6 +97,15 @@ Lighting, as it did not touch the Shadows row before it (`GraphicsSettings::with
   blown out; what is left is a warm tint under the knee over the whole view (the foreground 9.6, against 10.9
   uncapped), as the line to the sun crosses sky almost everywhere there. They carry no noise (a fixed radial blur), so no dither: only the faint radial streaks of the
   sun's own texture.
+* Sun shadows from the sky's sun 2026-10-27 (fourth play test, Gemlik marker 7: the shadows ran across the red sun
+  in view): where crate::sky_sun finds a painted sun disc (radius at most 15°, `sun_shadow::MAX_SKY_SUN_RADIUS`:
+  Veldin 6.6°, Gemlik 11.3°), the shadows' light (`sun_shadow::follow`, and so `KeyLight::to_light`) takes its
+  bearing, still raised to 60° (30° under Enhanced, `sun_shadow::min_elevation`); elsewhere the key light as before. The domes' broad glows (Novalis, Kerwan, Eudora,
+  Pokitaru, Kalebo III, 20–30°) are left out: low under the clouds, and on Eudora 140° of bearing from the key light.
+  Gemlik's key light (set 0 light A) comes from bearing 180° (game axes) at 20°, its sky sun from 114.5° at 14°: 65°
+  apart; Veldin's from −65° at 20°, its sunset from 1° at 8°: 66°. Only the port's sun light moves; the game's baked
+  vertex lighting keeps the key light. Checked with `RC_SUN_DEBUG=1` facing Gemlik's sun: the shadows now run toward
+  the camera, away from the sun (before: across the view); Lighting Original byte-identical on Gemlik and Drek's fleet.
 * The Port Options page (fourteen rows) keeps the Camera sub-page's frame and scrolls, four rows at a time (port.rs `VISIBLE`).
 
 ## Light shafts per level

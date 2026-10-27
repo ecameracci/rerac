@@ -1,5 +1,5 @@
-//! **Port-only: the sun the sky paints**, where Lighting Enhanced's rays come from (crate::sun_rays; the sun shadows
-//! keep the key light, crate::sun_shadow).
+//! **Port-only: the sun the sky paints**, where Lighting Enhanced's rays come from (crate::sun_rays) and the bearing of
+//! the sun shadows' light where it exists (crate::sun_shadow).
 //!
 //! At level load [`detect`] draws the level's sky shells (crate::sky_render: shell and face order, each shell kind's
 //! GS colour and blend, every shell at its first tick's SkyM) into a [`W`]×[`H`] latitude–longitude map of linear
@@ -345,9 +345,13 @@ impl Plugin for SkySunPlugin {
             .add_plugins(ExtractResourcePlugin::<SkySun>::default())
             .add_systems(crate::level_switch::LevelStartup, detect)
             .add_systems(crate::level_switch::LevelUnload, crate::level_switch::remove::<LevelSun>)
-            .add_systems(PostUpdate, follow.before(bevy::transform::TransformSystems::Propagate));
+            .add_systems(PostUpdate, follow.in_set(SkySunSet).before(bevy::transform::TransformSystems::Propagate));
     }
 }
+
+/// The `PostUpdate` set that writes [`SkySun`].
+#[derive(SystemSet, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct SkySunSet;
 
 fn log_level() -> u32 { std::env::var("RC_SUN_RAYS_LOG").ok().and_then(|v| v.trim().parse().ok()).unwrap_or(0) }
 
@@ -420,7 +424,8 @@ fn dump(map: &SkyMap, sun: Option<Vec3>, level: u32, dir: &std::path::Path) {
     }
 }
 
-/// [`SkySun`] this frame: the level sun turned with its shell, while the sky camera shows the level sky.
+/// [`SkySun`] this frame: the level sun turned with its shell, while the sky camera shows the level sky
+/// (crate::sun_shadow's light follows it: [`SkySunSet`]).
 fn follow(
     sun: Option<Res<LevelSun>>,
     shells: Query<(&SkyShellEntity, &Transform)>,

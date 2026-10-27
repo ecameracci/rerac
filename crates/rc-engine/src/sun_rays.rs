@@ -12,8 +12,8 @@
 //!    and added to the frame.
 //!
 //! The sun is the sky's ([`SkySun`], crate::sky_sun: found in the shells at level load, turning with its shell),
-//! not the shadows' key light (crate::sun_shadow, raised to 60° and rarely where the sky shows its sun; the shadows
-//! keep it). The rays' strength follows the sun's brightness; they fade as it leaves the screen or nears the horizon
+//! not the level's key light (rarely where the sky shows its sun); the shadows' light (crate::sun_shadow) takes this
+//! sun's bearing, raised to 60°. The rays' strength follows the sun's brightness; they fade as it leaves the screen or nears the horizon
 //! and are skipped while it is behind the camera, and on a sky without a sun. With Lighting Original or Simple nothing
 //! runs, nor under `RC_SHADOWS=0` ([`KeyLight::sun_shadows`] false: no sun at all), nor on the levels and in the
 //! space scenes crate::graphics [`LightShafts`] turns the shafts off (`SHAFT_LEVELS`).

@@ -5,15 +5,18 @@
 //! Standard cascaded shadow mapping:
 //! - **Casters:** a Bevy `DirectionalLight` with shadow maps along the level's key light (light set 0's direction A,
 //!   or B over a dim under-light A: `ShadowGame::sun_light`, fixed for the level; a fixed high sun where there is no
-//!   game), raised on the same bearing to at least [`MIN_ELEVATION`] (60°) under Simple, [`ENHANCED_FLOOR`] (30°)
-//!   under Enhanced ([`min_elevation`]: Enhanced keeps most levels' own elevation, so its shafts slant in under arches;
-//!   the canopies' long shadows are accepted there). Bevy renders its
+//!   game), or, where the sky paints a sun disc (crate::sky_sun `SkySun::to_sun`, at most [`MAX_SKY_SUN_RADIUS`]), from
+//!   that sun, so the shadows fall away from the sun in view (Gemlik: the key light comes from 65° of bearing beside
+//!   it; Veldin's sunset: 66°); either raised on the same bearing to at least [`MIN_ELEVATION`] (60°) under Simple,
+//!   [`ENHANCED_FLOOR`] (30°) under Enhanced ([`min_elevation`]: Enhanced keeps most levels' own elevation, so its
+//!   shafts slant in under arches; the canopies' long shadows are accepted there). Bevy renders its
 //!   cascades from the materials' shadow halves (the shaders' `PREPASS_PIPELINE` branch,
 //!   gs_state::specialize_shadow): tfrags and ties at their full detail whatever the camera's LOD and cull (tfrags
 //!   their LOD-0 list, ties LOD 0 unmorphed and never hidden from Bevy while the sun casts: crate::tie_lod), so the
 //!   world's shadows do not change with the view; shrubs (cut out by their texture's alpha) and mobys as drawn. The
 //!   metal pass and every blended or effect draw cast nothing. Under Enhanced, crate::sun_rays draws rays from the sky's own
-//!   sun (crate::sky_sun), not from this light, and crate::volumetric_light its shafts through these cascades.
+//!   sun (crate::sky_sun), the bearing this light takes there, and crate::volumetric_light its shafts through these
+//!   cascades.
 //! - **Receiver:** the port's shaders compute no Bevy lighting, so after the opaque world a full-screen pass
 //!   (`assets/shaders/sun_shadow.wgsl`) rebuilds each pixel's world position and normal from the depth buffer,
 //!   looks it up in its cascade (normal-offset bias, 3×3 PCF on a comparison sampler) and multiplies the frame by
@@ -64,6 +67,10 @@ const MIN_ELEVATION: f32 = 60.0 * std::f32::consts::PI / 180.0;
 /// The sun's lowest elevation under Lighting Enhanced (radians; `RC_SUN_FLOOR=<degrees>`): the key light's own
 /// elevation down to this, so crate::volumetric_light's shafts slant in under arches and into tunnels.
 pub const ENHANCED_FLOOR: f32 = 30.0 * std::f32::consts::PI / 180.0;
+/// The widest sky sun (crate::sky_sun `SkySun::radius`, radians) whose bearing the light takes: a painted disc
+/// (Veldin 6.6°, Gemlik 11.3°), not a dome's broad glow (Novalis, Eudora, Kerwan, Pokitaru, Kalebo III: 20–30°),
+/// which sits low under the clouds and on Eudora 140° of bearing from the key light the level is shaded by.
+const MAX_SKY_SUN_RADIUS: f32 = 15.0 * std::f32::consts::PI / 180.0;
 /// The light where no game runs (the title world, `RC_PLAY=0`): high, from behind the default camera's left.
 const DEFAULT_DIR: Vec3 = Vec3::new(0.35, -0.85, 0.4);
 
@@ -77,7 +84,8 @@ pub fn casts(renderer: &str) -> bool {
 #[derive(Component)]
 struct Sun;
 
-/// Toward the key light (world, unit; crate::sun_rays reads it too), every frame whatever the options.
+/// Toward the key light or the sky's sun, as [`follow`] picks it (world, unit; crate::sun_rays reads it too), every
+/// frame whatever the options.
 #[derive(Resource, Clone, Copy, ExtractResource)]
 pub struct KeyLight {
     pub to_light: Vec3,
@@ -99,7 +107,7 @@ impl Plugin for SunShadowPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<KeyLight>()
             .add_plugins(ExtractResourcePlugin::<KeyLight>::default())
-            .add_systems(PostUpdate, follow.before(bevy::transform::TransformSystems::Propagate));
+            .add_systems(PostUpdate, follow.after(crate::sky_sun::SkySunSet).before(bevy::transform::TransformSystems::Propagate));
         let Some(render_app) = app.get_sub_app_mut(RenderApp) else { return };
         render_app.add_systems(RenderStartup, init_pipelines).add_systems(
             Core3d,
@@ -138,17 +146,18 @@ fn raised(dir: Vec3, min: f32) -> Vec3 {
     Vec3::new(f.x, -s, f.y)
 }
 
-/// The key light, and the sun along it while it casts shadows.
+/// The key light (the sky's sun where it paints one), and the sun along it while it casts shadows.
 fn follow(
     mut commands: Commands,
     (settings, gfx): (Res<ShadowSettings>, Res<crate::graphics::GraphicsSettings>),
-    game: Option<Res<ShadowGame>>,
-    play: Option<Res<Play>>,
+    (game, play): (Option<Res<ShadowGame>>, Option<Res<Play>>),
+    sky: Option<Res<crate::sky_sun::SkySun>>,
     mut key: ResMut<KeyLight>,
     mut suns: Query<(Entity, &mut Transform), With<Sun>>,
     mut logged: Local<Option<(Vec3, Lighting)>>,
 ) {
-    let key_dir = game.filter(|_| play.is_some()).and_then(|g| g.sun_light()).unwrap_or(DEFAULT_DIR.normalize());
+    let mut key_dir = game.filter(|_| play.is_some()).and_then(|g| g.sun_light()).unwrap_or(DEFAULT_DIR.normalize());
+    if let Some(to_sun) = sky.filter(|s| s.radius <= MAX_SKY_SUN_RADIUS).and_then(|s| s.to_sun) { key_dir = -to_sun; }
     let mut dir = raised(key_dir, min_elevation(gfx.lighting, env_floor()));
     if gfx.lighting.sun_shadows() && *logged != Some((key_dir, gfx.lighting)) {
         *logged = Some((key_dir, gfx.lighting));
