@@ -39,7 +39,7 @@ module that reads it: `grep -rn '"RC_' crates/` lists them all.
 | `RC_LANDING` | `1`: the boot's level enters as after a level change (`entry`: the music pause / unpause and `ShipLandingStart`'s landing scene); default: the level's start in mode 0 (or `RC_HERO_AT`) |
 | `RC_FRONTEND` | The front end (the card check, the logos, the title world, PRESS START, the main menu) is the default start. `0`: skip it and start in the level; `1`: keep it even with `RC_LEVEL` |
 | `RC_UNPORTED` | `1`: every 600 ticks, print the calls the moby loop met without a port so far (`Services::unported`, by name and count) |
-| `RC_LANG` | The start language slot (0 English, 2 French, 3 German, 4 Spanish, 5 Italian), over the saved choice. Without it: the Language choice saved in the settings file (`language = <slot>`), else English |
+| `RC_LANG` | The start language slot (0 English, 2 French, 3 German, 4 Spanish, 5 Italian), over the saved choice. Without it: the Language choice saved in the settings file (`language = <slot>`), else the computer's display language (English when it is none of the five, or in frame-exact runs) |
 | `RC_SKIP_LOGOS` | `1`: in the front end, skip the publisher logos movie and go straight to the title |
 | `RC_SAVE_DIR` | the memory-card folder (`0` or empty: no card); default `<config>/rerac/memcard`. `RC_SAVE_TRACE=1` logs every card state change |
 | `RC_CAM` | Starting camera `ex,ey,ez,tx,ty,tz` (eye and target, game units) |
