@@ -625,6 +625,8 @@ sub-pages (`crates/rc-game/src/menus/pause/port.rs`, `PageMenu::install_port_pag
   Health (green to red with Ratchet's health over `max_hp`) → `haptics::ControllerSettings::lightbar` (key
   `lightbar`), sent by `dualsense` with valid flag 1 0x04 and, once, the lightbar setup that ends the pad's own
   animation. Pads are read, and rumble and R2's effect sent, only while the game's window has the focus.
+* **Fire button R2 and the hoverboard**: on the hoverboard (hero movement group `hoverboard::GROUP`, 0x16) R2 stays R2,
+  the board's fourth trick, and has no weapon feel (`haptics::R2Raw`, `input_map::PadDevice::fire_button`).
 * **Device support**: the row offers only the sample counts the GPU can use for every multisampled world attachment
   (`render_settings::SupportedMsaa`, detected at start from `RenderAdapter::get_texture_format_features` for
   `Rgba8UnormSrgb` and `Depth32Float` — the WebGPU guarantee {1, 4} when the device lacks
