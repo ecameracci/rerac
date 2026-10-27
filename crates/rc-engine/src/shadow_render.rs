@@ -103,20 +103,32 @@ pub struct ShadowGame {
     /// The game tick the state was last updated for.
     counter: Option<u64>,
     dir_a: Vec<[f32; 4]>,
+    /// Light set 0 (zero without one).
+    set0: rc_formats::tfrag_light::DirLightSet,
     blocks: HashMap<i16, Arc<ShadowBlock>>,
     /// o_class → index into `LevelMobys::classes` / `anim`.
     class_index: HashMap<i16, usize>,
 }
 
 impl ShadowGame {
-    /// The direction the level's key light travels (light set 0's light A: light word 0, Ratchet's light where no fog
-    /// zone cross-fades it), in Bevy axes and normalised; None when the set has no direction. The sun of
+    /// The direction the level's key light travels (light set 0, light word 0: Ratchet's light where no fog zone
+    /// cross-fades it), in Bevy axes and normalised; None when the set has no direction. The sun of
     /// crate::sun_shadow and crate::sun_rays: one per level, not Ratchet's own light, which the fog zones swing
     /// between sets (Novalis: 68° to 106° of bearing across a cave mouth) and so would turn every shadow with him.
+    /// Of the set's two lights, [`key_light`]'s pick.
     pub fn sun_light(&self) -> Option<Vec3> {
-        let d = game_to_bevy(shadows::light_dir(&self.dir_a, 0));
+        let d = game_to_bevy(key_light(&self.set0));
         (d.length_squared() > 1e-6).then(|| d.normalize())
     }
+}
+
+/// A light set's key light (game axes, its travel direction): light A, or light B where A lights from below and B,
+/// from above, is the brighter (of the 19 levels' set 0, only Drek's fleet: A a dim blue under-light, B the sun from
+/// 28.6° up). A raised to the sun's elevation (crate::sun_shadow) would cast toward B, against its shading.
+pub fn key_light(set: &rc_formats::tfrag_light::DirLightSet) -> [f32; 3] {
+    let luma = |c: [f32; 4]| 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+    let (a, b) = ([set.dir_a[0], set.dir_a[1], set.dir_a[2]], [set.dir_b[0], set.dir_b[1], set.dir_b[2]]);
+    if a[2] > 0.0 && b[2] < 0.0 && luma(set.color_b) > luma(set.color_a) { b } else { a }
 }
 
 /// The frame's shadow volumes: triangles (3 points each) in Bevy world axes.
@@ -165,8 +177,10 @@ impl Plugin for ShadowPlugin {
 fn setup(mut commands: Commands, level: Res<crate::Level>) {
     let lv = &level.0;
     let (root, index) = (crate::level_load::extracted_root(), crate::level_load::level_index());
+    let bank = rc_formats::tfrag_light::parse_light_bank(&lv.gameplay).ok();
     let mut game = ShadowGame {
-        dir_a: rc_formats::tfrag_light::parse_light_bank(&lv.gameplay).map(|b| b.sets.iter().map(|s| s.dir_a).collect()).unwrap_or_default(),
+        dir_a: bank.as_ref().map(|b| b.sets.iter().map(|s| s.dir_a).collect()).unwrap_or_default(),
+        set0: bank.as_ref().map(|b| b.sets[0]).unwrap_or_default(),
         class_index: lv.mobys.classes.iter().enumerate().map(|(i, c)| (c.o_class as i16, i)).collect(),
         ..Default::default()
     };
@@ -587,6 +601,19 @@ mod tests {
         }
         assert_eq!((worst, over2), (3, 12));
         assert_eq!(255 + ((-255 * 0x20) >> 7), 191, "white → 191");
+    }
+
+    #[test]
+    fn key_light_is_b_only_over_a_dim_under_light() {
+        let set = |ca: f32, za: f32, cb: f32, zb: f32| rc_formats::tfrag_light::DirLightSet {
+            color_a: [ca; 4],
+            dir_a: [0.5, 0.0, za, 0.0],
+            color_b: [cb; 4],
+            dir_b: [-0.5, 0.0, zb, 0.0],
+        };
+        assert_eq!(key_light(&set(0.4, 0.87, 0.8, -0.48)), [-0.5, 0.0, -0.48], "Drek's fleet: A from below, B brighter");
+        assert_eq!(key_light(&set(0.9, 0.87, 0.3, -0.48)), [0.5, 0.0, 0.87], "A brighter: kept");
+        assert_eq!(key_light(&set(0.4, -0.5, 0.8, -0.48)), [0.5, 0.0, -0.5], "A from above: kept");
     }
 
     #[test]

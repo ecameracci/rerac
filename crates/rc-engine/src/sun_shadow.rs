@@ -3,8 +3,8 @@
 //! key light, in place of the game's shadow volumes under mobys.
 //!
 //! Standard cascaded shadow mapping:
-//! - **Casters:** a Bevy `DirectionalLight` with shadow maps along the level's key light (light set 0's direction A:
-//!   `ShadowGame::sun_light`, fixed for the level; a fixed high sun where there is no game), raised to at least
+//! - **Casters:** a Bevy `DirectionalLight` with shadow maps along the level's key light (light set 0's direction A,
+//!   or B over a dim under-light A: `ShadowGame::sun_light`, fixed for the level; a fixed high sun where there is no game), raised to at least
 //!   [`MIN_ELEVATION`] on the same bearing. Bevy renders its
 //!   cascades from the materials' shadow halves (the shaders' `PREPASS_PIPELINE` branch,
 //!   gs_state::specialize_shadow): tfrags and ties at their full detail whatever the camera's LOD and cull (tfrags
