@@ -5,7 +5,7 @@
 
 #import bevy_pbr::view_transformations::{position_world_to_clip, position_world_to_view}
 #import bevy_pbr::mesh_view_bindings::{view, globals}
-#import rerac::liquid_look::{liquid_look, srgb_to_linear}
+#import rerac::liquid_look::{liquid_look, liquid_frame, srgb_to_linear}
 
 struct LiquidFog {
     color: vec4<f32>,
@@ -15,7 +15,7 @@ struct LiquidFog {
 struct LiquidParams {
     // x = kind.
     misc: vec4<f32>,
-    // xy = the second layer's ST drift per second, z = its ST offset.
+    // xy = the second layer's ST drift per second, z = its ST offset, w = the first layer's ST speed (t per second).
     flow: vec4<f32>,
     // xyz = toward the key light (world).
     sun: vec4<f32>,
@@ -60,6 +60,7 @@ fn modulate(t: vec4<f32>, c: vec3<f32>) -> vec3<f32> {
 
 @fragment
 fn fragment(in: LiquidVertexOutput) -> @location(0) vec4<f32> {
+    let frame = liquid_frame(in.world, in.uv, vec2<f32>(0.0, params.flow.w));
     let rgb = modulate(textureSample(tex, tex_sampler, in.uv), in.color.rgb);
     // Four taps around for the mud's low-contrast colour.
     let d = 0.37;
@@ -68,7 +69,7 @@ fn fragment(in: LiquidVertexOutput) -> @location(0) vec4<f32> {
         + modulate(textureSample(tex, tex_sampler, in.uv + vec2<f32>(0.0, -d)), in.color.rgb) + rgb) * 0.25;
     let to_eye = normalize(view.world_position - in.world);
     let sky = srgb_to_linear(mix(fog.color.rgb, vec3<f32>(1.0), 0.25));
-    var col = liquid_look(u32(params.misc.x + 0.5), rgb, soft, in.uv, in.world, vec2<f32>(0.0), params.flow, normalize(params.sun.xyz), sky, to_eye, globals.time);
+    var col = liquid_look(u32(params.misc.x + 0.5), rgb, soft, in.uv, in.world, vec2<f32>(0.0), params.flow, normalize(params.sun.xyz), sky, to_eye, globals.time, frame);
     if (fog.color.w > 0.5) {
         col = mix(srgb_to_linear(fog.color.rgb), col, in.fog);
     }

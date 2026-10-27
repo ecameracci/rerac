@@ -121,15 +121,24 @@ pub fn flow_velocity(st: &rc_game::water::sea::MeshSt) -> Vec2 {
     }
 }
 
-/// The second noise layer's drift against the first (`params.flow`: xy per second, zw the offset): a second flow pass
-/// against the first, else a slow drift of its own (a grid's ST does not scroll: its image animates instead).
+/// The second noise layer's drift against the first (`params.flow`: xy per second, z the offset): a second flow pass
+/// against the first, else a slow drift of its own (a grid's ST does not scroll: its image animates instead); w = the
+/// first layer's own ST speed ([`flow_velocity`]'s t; `liquid_look.wgsl` `liquid_frame` carries lava's fine detail
+/// with it).
 pub fn layer_flow(first: Option<&rc_game::water::sea::MeshSt>, second: Option<&rc_game::water::sea::MeshSt>) -> Vec4 {
     use rc_game::water::sea::MeshSt;
+    let own = first.map_or(0.0, |a| flow_velocity(a).y);
     match (first, second) {
-        (Some(a @ MeshSt::Flow { add: a0, .. }), Some(b @ MeshSt::Flow { add: a1, .. })) => (flow_velocity(b) - flow_velocity(a)).extend(a1 - a0).extend(0.0),
-        _ => DRIFT,
+        (Some(a @ MeshSt::Flow { add: a0, .. }), Some(b @ MeshSt::Flow { add: a1, .. })) => (flow_velocity(b) - flow_velocity(a)).extend(a1 - a0).extend(own),
+        _ => DRIFT.with_w(own),
     }
 }
+
+/// Lava's fine detail (`liquid_look.wgsl` LAVA_FINE): its cracks' cells per world unit, the period of its two flow
+/// phases (seconds), the grain's frequency over the cracks', the fastest flow it follows (world units per second).
+/// The shader holds it; this copy is the tests' check of it.
+#[cfg(test)]
+const LAVA_FINE: Vec4 = Vec4::new(0.85, 3.0, 3.7, 6.0);
 
 /// [`layer_flow`] without a second pass: ST per second and offset.
 pub const DRIFT: Vec4 = Vec4::new(0.011, -0.017, 0.5, 0.0);
@@ -363,7 +372,20 @@ mod tests {
         // The second pass against the first: one more k, half a tile apart.
         let f = layer_flow(Some(&a), Some(&b));
         assert!((f.y - flow_velocity(&a).y).abs() < 1e-7 && f.x == 0.0 && f.z == 0.5);
-        assert_eq!(layer_flow(Some(&a), None), DRIFT);
+        // w: the first layer's own speed (the fine detail rides it); a still grid has none.
+        assert_eq!(f.w, flow_velocity(&a).y);
+        assert_eq!(layer_flow(Some(&a), None), DRIFT.with_w(flow_velocity(&a).y));
         assert_eq!(layer_flow(None, None), DRIFT);
+        assert_eq!(layer_flow(Some(&MeshSt::Stored { scale: 1.0 }), None), DRIFT);
+    }
+
+    #[test]
+    fn the_shaders_keep_the_fine_lava_constants() {
+        let look = include_str!("../assets/shaders/liquid_look.wgsl");
+        let v = LAVA_FINE;
+        let line = format!("const LAVA_FINE: vec4<f32> = vec4<f32>({:?}, {:?}, {:?}, {:?});", v.x, v.y, v.z, v.w);
+        assert!(look.contains(&line), "{line}");
+        // The fine detail's frequency stays under the noise's own cells at the far fade (two pixels).
+        assert!(LAVA_FINE.x > 0.3 && LAVA_FINE.x < 2.0 && LAVA_FINE.y > 1.0);
     }
 }

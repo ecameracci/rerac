@@ -47,7 +47,7 @@
 
 #import bevy_pbr::view_transformations::{position_world_to_clip, position_world_to_view, depth_ndc_to_view_z, position_ndc_to_view, frag_coord_to_ndc, ndc_to_frag_coord}
 #import bevy_pbr::mesh_view_bindings::{view, globals}
-#import rerac::liquid_look::{liquid_look, DRIFT}
+#import rerac::liquid_look::{liquid_look, still_frame, DRIFT}
 
 struct WaterFog {
     color: vec4<f32>,
@@ -479,7 +479,7 @@ fn fragment(in: WaterVertexOutput) -> @location(0) vec4<f32> {
     if (look.misc.x > 1.5) {
         let lp = (view.world_from_view * vec4<f32>(position_ndc_to_view(frag_coord_to_ndc(in.position)), 1.0)).xyz;
         let sky = srgb_to_linear(mix(fog.color.rgb, vec3<f32>(1.0), 0.25));
-        var lc = liquid_look(u32(look.misc.y + 0.5), raw, raw, in.uv, lp, in.ripple_grad, DRIFT, normalize(look.sun.xyz), sky, normalize(view.world_position - lp), globals.time);
+        var lc = liquid_look(u32(look.misc.y + 0.5), raw, raw, in.uv, lp, in.ripple_grad, DRIFT, normalize(look.sun.xyz), sky, normalize(view.world_position - lp), globals.time, still_frame());
         if (fog.color.w > 0.5) { lc = mix(srgb_to_linear(fog.color.rgb), lc, in.fog); }
         return vec4<f32>(lc, 1.0);
     }
