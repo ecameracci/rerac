@@ -8,14 +8,18 @@
 //! crate::fx_view):
 //! 1. **The in-water part of the view ray** ([`water_segment`]): from the eye to the scene, cut at the water plane
 //!    ([`UnderwaterView::surface`]); a camera at the surface gets the waterline split from the plane itself.
-//! 2. **Light from above** ([`transmittance`] of the pixel's depth below the plane with [`LIGHT_SIGMA`]).
+//! 2. **Light from above** ([`transmittance`] of the pixel's depth below the plane with [`LIGHT_SIGMA`]); what a deep
+//!    floor loses is filled by half the water's colour, so the floor fades toward it rather than to black.
 //! 3. **Caustics** on the surfaces below the plane: two warped noise layers, sampled where the sun's direction bent
 //!    into the water ([`refract_down`]) meets the plane, faded by depth, by facing, and where a layer's cells shrink
 //!    below a pixel (no aliasing in the distance).
 //! 4. **Light shafts:** [`SHAFT_TAPS`] taps along the in-water ray, each lit by a coarse layer of the same pattern
 //!    projected up to the plane along the sun, so the shafts slant with the sun and drift with the caustics.
 //! 5. **Absorption and in-scatter** along the in-water part ([`transmittance`] with [`ABSORB_SIGMA`]: red goes
-//!    first) toward the water's colour, the alternate fog colour the game uses (`UnderwaterLook::fog`, 0x161204).
+//!    first) toward the water's colour, the alternate fog colour the game uses (`UnderwaterLook::fog`, 0x161204). The
+//!    in-scatter is lit at the depth of the ray's first 30 units (the shader's `SCATTER_REACH`), so far shelves and the
+//!    open sea (no geometry, depth 0) end on the same lit colour, not on the dark of the ray's far end; a ray looking
+//!    down is dimmed smoothly by its slope (up to 30 %), so a trench still reads deeper.
 //! 6. **A wobble** of the whole picture (a few pixels' sine offset of the read).
 //!
 //! **The water's colour.** Every level's water managers leave the Novalis overlay's navy in 0x161200.. (the alternate

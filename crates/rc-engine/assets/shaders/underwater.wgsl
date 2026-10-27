@@ -30,6 +30,12 @@ struct Underwater {
 // The sky's distance (depth 0) and the furthest a shaft tap goes (world units).
 const FAR: f32 = 1000.0;
 const SHAFT_RANGE: f32 = 28.0;
+// crate::underwater_render: the in-scatter's reach along the ray (world units), its light at depth (share of the
+// surface's), the water's light that fills in for what a deep floor loses, the in-scatter's dimming looking straight down.
+const SCATTER_REACH: f32 = 30.0;
+const LIT_FLOOR: f32 = 0.4;
+const FLOOR_FILL: f32 = 0.5;
+const DOWN_DIM: f32 = 0.3;
 
 fn depth_at(p: vec2<i32>) -> f32 {
     let lo = vec2<i32>(view.viewport.xy);
@@ -144,10 +150,11 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     var nrm = vec3<f32>(0.0);
     if (d > 0.0 && wp.y < h) {
         let depth_below = h - wp.y;
-        col *= mix(vec3<f32>(1.0), transmittance(uw.light.xyz, depth_below), k);
+        // The light lost on the way down gives way to the water's own light (half its colour), not to black.
+        let down = transmittance(uw.light.xyz, depth_below);
+        col = mix(col, col * down + uw.water.rgb * FLOOR_FILL * (vec3<f32>(1.0) - down), k);
         let n_view = fx_normal(c, pos_at(px - vec2<i32>(1, 0)), pos_at(px + vec2<i32>(1, 0)), pos_at(px - vec2<i32>(0, 1)), pos_at(px + vec2<i32>(0, 1)));
         let n = normalize((view.world_from_view * vec4<f32>(n_view, 0.0)).xyz);
-        nrm = n;
         nrm = n;
         // Walls get none: a pattern projected along the sun streaks down them.
         let facing = smoothstep(0.35, 0.8, dot(n, uw.sun.xyz));
@@ -160,9 +167,13 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     }
 
     // Absorption and in-scatter along the in-water part, toward the water's colour, darker the deeper the ray is (the
-    // game's fog has already taken the picture toward that colour: this mostly shifts the hue and adds depth).
-    let mid_y = eye.y + dir.y * 0.5 * (seg.x + seg.y);
-    let lit = transmittance(uw.light.xyz, h - min(mid_y, h)) * 0.8 + 0.1;
+    // game's fog has already taken the picture toward that colour: this mostly shifts the hue and adds depth). The
+    // in-scatter comes from the ray's first SCATTER_REACH units (the absorption hides the rest), so it is lit as deep as
+    // their middle: a far shelf and a ray that meets nothing (the open sea, the scene's clear colour) end on the same
+    // colour instead of the dark of a point hundreds of units down.
+    let mid_y = eye.y + dir.y * (seg.x + 0.5 * min(len, SCATTER_REACH));
+    // Looking down reads deeper: a smooth dimming by the ray's slope, the same for a far floor and the open sea.
+    let lit = (transmittance(uw.light.xyz, h - min(mid_y, h)) * (0.9 - LIT_FLOOR) + LIT_FLOOR) * (1.0 - DOWN_DIM * smoothstep(0.0, 0.8, -dir.y));
     let tr = transmittance(uw.absorb.xyz, len);
     let fogged = col * tr + uw.water.rgb * lit * (vec3<f32>(1.0) - tr);
     col = mix(col, fogged, k);
@@ -193,7 +204,6 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     if (dbg == 1u) { return vec4<f32>(vec3<f32>(len / 32.0), src.a); }
     if (dbg == 2u) { return vec4<f32>(vec3<f32>(caust), src.a); }
     if (dbg == 3u) { return vec4<f32>(vec3<f32>(shafts * 4.0), src.a); }
-    if (dbg == 4u) { return vec4<f32>(nrm * 0.5 + 0.5, src.a); }
     if (dbg == 4u) { return vec4<f32>(nrm * 0.5 + 0.5, src.a); }
     return vec4<f32>(col, src.a);
 }
