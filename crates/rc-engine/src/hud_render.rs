@@ -279,13 +279,13 @@ pub struct LevelHud {
     pub lang: u32,
 }
 
-/// 0x15ed88, the game's language: `RC_LANG` (default English) until the front end's Language list changes it
-/// ([`set_language`]); every later load (the level's text, the help voice bank, the movies' and scenes' language, the
-/// space plates) reads it.
+/// 0x15ed88, the game's language: `RC_LANG`, else the one last chosen ([`saved_language`]; default English), until
+/// the front end's Language list changes it ([`set_language`]); every later load (the level's text, the help voice
+/// bank, the movies' and scenes' language, the space plates) reads it.
 pub fn language() -> u32 {
     let v = LANGUAGE.load(std::sync::atomic::Ordering::Relaxed);
     if v != u32::MAX { return v; }
-    std::env::var("RC_LANG").ok().and_then(|v| v.trim().parse().ok()).unwrap_or(rc_formats::strings::lang::ENGLISH)
+    std::env::var("RC_LANG").ok().and_then(|v| v.trim().parse().ok()).or_else(saved_language).unwrap_or(rc_formats::strings::lang::ENGLISH)
 }
 
 /// The runtime language (u32::MAX: not set, `RC_LANG` applies).
@@ -293,6 +293,33 @@ static LANGUAGE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::ne
 
 /// 0x15ed88 = `lang` (`MenuSetPostAction` action 9).
 pub fn set_language(lang: u32) { LANGUAGE.store(lang, std::sync::atomic::Ordering::Relaxed); }
+
+/// Port-only: the PS2 keeps the Language choice for the session only; the port keeps it in the port settings file
+/// (`language = <slot>`, crate::render_settings::load_key) so the next start is in that language. A slot the disc has
+/// no text for (1, 6, 7) is ignored.
+const LANGUAGE_KEY: &str = "language";
+
+/// The saved language (read once).
+fn saved_language() -> Option<u32> {
+    static SAVED: std::sync::OnceLock<Option<u32>> = std::sync::OnceLock::new();
+    *SAVED.get_or_init(|| {
+        let v = crate::render_settings::load_key(LANGUAGE_KEY)?;
+        let l = v.trim().parse().ok().filter(|l| known_language(*l));
+        if l.is_none() { eprintln!("hud: settings file: language = {v} is not one of the disc's languages; English"); }
+        l
+    })
+}
+
+/// The slots `rc_formats::strings::lang` names (the disc's English, French, German, Spanish and Italian text).
+fn known_language(l: u32) -> bool {
+    use rc_formats::strings::lang::*;
+    [ENGLISH, FRENCH, GERMAN, SPANISH, ITALIAN].contains(&l)
+}
+
+/// Saves the player's Language choice for the next start ([`LANGUAGE_KEY`]).
+pub fn save_language(lang: u32) {
+    if known_language(lang) { crate::render_settings::save_key(LANGUAGE_KEY, &lang.to_string()); }
+}
 
 /// Reads `hud_header`, the banks, the overlay's glyph tables, the FX textures and the level text.
 pub fn load(root: &Path, index: u32, core: &rc_formats::level::LevelCore, core_index: &[u8], core_data: &[u8], gameplay: &[u8]) -> Result<LevelHud> {
