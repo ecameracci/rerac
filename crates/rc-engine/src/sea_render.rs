@@ -390,7 +390,9 @@ pub struct SeaRenderPlugin;
 impl Plugin for SeaRenderPlugin {
     fn build(&self, app: &mut App) {
         if !enabled() { return; }
-        app.init_resource::<SeaDraw>().add_systems(crate::level_switch::LevelUnload, crate::level_switch::reset::<SeaDraw>).add_systems(PostUpdate, draw.before(bevy::asset::AssetEventSystems));
+        app.init_resource::<SeaDraw>()
+            .add_systems(crate::level_switch::LevelUnload, (crate::level_switch::reset::<SeaDraw>, crate::level_switch::reset::<crate::volumetric_light::SeaLevel>))
+            .add_systems(PostUpdate, draw.before(bevy::asset::AssetEventSystems));
     }
 }
 
@@ -434,6 +436,7 @@ fn draw(
     mut materials: ResMut<Assets<FxPrimMaterial>>,
     mut vis: Query<&mut Visibility>,
     particles: Option<Res<crate::particle_render::ParticleSim>>,
+    mut sea_level: ResMut<crate::volumetric_light::SeaLevel>,
 ) {
     let st = state.into_inner();
     let Some(p) = play.as_deref() else { return };
@@ -452,6 +455,15 @@ fn draw(
     let view = crate::particle_render::bsphere_view(cam_t, particles.map_or_else(|| crate::particle_render::view_tans(None), |s| s.view_tan));
     let all_visible = crate::visibomb_view::all_visible(Some(p));
     let registered = cbs.ties.iter().map(|e| (true, e)).chain(cbs.list1.iter().map(|e| (false, e)));
+    // The ocean's surface, where the volumetric light's rays stop (crate::volumetric_light::SeaLevel; Bevy y = game z).
+    let ocean = cbs.ties.iter().chain(&cbs.list1).find_map(|&(cb, _)| match cb {
+        Callback::Sea(port) if matches!(gs::PORTS[port as usize].kind, SeaKind::Ocean) => water.sea.run.get(port as usize).map(|r| r.sea_z),
+        _ => None,
+    });
+    if sea_level.0 != ocean {
+        if sea_level.0.is_some() != ocean.is_some() { println!("sea: ocean surface {ocean:?} (crate::volumetric_light::SeaLevel)"); }
+        sea_level.0 = ocean;
+    }
     let mut groups: Vec<Group> = Vec::new();
     // The animated images of this tick, made once each.
     let mut made: Vec<GridAnim> = Vec::new();

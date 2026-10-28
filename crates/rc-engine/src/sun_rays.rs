@@ -49,9 +49,13 @@ impl Plugin for SunRaysPlugin {
         render_app
             .add_systems(RenderStartup, init_pipelines)
             .add_systems(Render, prepare.in_set(RenderSystems::PrepareResources))
-            .add_systems(Core3d, rays_pass.in_set(Core3dSystems::PostProcess));
+            .add_systems(Core3d, rays_pass.in_set(Core3dSystems::PostProcess).in_set(SunRaysSet));
     }
 }
+
+/// The render-world set of the rays pass (crate::volumetric_light runs before it).
+#[derive(SystemSet, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct SunRaysSet;
 
 #[derive(Resource)]
 struct RaysPipelines {
