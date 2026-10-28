@@ -54,13 +54,18 @@
 //! **Water Enhanced** (port-only, crate::graphics): the surface groups of the liquid ports (the opaque ones and a grid's
 //! own translucent draw, crate::sea_water::surface_fix) whose image × vertex colours is clear water ([`judged_rgb`],
 //! [`grid_tint`]; the log names each verdict), seen from above, go to crate::sea_water (drawn after the scene copy by
-//! `water.wgsl`'s Enhanced path, Z written) instead of the opaque or display-blend pass; seen from above, the ocean's
-//! band and layers give way to crate::ocean_water's surface (its wall stays); the other effect groups, the other ports
-//! and every group with the option Original are drawn as above.
+//! `water.wgsl`'s Enhanced path, Z written) instead of the opaque or display-blend pass; those whose colour is lava,
+//! mud or sludge (crate::liquid_render::verdict) go to crate::liquid_render, from either side, with the later passes of
+//! their mesh set (Gaspar's two-pass lava flows); the Hoven liquid's opaque groups go there as ice and its additive pass
+//! (the white streaks) stays its own draw, every scroll slowed (crate::liquid_render `hoven_scroll`); a translucent
+//! grid (Oltanis's 1260) is a fog layer and stays Original (crate::liquid_render `layer_verdict`); seen from above, the
+//! ocean's band and layers give way to crate::ocean_water's surface (its wall stays); the other effect groups, the
+//! other ports, the other kinds and every group with the option Original are drawn as above.
 
 use crate::display_blend::DisplayEffect;
 use crate::fx_draw::{FxPrimMaterial, FxPrimParams, PrimBuf, LIST1_BIAS};
 use crate::game_camera::{game_eye, GameFog, LevelFog, TfragFog};
+use crate::liquid_render::LiquidKind;
 use bevy::asset::RenderAssetUsages;
 use bevy::camera::visibility::NoFrustumCulling;
 use bevy::image::{ImageAddressMode, ImageFilterMode, ImageSampler, ImageSamplerDescriptor};
@@ -357,9 +362,11 @@ fn strip_prims(strips: &[rc_formats::sea::StripMesh], scroll: [f32; 2], alpha: O
 /// (`(Cs − Cd)·1 + Cd = Cs`, Z written) as an opaque world surface, a lower FIX as a display-blend effect with
 /// `As = FIX` (the texture's alpha forced to 0x80, the vertex alpha = FIX) on top of it (Z test GEQUAL: the same
 /// strip passes). `grid` = the port's grid image, FIX and fog for a [`gs::MeshTex::Grid`] pass; `anim` makes an
-/// animated image for this tick (false: its frames are missing, the pass is skipped).
+/// animated image for this tick (false: its frames are missing, the pass is skipped). `passes` gets (group, the set's
+/// first group, the pass's ST rule) per group (crate::liquid_render takes a set's passes together).
 #[allow(clippy::too_many_arguments)]
-fn mesh_set_groups(groups: &mut Vec<Group>, set: &gs::MeshSet, counter: u64, cam: [f32; 3], view: &rc_game::particles::BSphereView, bias: f32, level_fog: TfragFog, grid: Option<(GridAnim, u8, TfragFog)>, scroll: [f32; 2], anim: &mut dyn FnMut(GridAnim) -> bool) {
+fn mesh_set_groups(groups: &mut Vec<Group>, passes: &mut Vec<(usize, usize, gs::MeshSt)>, set: &gs::MeshSet, counter: u64, cam: [f32; 3], view: &rc_game::particles::BSphereView, bias: f32, level_fog: TfragFog, grid: Option<(GridAnim, u8, TfragFog)>, scroll: [f32; 2], anim: &mut dyn FnMut(GridAnim) -> bool) {
+    let first = groups.len();
     for (j, pass) in set.passes.iter().enumerate() {
         let (tex, fix, fog) = match pass.tex {
             gs::MeshTex::Fx(n) => (Tex::Fx(n as usize, pass.fix < 0x80), pass.fix, level_fog),
@@ -374,6 +381,7 @@ fn mesh_set_groups(groups: &mut Vec<Group>, set: &gs::MeshSet, counter: u64, cam
         };
         let opaque = fix >= 0x80 || (matches!(pass.tex, gs::MeshTex::Grid) && fix >= 0x61);
         let prims = mesh_prims(set, pass, counter, cam, Some(view), if opaque { 0x80 } else { fix }, scroll);
+        passes.push((groups.len(), first, pass.st));
         groups.push(Group { tex, effect: (!opaque).then_some(Blend::Mix), fog, bias: bias + j as f32 * 0.25, prims });
     }
 }
@@ -390,8 +398,8 @@ struct SeaDraw {
     anim_images: HashMap<GridAnim, Handle<Image>>,
     drawn: Option<u64>,
     pixels: Vec<u8>,
-    /// [`clear_tex`] by texture and tint.
-    clear: HashMap<(Tex, [u32; 3], u8), bool>,
+    /// [`tex_kind`] by texture, tint and FIX.
+    kinds: HashMap<(Tex, [u32; 3], u8), LiquidKind>,
     /// [`grid_tint`] by port.
     tints: HashMap<usize, [f32; 3]>,
 }
@@ -402,10 +410,11 @@ impl Plugin for SeaRenderPlugin {
     fn build(&self, app: &mut App) {
         if !enabled() { return; }
         crate::sea_water::build(app);
+        crate::liquid_render::build(app);
         crate::ocean_water::build(app);
         app.init_resource::<SeaDraw>()
             .add_systems(crate::level_switch::LevelUnload, (crate::level_switch::reset::<SeaDraw>, crate::level_switch::reset::<crate::volumetric_light::SeaLevel>))
-            .add_systems(PostUpdate, (draw, crate::sea_water::draw, crate::ocean_water::draw).chain().before(bevy::asset::AssetEventSystems));
+            .add_systems(PostUpdate, (draw, crate::sea_water::draw, crate::liquid_render::draw, crate::ocean_water::draw).chain().before(bevy::asset::AssetEventSystems));
     }
 }
 
@@ -426,15 +435,17 @@ fn grid_tint<'a>(records: impl IntoIterator<Item = &'a rc_formats::sea::LiquidGr
 }
 
 /// The colour Water Enhanced judges (crate::water_render::clear_rgba): a texture's average RGB modulated by `tint` (a
-/// grid's vertex colours, [`grid_tint`]; 1 for the other draws), clamped to bytes. Kerwan's 994 and Oltanis's 1260 draw
-/// a grey image (141 on every channel) that only their vertex colours make water.
+/// grid's vertex colours, [`grid_tint`]; 1 for the other draws), clamped to bytes.
+/// Kerwan's 994 and Oltanis's 1260 draw a grey image (141 on every channel) that only their vertex colours make water.
 pub fn judged_rgb(avg: [f32; 3], tint: [f32; 3]) -> [u8; 3] { [0, 1, 2].map(|k| (avg[k] * tint[k]).floor().clamp(0.0, 255.0) as u8) }
 
-/// Water Enhanced's verdict on a group's texture and tint (crate::sea_water::clear_liquid of [`judged_rgb`]; an
-/// animated image by its first frame as the module reads it), found once per texture, tint and FIX.
-fn clear_tex(st: &mut SeaDraw, sea: &LevelSea, fx: Option<&[Option<rc_formats::texture::Texture>]>, tex: Tex, tint: [f32; 3], fix: u8) -> bool {
+/// Water Enhanced's verdict on a group's texture and tint (crate::liquid_render::verdict of [`judged_rgb`]; an
+/// animated image by its first frame as the module reads it), found once per texture, tint and FIX and logged with
+/// the group's box (game space).
+#[allow(clippy::too_many_arguments)]
+fn tex_kind(st: &mut SeaDraw, sea: &LevelSea, fx: Option<&[Option<rc_formats::texture::Texture>]>, tex: Tex, tint: [f32; 3], fix: u8, grid: bool, prims: &PrimBuf) -> LiquidKind {
     let key = (tex, tint.map(f32::to_bits), fix);
-    if let Some(&c) = st.clear.get(&key) { return c; }
+    if let Some(&c) = st.kinds.get(&key) { return c; }
     let mut px = Vec::new();
     let what = match tex {
         Tex::Fx(i, _) => {
@@ -449,10 +460,19 @@ fn clear_tex(st: &mut SeaDraw, sea: &LevelSea, fx: Option<&[Option<rc_formats::t
     let n = (px.len() / 4).max(1) as f32;
     let avg = px.as_chunks::<4>().0.iter().fold([0.0f32; 3], |a, p| [a[0] + p[0] as f32, a[1] + p[1] as f32, a[2] + p[2] as f32]).map(|s| s / n);
     let rgb = judged_rgb(avg, tint);
-    let clear = !px.is_empty() && crate::sea_water::clear_liquid(rgb);
-    println!("sea: {what} × tint {tint:.2?} = {rgb:?} at FIX {fix:#x} is {}", if clear { "clear water (Water Enhanced applies)" } else { "not clear water (kept Original)" });
-    st.clear.insert(key, clear);
-    clear
+    let kind = if px.is_empty() { LiquidKind::Original } else { crate::liquid_render::verdict(rgb, crate::liquid_render::enabled(), crate::liquid_render::forced()) };
+    let kind = crate::liquid_render::layer_verdict(kind, grid, fix);
+    // Bevy (x, y, z) = game (x, z, −y).
+    let (lo, hi) = prims.parts().0.iter().fold(([f32::MAX; 3], [f32::MIN; 3]), |(lo, hi), p| ([lo[0].min(p[0]), lo[1].min(-p[2]), lo[2].min(p[1])], [hi[0].max(p[0]), hi[1].max(-p[2]), hi[2].max(p[1])]));
+    let how = match kind {
+        LiquidKind::Water => "clear water (Water Enhanced applies)",
+        LiquidKind::Original if grid && fix < 0x80 => "kept Original: a translucent grid is a fog or cloud layer",
+        k if k.drawn_here() => "Water Enhanced's liquid look",
+        _ => "kept Original",
+    };
+    println!("sea: {what} × tint {tint:.2?} = {rgb:?} at FIX {fix:#x}: {} ({how}; game box {lo:.0?}..{hi:.0?})", kind.name());
+    st.kinds.insert(key, kind);
+    kind
 }
 
 type MainCamera<'w, 's> = Query<'w, 's, &'static Transform, (With<Camera3d>, Without<crate::sky_render::SkyCamera>)>;
@@ -498,6 +518,7 @@ fn draw(
     mut sea_level: ResMut<crate::volumetric_light::SeaLevel>,
     gfx: Res<crate::graphics::GraphicsSettings>,
     mut enhanced: ResMut<crate::sea_water::SeaWaterDraw>,
+    mut liquids: ResMut<crate::liquid_render::LiquidDraw>,
     mut enhanced_ocean: ResMut<crate::ocean_water::OceanWater>,
 ) {
     let st = state.into_inner();
@@ -530,8 +551,12 @@ fn draw(
     let mut ocean = None;
     // Per callback: its first group and whether its port is a liquid (crate::sea_water::liquid_port).
     let mut liquid: Vec<(usize, bool)> = Vec::new();
+    // The mesh sets' groups (mesh_set_groups).
+    let mut passes: Vec<(usize, usize, gs::MeshSt)> = Vec::new();
     // The grids' own draws (not their meshes'): the group, the record's FIX (crate::sea_water::surface_fix), the port.
     let mut grid_own: Vec<(usize, u8, usize)> = Vec::new();
+    // Hoven's opaque groups drawn as ice (crate::liquid_render).
+    let mut ice_groups: Vec<usize> = Vec::new();
     // The animated images of this tick, made once each.
     let mut made: Vec<GridAnim> = Vec::new();
     let mut anim = |a: GridAnim, st: &mut SeaDraw, images: &mut Assets<Image>| -> bool {
@@ -578,7 +603,7 @@ fn draw(
                 // after it with its image, fog and FIX.
                 for (j, set) in g.extras.iter().enumerate() {
                     let b = if set.before_grid { bias - 1.0 - j as f32 } else { bias + 1.0 + j as f32 };
-                    mesh_set_groups(&mut groups, set, counter, cam, &view, b, level_fog, Some((ga, run.fix, grid_fog)), [0.0; 2], &mut |a| anim(a, st, &mut images));
+                    mesh_set_groups(&mut groups, &mut passes, set, counter, cam, &view, b, level_fog, Some((ga, run.fix, grid_fog)), [0.0; 2], &mut |a| anim(a, st, &mut images));
                 }
             }
             (SeaKind::Ocean, SeaData::Ocean(t)) => {
@@ -596,11 +621,18 @@ fn draw(
                 }
             }
             (SeaKind::Hoven, SeaData::Hoven(h)) => {
+                // Water Enhanced's ice (crate::liquid_render): every layer drifts slowly; the added pass (the white
+                // streaks) stays the game's draw.
+                let ice = crate::liquid_render::hoven_ice(gfx.water.on());
+                let scroll = |speed: [f32; 2], game: [f32; 2]| if ice { crate::liquid_render::hoven_scroll(speed, counter) } else { game };
                 if gs::hoven_group1_drawn(&m.pvars, &p.svc.volumes, cam) {
-                    groups.push(Group { tex: Tex::Fx(HOVEN_G1_FX, false), effect: None, fog: level_fog, bias, prims: strip_prims(&h.groups[0], run.g1_scroll, None) });
+                    if ice { ice_groups.push(groups.len()); }
+                    groups.push(Group { tex: Tex::Fx(HOVEN_G1_FX, false), effect: None, fog: level_fog, bias, prims: strip_prims(&h.groups[0], scroll(h.g1_speed, run.g1_scroll), None) });
                 }
-                groups.push(Group { tex: Tex::Fx(HOVEN_FX[0], false), effect: None, fog: level_fog, bias: bias + 1.0, prims: strip_prims(&h.groups[1], run.scroll[0], None) });
-                groups.push(Group { tex: Tex::Fx(HOVEN_FX[1], true), effect: Some(Blend::Add), fog: level_fog, bias: bias + 2.0, prims: strip_prims(&h.groups[1], run.scroll[1], Some(h.fix2)) });
+                if ice { ice_groups.push(groups.len()); }
+                groups.push(Group { tex: Tex::Fx(HOVEN_FX[0], false), effect: None, fog: level_fog, bias: bias + 1.0, prims: strip_prims(&h.groups[1], scroll(h.layer_speed[0], run.scroll[0]), None) });
+                let added = strip_prims(&h.groups[1], scroll(h.layer_speed[1], run.scroll[1]), Some(h.fix2));
+                groups.push(Group { tex: Tex::Fx(HOVEN_FX[1], true), effect: Some(Blend::Add), fog: level_fog, bias: bias + 2.0, prims: added });
             }
             (SeaKind::GridSet, SeaData::GridSet(g)) => {
                 // 854's callback `0x2ea048`: the shared image and fog (`0x2a4818`), the gated records, the fog restore.
@@ -640,17 +672,23 @@ fn draw(
                 }
             }
             (SeaKind::TwoTex(_) | SeaKind::EnvOverlay | SeaKind::Reflect(_), SeaData::Meshes(set)) => {
-                mesh_set_groups(&mut groups, set, counter, cam, &view, bias, level_fog, None, run.scroll[0], &mut |a| anim(a, st, &mut images));
+                mesh_set_groups(&mut groups, &mut passes, set, counter, cam, &view, bias, level_fog, None, run.scroll[0], &mut |a| anim(a, st, &mut images));
             }
             _ => {}
         }
     }
-    // Water Enhanced: the clear liquid surfaces seen from above (the opaque ones and the grids' translucent draws) go
-    // to crate::sea_water instead.
+    // Water Enhanced: the liquid surfaces (the opaque ones and the grids' translucent draws) by kind: clear water seen
+    // from above to crate::sea_water, lava, mud and sludge to crate::liquid_render (with the later passes of their mesh
+    // set), the rest drawn as above.
     let mut clear_seas = Vec::new();
+    let mut looks = Vec::new();
     if gfx.water.on() {
         let all = std::mem::take(&mut groups);
+        // The first groups of the mesh sets crate::liquid_render took.
+        let mut taken: Vec<usize> = Vec::new();
         for (i, g) in all.into_iter().enumerate() {
+            let pass = passes.iter().find(|p| p.0 == i).copied();
+            if pass.is_some_and(|p| p.0 != p.1 && taken.contains(&p.1)) { continue; }
             let is_liquid = liquid.iter().rev().find(|m| m.0 <= i).is_some_and(|m| m.1);
             let own = grid_own.iter().find(|o| o.0 == i);
             let fix = crate::sea_water::surface_fix(g.effect.is_none(), own.map(|o| o.1)).filter(|_| is_liquid);
@@ -661,13 +699,28 @@ fn draw(
                     _ => [1.0; 3],
                 })
             });
-            if let Some(fix) = fix.filter(|&f| clear_tex(st, &level.0.sea, fx, g.tex, tint, f) && crate::sea_water::from_above(&g.prims, cam[2])) {
+            let Some(fix) = fix else {
+                groups.push(g);
+                continue;
+            };
+            let ice = ice_groups.contains(&i);
+            let kind = if ice { LiquidKind::Ice } else { tex_kind(st, &level.0.sea, fx, g.tex, tint, fix, own.is_some(), &g.prims) };
+            let water_here = kind == LiquidKind::Water && crate::sea_water::from_above(&g.prims, cam[2]);
+            if water_here || kind.drawn_here() {
                 let img = match g.tex {
                     Tex::Fx(i, a) => fx_handle(st, &mut images, fx, i, a),
                     Tex::Anim(a) => st.anim_images.get(&a).cloned(),
                 };
                 if let Some(image) = img {
-                    clear_seas.push(crate::sea_water::SeaGroup { image, fog: g.fog, prims: g.prims, fix });
+                    if water_here {
+                        clear_seas.push(crate::sea_water::SeaGroup { image, fog: g.fog, prims: g.prims, fix });
+                    } else {
+                        let second = pass.and_then(|p| passes.iter().find(|q| q.1 == p.1 && q.0 > p.0));
+                        let flow = crate::liquid_render::layer_flow(pass.as_ref().map(|p| &p.2), second.map(|q| &q.2));
+                        if let Some(p) = pass { taken.push(p.1); }
+                        let grid = if own.is_some() { crate::liquid_render::st_per_unit(&g.prims) } else { 0.0 };
+                        looks.push(crate::liquid_render::LiquidGroup { image, fog: g.fog, prims: g.prims, kind, flow, grid });
+                    }
                     continue;
                 }
             }
@@ -677,6 +730,7 @@ fn draw(
     enhanced.pending = Some(clear_seas);
     enhanced.cam = cam;
     enhanced_ocean.pending = Some(ocean);
+    liquids.pending = Some(looks);
     // Show the groups in slots 0.., hide the rest.
     let n = groups.len();
     for (k, g) in groups.into_iter().enumerate() {

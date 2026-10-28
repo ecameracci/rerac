@@ -317,7 +317,11 @@ fn follow_look(
             if m.fx >= 0 { println!("water: fx texture {} is {}", m.fx, if clear { "clear water (Enhanced applies)" } else { "not clear water (kept Original)" }); }
             clear
         });
-        let want = WaterLook { misc: Vec4::new((g.water.on() && clear) as u32 as f32, 0.0, 0.0, 0.0), sun };
+        let other = if clear { 0.0 } else {
+            *st.liquid_fx.entry(m.fx).or_insert_with(|| crate::liquid_render::patch_kind(m.fx, usize::try_from(m.fx).ok().and_then(|i| tex?.fx_textures.get(i)?.as_ref())))
+        };
+        let misc = if other > 0.0 { Vec4::new(2.0, other, 0.0, 0.0) } else { Vec4::new(clear as u32 as f32, 0.0, 0.0, 0.0) };
+        let want = WaterLook { misc: if g.water.on() { misc } else { Vec4::ZERO }, sun };
         let moved = m.look.misc != want.misc || m.look.sun.distance(want.sun) > 0.01;
         if moved { if let Some(mut m) = materials.get_mut(h) { m.look = want; } }
     }
@@ -411,6 +415,8 @@ pub struct WaterState {
     rings_bytes: Vec<u8>,
     /// [`clear_water`] by FX index, found on first use.
     clear_fx: std::collections::HashMap<i32, bool>,
+    /// crate::liquid_render::patch_kind by FX index (not clear water), found on first use.
+    liquid_fx: std::collections::HashMap<i32, f32>,
 }
 
 impl WaterState {
@@ -444,6 +450,7 @@ impl Plugin for WaterPlugin {
         if !crate::determinism::deterministic() && !app.world().contains_resource::<Time<Fixed>>() {
             app.insert_resource(Time::<Fixed>::from_hz(crate::determinism::TICK_HZ));
         }
+        crate::liquid_render::keep_look_module(app);
         app.add_plugins(MaterialPlugin::<WaterMaterial>::default())
             .add_systems(crate::level_switch::LevelStartup, (setup, fire_field_setup))
             .add_systems(crate::level_switch::LevelUnload, (crate::level_switch::remove::<WaterState>, crate::level_switch::remove::<FireFieldDraw>))
@@ -742,6 +749,7 @@ fn setup(
         rings_buf,
         rings_bytes,
         clear_fx: Default::default(),
+        liquid_fx: Default::default(),
     });
 }
 

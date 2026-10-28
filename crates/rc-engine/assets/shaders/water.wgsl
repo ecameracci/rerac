@@ -38,6 +38,7 @@
 // A ripple water draw may sit params.misc.w over the game's height (water_render::SURFACE_LIFT), on Enhanced only.
 // Pokitaru's ocean (params.misc.w = 1 on a kind 0 draw, crate::ocean_water) takes its own constants (OCEAN_*) and, for a
 // reflection that meets nothing, the sky in the scene copy along the ray or its sky colour (params.ids.w) instead of the fog.
+// A liquid of another kind (look.misc.x = 2: Gemlik's acid) draws liquid_look.wgsl's look instead (crate::liquid_render).
 //
 // The swell (crate::water_waves; look.sun.w = its scale, 0: none): on the vertices tagged SWELL_TAG (crate::sea_water's
 // split seas) the height of `swell_wave`'s sum times the vertex's shore damping and the far fade, passed on as `swell`;
@@ -46,6 +47,7 @@
 
 #import bevy_pbr::view_transformations::{position_world_to_clip, position_world_to_view, depth_ndc_to_view_z, position_ndc_to_view, frag_coord_to_ndc, ndc_to_frag_coord}
 #import bevy_pbr::mesh_view_bindings::{view, globals}
+#import rerac::liquid_look::{liquid_look, still_frame, DRIFT}
 
 struct WaterFog {
     color: vec4<f32>,
@@ -461,6 +463,7 @@ fn fragment(in: WaterVertexOutput) -> @location(0) vec4<f32> {
     // MODULATE on the display bytes: floor(Ct·Cv / 128), clamped to 255.
     let ct = round(t.rgb * 255.0);
     var rgb = min(floor(ct * in.color + vec3<f32>(1e-3)), vec3<f32>(255.0)) / 255.0;
+    let raw = rgb;
     if (fog.color.w > 0.5) {
         rgb = mix(fog.color.rgb, rgb, in.fog);
     }
@@ -472,6 +475,14 @@ fn fragment(in: WaterVertexOutput) -> @location(0) vec4<f32> {
     }
 
     if (kind == 1u || kind == 3u) { return vec4<f32>(0.0); }
+    // Another liquid (look.misc.x = 2, look.misc.y = its kind: crate::liquid_render), opaque, fogged after the look.
+    if (look.misc.x > 1.5) {
+        let lp = (view.world_from_view * vec4<f32>(position_ndc_to_view(frag_coord_to_ndc(in.position)), 1.0)).xyz;
+        let sky = srgb_to_linear(mix(fog.color.rgb, vec3<f32>(1.0), 0.25));
+        var lc = liquid_look(u32(look.misc.y + 0.5), raw, raw, in.uv, lp, in.ripple_grad, DRIFT, normalize(look.sun.xyz), sky, normalize(view.world_position - lp), globals.time, still_frame());
+        if (fog.color.w > 0.5) { lc = mix(srgb_to_linear(fog.color.rgb), lc, in.fog); }
+        return vec4<f32>(lc, 1.0);
+    }
     // params.misc.w = 1 on a kind 0 draw: Pokitaru's ocean (crate::ocean_water), clearer and lighter (OCEAN_* below).
     let ocean = kind == 0u && params.misc.w > 0.5;
     let vp = position_ndc_to_view(frag_coord_to_ndc(in.position));
