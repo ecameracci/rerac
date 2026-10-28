@@ -33,7 +33,9 @@
 //! - `RC_MSAA=0|2|4|8` the Anti-aliasing option at start: Off or that multisampling (default: Original, the game's own softening passes), crate::graphics
 //! - `RC_SETTINGS_FILE=<path>` the port-settings file (`0` or empty: none), crate::render_settings;
 //!   `RC_SETTINGS_PAGE=0` no "Port Options" page in the Options menu, crate::menu_render
-//! - `RC_SHADOWS=0|1|dynamic`, `RC_SHADOW_DEBUG=1`, `RC_SHADOW_TRACE=1` the moby shadows, crate::shadow_render
+//! - `RC_GFX_LIGHTING=original|simple|enhanced` the Lighting option at start, crate::graphics (`RC_SHADOWS=1|dynamic`:
+//!   Original / Enhanced, the older switch); `RC_SHADOWS=0` no shadows at all, `RC_SHADOW_DEBUG=1`,
+//!   `RC_SHADOW_TRACE=1` the moby shadows, crate::shadow_render
 
 mod crash_log;
 mod asset_write;
@@ -227,7 +229,7 @@ fn main() -> anyhow::Result<()> {
     // The moby shadows: the game's shadow rules and a native shadow-volume pass (crate::shadow_render).
     .add_plugins(shadow_render::ShadowPlugin)
     .add_plugins(pre_shadow::PreShadowPlugin)
-    // The port's modern options (crate::graphics, Shadows Dynamic): sun shadows, ambient occlusion, the scene copy
+    // The port's modern options (crate::graphics, Lighting Simple / Enhanced): sun shadows, ambient occlusion, the scene copy
     // the soft particles and the water read, sun rays.
     .add_plugins((fx_view::FxViewPlugin, sun_shadow::SunShadowPlugin, ao_render::AoPlugin, scene_copy::SceneCopyPlugin, sun_rays::SunRaysPlugin))
     .add_plugins(frame_log::FrameLogPlugin)

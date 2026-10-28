@@ -201,6 +201,9 @@ impl Travel {
     /// gives the cameras back to it (until then the title world is the last image the transition's fades darken).
     pub(crate) fn blanked(&self) -> bool { self.blank }
 
+    /// A level transition (`DoSpaceTransition`: its cards, movies and flight) is running.
+    pub(crate) fn in_transition(&self) -> bool { self.tr.is_some() }
+
     /// The fog of a running level transition (`DoSpaceTransition`), whose loops never run `UpdateFog`: its own block
     /// for the cards and movies, the reset view context's for the flight; None outside a transition (the level's).
     pub(crate) fn transition_fog(&self) -> Option<rc_game::fog_zones::FogGlobals> {

@@ -11,12 +11,17 @@
 //! | [`AmbientOcclusion`] | Original (none: the shade is the artists' baked vertex colours), On (screen-space occlusion from the depth buffer) | crate::ao_render |
 //! | [`Water`] | Original (the GS blend of the water textures), Enhanced (clear by depth, reflections, a sun glint, foam at the shore) | crate::water_render, crate::scene_copy |
 //! | [`Particles`] | Original (sprites cut where they meet the world), Soft (faded by their depth in front of it) | crate::particle_render, crate::scene_copy |
+//! | [`Lighting`] | Original (the game's shadows), Simple (sun shadows in their place), Enhanced (Simple's shadows and every advanced lighting effect) | crate::shadow_render, crate::sun_shadow, crate::tie_lod ([`Lighting::game_shadows`], [`Lighting::sun_shadows`]); crate::sun_rays ([`Lighting::enhanced`], and per level [`LightShafts`]) |
+//!
+//! **The lighting gate:** a later lighting effect (volumetric light, global illumination) runs only while
+//! `GraphicsSettings::lighting.enhanced()` (main world, or the render world's extracted copy), as crate::sun_rays
+//! does. Lighting is not part of a [`Preset`]: a preset keeps it, and [`GraphicsSettings::preset`] ignores it.
 //!
 //! Persisted in the port settings file (`crate::render_settings::save_key`); `RC_HUD`-style switches are not used here
 //! (`RC_HUD=0` already hides the HUD): `RC_GFX_ANTI_ALIASING`, `RC_GFX_HUD`, `RC_GFX_TEXTURES`, `RC_GFX_DETAIL`,
-//! `RC_GFX_AMBIENT_OCCLUSION`, `RC_GFX_WATER`, `RC_GFX_PARTICLES` (the keys below),
-//! `RC_MSAA=0|2|4|8` (Anti-aliasing Off or that multisampling) and `RC_GFX_PRESET=original|enhanced` override the file
-//! at start.
+//! `RC_GFX_AMBIENT_OCCLUSION`, `RC_GFX_WATER`, `RC_GFX_PARTICLES`, `RC_GFX_LIGHTING` (the keys below),
+//! `RC_MSAA=0|2|4|8` (Anti-aliasing Off or that multisampling), `RC_SHADOWS=1|dynamic` (Lighting Original / Enhanced,
+//! the older switch; `0`: crate::shadow_render) and `RC_GFX_PRESET=original|enhanced` override the file at start.
 
 use bevy::prelude::*;
 
@@ -209,7 +214,104 @@ two_valued!(
     Soft = "soft"
 );
 
-/// A preset: a value for every option.
+/// The shadows and the port's lighting effects (the Port Options "Lighting" row; module docs).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum Lighting {
+    /// The game's shadow volumes under the classes with a shadow block (crate::shadow_render).
+    #[default]
+    Original,
+    /// Cascaded shadows from the level's key light in their place (crate::sun_shadow).
+    Simple,
+    /// Simple's shadows and every advanced lighting effect (crate::sun_rays, and the effects gated on [`Lighting::enhanced`]).
+    Enhanced,
+}
+
+impl Lighting {
+    /// The game's shadow volumes are drawn.
+    pub fn game_shadows(self) -> bool { self == Lighting::Original }
+    /// The sun casts shadows (in place of the game's).
+    pub fn sun_shadows(self) -> bool { self != Lighting::Original }
+    /// The advanced lighting effects run: the gate of every effect beyond the sun shadows.
+    pub fn enhanced(self) -> bool { self == Lighting::Enhanced }
+
+    /// The older `shadows` key and `RC_SHADOWS` value: `dynamic` is Enhanced; `on`, `off`, `1`, `0` and the rest are
+    /// Original (the row has no Off: `RC_SHADOWS=0` stays a developer switch, crate::shadow_render).
+    pub fn from_shadows(v: &str) -> Self { if v.trim() == "dynamic" { Lighting::Enhanced } else { Lighting::Original } }
+}
+
+impl GfxOption for Lighting {
+    const ALL: &'static [Self] = &[Lighting::Original, Lighting::Simple, Lighting::Enhanced];
+    const KEY: &'static str = "lighting";
+    fn key(self) -> &'static str {
+        match self {
+            Lighting::Original => "original",
+            Lighting::Simple => "simple",
+            Lighting::Enhanced => "enhanced",
+        }
+    }
+}
+
+/// Lighting Enhanced's light shafts (crate::sun_rays, crate::volumetric_light) by level index: on where a sun lights
+/// open air, off where they only veil or streak the view (the play-test of 2026-10-26). docs/plan/graphics_options.md.
+pub const SHAFT_LEVELS: [(bool, &str); 19] = [
+    (true, "Veldin: desert daylight"),
+    (true, "Novalis: daylight"),
+    (false, "Aridia: dust haze, no sun to cast them"),
+    (true, "Kerwan: daylight through the tunnels"),
+    (true, "Eudora: daylight in the forest"),
+    (false, "Rilgar: night"),
+    (false, "Nebula G34: indoor station, no visible sun"),
+    (false, "Umbris: dark swamp, no visible sun"),
+    (false, "Batalia: rain"),
+    (true, "Gaspar: daylight"),
+    (false, "Orxon: night"),
+    (true, "Pokitaru: daylight"),
+    (false, "Hoven: night"),
+    (true, "Gemlik: the sun in its sky"),
+    (false, "Oltanis: overcast, no visible sun"),
+    (false, "Quartu: night, indoor factory"),
+    (true, "Kalebo III: daylight"),
+    (true, "Drek's fleet: the sun in its sky"),
+    (true, "Veldin: daylight"),
+];
+
+/// [`SHAFT_LEVELS`]' choice for a level (none past the table).
+pub fn shafts_on_level(level: u32) -> bool { SHAFT_LEVELS.get(level as usize).is_some_and(|l| l.0) }
+
+/// This frame's gate of the light shafts (main world, and the render world's copy): [`shafts_on_level`] for the
+/// loaded level, off while the title world or a level transition's cards, movies and flight show (the space
+/// scenes); `RC_LIGHT_SHAFTS=1|0` forces them on or off. The effects also need [`Lighting::enhanced`].
+#[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq, bevy::render::extract_resource::ExtractResource)]
+pub struct LightShafts(pub bool);
+
+/// `RC_LIGHT_SHAFTS`: Some(on) to force, None for the table.
+fn env_shafts() -> Option<bool> {
+    static FORCE: std::sync::OnceLock<Option<bool>> = std::sync::OnceLock::new();
+    *FORCE.get_or_init(|| match std::env::var("RC_LIGHT_SHAFTS").as_deref().map(str::trim) {
+        Ok("1") => Some(true),
+        Ok("0") => Some(false),
+        _ => None,
+    })
+}
+
+fn update_shafts(
+    travel: Option<Res<crate::travel_render::Travel>>,
+    title: Option<Res<crate::title_world::TitleWorldRt>>,
+    mut out: ResMut<LightShafts>,
+    mut logged: Local<Option<(u32, bool)>>,
+) {
+    let level = crate::level_load::level_index();
+    let space = travel.is_some_and(|t| t.in_transition()) || title.is_some_and(|t| t.shown());
+    let on = env_shafts().unwrap_or(!space && shafts_on_level(level));
+    if *logged != Some((level, on)) {
+        *logged = Some((level, on));
+        let why = SHAFT_LEVELS.get(level as usize).map_or("", |l| l.1);
+        println!("graphics: light shafts {} (level {level:02} {why}{}; RC_LIGHT_SHAFTS=0|1 forces)", if on { "on" } else { "off" }, if space { ", space scene" } else { "" });
+    }
+    if out.0 != on { out.0 = on; }
+}
+
+/// A preset: a value for every option but [`Lighting`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Preset {
     Original,
@@ -234,13 +336,15 @@ pub struct GraphicsSettings {
     pub ao: AmbientOcclusion,
     pub water: Water,
     pub particles: Particles,
+    /// Not in the presets (module docs).
+    pub lighting: Lighting,
 }
 
 impl GraphicsSettings {
-    /// The options of a preset (`Custom` keeps `self`).
+    /// The options of a preset (`Custom` keeps `self`); Lighting stays `self`'s.
     pub fn with_preset(self, p: Preset) -> Self {
         match p {
-            Preset::Original => GraphicsSettings::default(),
+            Preset::Original => GraphicsSettings { lighting: self.lighting, ..GraphicsSettings::default() },
             // 4x: the best count every GPU offers (crate::render_settings clamps a count a device lacks).
             Preset::Enhanced => GraphicsSettings {
                 aa: AntiAliasing::X4,
@@ -250,12 +354,13 @@ impl GraphicsSettings {
                 ao: AmbientOcclusion::On,
                 water: Water::Enhanced,
                 particles: Particles::Soft,
+                lighting: self.lighting,
             },
             Preset::Custom => self,
         }
     }
 
-    /// The preset these options are.
+    /// The preset these options are (whatever the Lighting).
     pub fn preset(&self) -> Preset {
         [Preset::Original, Preset::Enhanced].into_iter().find(|&p| self.with_preset(p) == *self).unwrap_or(Preset::Custom)
     }
@@ -277,6 +382,9 @@ impl GraphicsSettings {
             s.water = file_value(s.water);
             s.particles = file_value(s.particles);
         }
+        s.lighting = file_lighting(crate::render_settings::load_key);
+        if let Ok(v) = std::env::var("RC_SHADOWS") { s.lighting = Lighting::from_shadows(&v); }
+        s.lighting = env_value(s.lighting);
         s.aa = env_value(s.aa);
         // The older switch: `RC_MSAA=0|2|4|8` (0 = Off).
         if let Ok(v) = std::env::var("RC_MSAA") { s.aa = AntiAliasing::from_samples(v.trim().parse().unwrap_or(0)); }
@@ -298,6 +406,16 @@ impl GraphicsSettings {
         save(self.ao);
         save(self.water);
         save(self.particles);
+        save(self.lighting);
+    }
+}
+
+/// The file's `lighting`; without it, the Shadows row's older `shadows` key ([`Lighting::from_shadows`]); else
+/// Original.
+fn file_lighting(load: impl Fn(&str) -> Option<String>) -> Lighting {
+    match load(Lighting::KEY) {
+        Some(v) => Lighting::parse(&v).unwrap_or_default(),
+        None => load("shadows").map_or(Lighting::Original, |v| Lighting::from_shadows(&v)),
     }
 }
 
@@ -325,8 +443,11 @@ impl Plugin for GraphicsPlugin {
         let s = GraphicsSettings::startup();
         if s != GraphicsSettings::default() { println!("graphics: {s:?} ({:?})", s.preset()); }
         app.insert_resource(s)
+            .init_resource::<LightShafts>()
             .add_plugins(bevy::render::extract_resource::ExtractResourcePlugin::<GraphicsSettings>::default())
-            .add_systems(PreUpdate, (apply_detail, apply_samples));
+            .add_plugins(bevy::render::extract_resource::ExtractResourcePlugin::<LightShafts>::default())
+            .add_systems(PreUpdate, (apply_detail, apply_samples))
+            .add_systems(PostUpdate, update_shafts);
     }
 }
 
@@ -370,9 +491,47 @@ mod tests {
         for &v in AmbientOcclusion::ALL { assert_eq!(AmbientOcclusion::parse(v.key()), Some(v)); }
         for &v in Water::ALL { assert_eq!(Water::parse(v.key()), Some(v)); }
         for &v in Particles::ALL { assert_eq!(Particles::parse(v.key()), Some(v)); }
+        for &v in Lighting::ALL { assert_eq!(Lighting::parse(v.key()), Some(v)); }
+        assert_eq!(Lighting::ALL.iter().map(|v| v.key()).collect::<Vec<_>>(), ["original", "simple", "enhanced"]);
         assert!(!AmbientOcclusion::Original.on() && Water::Enhanced.on());
         assert_eq!(Detail::from_index(9), Detail::Original);
         assert_eq!(AntiAliasing::from_samples(0), AntiAliasing::Off);
         assert_eq!(AntiAliasing::from_samples(4).samples(), 4);
+    }
+
+    #[test]
+    fn lighting_reads_the_older_shadows_key() {
+        let file = |pairs: &'static [(&'static str, &'static str)]| {
+            move |k: &str| pairs.iter().find(|p| p.0 == k).map(|p| p.1.to_string())
+        };
+        assert_eq!(file_lighting(file(&[])), Lighting::Original);
+        assert_eq!(file_lighting(file(&[("shadows", "on")])), Lighting::Original);
+        assert_eq!(file_lighting(file(&[("shadows", "off")])), Lighting::Original);
+        assert_eq!(file_lighting(file(&[("shadows", "dynamic")])), Lighting::Enhanced);
+        assert_eq!(file_lighting(file(&[("shadows", "dynamic"), ("lighting", "simple")])), Lighting::Simple);
+        assert_eq!(file_lighting(file(&[("lighting", "bogus")])), Lighting::Original);
+        assert_eq!((Lighting::from_shadows("1"), Lighting::from_shadows("0"), Lighting::from_shadows(" dynamic")), (Lighting::Original, Lighting::Original, Lighting::Enhanced));
+    }
+
+    #[test]
+    fn lighting_gates_and_stays_out_of_the_presets() {
+        let g = |l: Lighting| (l.game_shadows(), l.sun_shadows(), l.enhanced());
+        assert_eq!(g(Lighting::Original), (true, false, false));
+        assert_eq!(g(Lighting::Simple), (false, true, false));
+        assert_eq!(g(Lighting::Enhanced), (false, true, true));
+        let s = GraphicsSettings { lighting: Lighting::Enhanced, ..GraphicsSettings::default() };
+        assert_eq!(s.preset(), Preset::Original);
+        assert_eq!(s.with_preset(Preset::Enhanced).lighting, Lighting::Enhanced);
+        assert_eq!(s.with_preset(Preset::Enhanced).with_preset(Preset::Original), s);
+    }
+
+    #[test]
+    fn shafts_follow_the_level_table() {
+        // The play-test's list: Aridia, Rilgar, Nebula G34, Umbris, Batalia, Orxon, Hoven, Oltanis, Quartu.
+        let off: Vec<u32> = (0..SHAFT_LEVELS.len() as u32).filter(|&l| !shafts_on_level(l)).collect();
+        assert_eq!(off, [2, 5, 6, 7, 8, 10, 12, 14, 15]);
+        assert!(shafts_on_level(1) && shafts_on_level(3) && shafts_on_level(13) && shafts_on_level(16));
+        assert!(!shafts_on_level(19) && !shafts_on_level(u32::MAX));
+        assert!(SHAFT_LEVELS.iter().all(|l| !l.1.is_empty()));
     }
 }

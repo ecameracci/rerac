@@ -562,9 +562,9 @@ sub-pages (`crates/rc-game/src/menus/pause/port.rs`, `PageMenu::install_port_pag
 * **Strings**: the port's own text, negative ids (−0x100..) resolved by `MenuAssets::msg` before the level's table (the
   disc's ids are 0..21500); "off" is the game's 20315. Records use addresses 0x7f00_xxxx, which no EE pointer can hold.
 * **Rows** (`port::ENTRIES`, one entry per option): the graphics rows (Preset, Anti-aliasing: Original / off / 2x / 4x / 8x,
-  Detail distance, Texture filtering, HUD; docs/plan/graphics_options.md) → `graphics::GraphicsSettings` (engine
-  `menu_render.rs` syncs the rows with the resource around each menu tick; a change is saved; the anti-aliasing samples
-  reach the cameras through `render_settings::RenderSettings::msaa`). Shadows: on / off. Gameplay aspect and Cutscene aspect: 4:3 / 16:10 / 16:9 / Fill each, Resolution: Window / 416p / 720p /
+  Detail distance, Texture filtering, HUD, Lighting: Original / Simple / Enhanced; docs/plan/graphics_options.md) →
+  `graphics::GraphicsSettings` (engine `menu_render.rs` syncs the rows with the resource around each menu tick; a
+  change is saved; the anti-aliasing samples reach the cameras through `render_settings::RenderSettings::msaa`). Gameplay aspect and Cutscene aspect: 4:3 / 16:10 / 16:9 / Fill each, Resolution: Window / 416p / 720p /
   1080p / 1440p / 2160p and Fullscreen: off / on → `display::DisplaySettings` (the game frame every camera renders into, presented
   on black at the window's size; keys `aspect` (gameplay) / `cutscene_aspect` / `resolution` / `fullscreen` in the settings
   file; a file without `cutscene_aspect` gives the cutscenes the gameplay aspect). Fill is the window's own

@@ -17,7 +17,7 @@
 //! its part entities, written only when its state changes, so Bevy does not queue it and the GPU does not
 //! run its vertices (all three LODs) just to drop them. The vertex shader's `LOD_CULLED` test stays as the
 //! backstop; the per-instance rules are unchanged. The written state takes effect the same frame (the system
-//! runs before `VisibilitySystems::VisibilityPropagate`). While Shadows is Dynamic (crate::sun_shadow `KeyLight`)
+//! runs before `VisibilitySystems::VisibilityPropagate`). While the sun casts shadows (crate::sun_shadow `KeyLight::sun_shadows`)
 //! nothing is hidden: the sun's cascades cull with their own frusta and every tie casts at LOD 0 (tie.wgsl), so its
 //! shadow does not appear and vanish with the camera's cull; the camera's view keeps Bevy's frustum culling.
 //!
@@ -268,7 +268,7 @@ pub fn update_tie_lods(
     mut last_print: Local<f32>,
     mut vis: Query<&mut Visibility>,
 ) {
-    let hide = sun.is_none_or(|s| !s.dynamic);
+    let hide = sun.is_none_or(|s| !s.sun_shadows);
     let scale = gfx.detail.lod_scale();
     let (Some(mut state), Some((cam, proj))) = (state, cams.iter().next()) else { return };
     let tans = game_camera::projection_tans(proj);

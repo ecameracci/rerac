@@ -23,8 +23,9 @@
 //! Not reproduced (hardware): the GS guard-band face drop, the destination-alpha counter's byte arithmetic, the
 //! NTSC / PAL register blocks. The darkening is a result-level reproduction (hardware_fidelity_layers.md).
 //!
-//! Environment: `RC_SHADOWS=0|1|dynamic` overrides the Port Options setting at start (default on, as the game;
-//! `dynamic`: crate::sun_shadow instead of the volumes);
+//! Drawn while the Lighting option is Original (crate::graphics `Lighting::game_shadows`; Simple and Enhanced:
+//! crate::sun_shadow instead). Environment: `RC_SHADOWS=0` no shadows at all, whatever the option (a developer
+//! switch; `1` / `dynamic` set Lighting Original / Enhanced at start, crate::graphics);
 //! `RC_SHADOW_DEBUG=1` draws the count target instead (red inside, blue negative); `RC_SHADOW_TRACE=1` prints the
 //! casters of each frame; `RC_SHADOW_PERF=1` the collection's mean CPU time.
 
@@ -69,64 +70,28 @@ pub const SHADOW_FACTOR: f32 = 0.53;
 /// The count target's format (blendable; counts the small integers exactly).
 pub const COUNT_FORMAT: TextureFormat = TextureFormat::R16Float;
 
-/// The Port Options "Shadows" row, in its order: the game's shadow volumes (the default), none, or sun shadows from
-/// the level's key light (crate::sun_shadow) in their place.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-pub enum ShadowMode {
-    #[default]
-    On,
-    Off,
-    Dynamic,
-}
-
-impl ShadowMode {
-    pub const ALL: [ShadowMode; 3] = [ShadowMode::On, ShadowMode::Off, ShadowMode::Dynamic];
-    pub fn index(self) -> u8 { Self::ALL.iter().position(|&m| m == self).unwrap_or(0) as u8 }
-    pub fn from_index(i: u8) -> Self { Self::ALL.get(i as usize).copied().unwrap_or_default() }
-    pub fn key(self) -> &'static str {
-        match self {
-            ShadowMode::On => "on",
-            ShadowMode::Off => "off",
-            ShadowMode::Dynamic => "dynamic",
-        }
-    }
-    /// The settings file's value (`on`, `off`, `dynamic`) or `RC_SHADOWS` (`0`, `1`, `dynamic`).
-    pub fn parse(v: &str) -> Self {
-        match v.trim() {
-            "off" | "0" => ShadowMode::Off,
-            "dynamic" => ShadowMode::Dynamic,
-            _ => ShadowMode::On,
-        }
-    }
-}
-
-/// The shadows' setting (Port Options "Shadows", on by default like the game).
-#[derive(Resource, Clone, Copy, Debug, PartialEq, Eq)]
+/// The shadows' developer switches; which shadows are drawn is the Lighting option (crate::graphics `Lighting`).
+#[derive(Resource, Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub struct ShadowSettings {
-    pub mode: ShadowMode,
+    /// `RC_SHADOWS=0`: no shadows at all, neither the game's nor the sun's (the Lighting row has no Off).
+    pub off: bool,
     /// `RC_SHADOW_DEBUG=1`: show the count target.
     pub debug: bool,
 }
 
 impl ShadowSettings {
-    /// `RC_SHADOWS=0|1|dynamic`, else the port settings file's `shadows = on|off|dynamic`, else on.
-    pub fn startup() -> (Self, &'static str) {
-        let debug = std::env::var("RC_SHADOW_DEBUG").is_ok_and(|v| v.trim() == "1");
-        if let Ok(v) = std::env::var("RC_SHADOWS") { return (ShadowSettings { mode: ShadowMode::parse(&v), debug }, "RC_SHADOWS"); }
-        match crate::render_settings::load_key("shadows") {
-            Some(v) => (ShadowSettings { mode: ShadowMode::parse(&v), debug }, "settings file"),
-            None => (ShadowSettings { mode: ShadowMode::On, debug }, "default"),
+    pub fn startup() -> Self {
+        ShadowSettings {
+            off: std::env::var("RC_SHADOWS").is_ok_and(|v| v.trim() == "0"),
+            debug: std::env::var("RC_SHADOW_DEBUG").is_ok_and(|v| v.trim() == "1"),
         }
     }
 
     /// The game's shadow volumes are drawn.
-    pub fn volumes(&self) -> bool { self.mode == ShadowMode::On }
+    pub fn volumes(&self, l: crate::graphics::Lighting) -> bool { !self.off && l.game_shadows() }
 
     /// Sun shadows replace them (crate::sun_shadow).
-    pub fn sun(&self) -> bool { self.mode == ShadowMode::Dynamic }
-
-    /// Writes the setting into the port settings file.
-    pub fn save(&self) { crate::render_settings::save_key("shadows", self.mode.key()); }
+    pub fn sun(&self, l: crate::graphics::Lighting) -> bool { !self.off && l.sun_shadows() }
 }
 
 /// The game-side shadow state the engine keeps: the direction table 0x1af000, Ratchet's pitch 0x140070, the light
@@ -138,20 +103,32 @@ pub struct ShadowGame {
     /// The game tick the state was last updated for.
     counter: Option<u64>,
     dir_a: Vec<[f32; 4]>,
+    /// Light set 0 (zero without one).
+    set0: rc_formats::tfrag_light::DirLightSet,
     blocks: HashMap<i16, Arc<ShadowBlock>>,
     /// o_class → index into `LevelMobys::classes` / `anim`.
     class_index: HashMap<i16, usize>,
 }
 
 impl ShadowGame {
-    /// The direction the level's key light travels (light set 0's light A: light word 0, Ratchet's light where no fog
-    /// zone cross-fades it), in Bevy axes and normalised; None when the set has no direction. The sun of
+    /// The direction the level's key light travels (light set 0, light word 0: Ratchet's light where no fog zone
+    /// cross-fades it), in Bevy axes and normalised; None when the set has no direction. The sun of
     /// crate::sun_shadow and crate::sun_rays: one per level, not Ratchet's own light, which the fog zones swing
     /// between sets (Novalis: 68° to 106° of bearing across a cave mouth) and so would turn every shadow with him.
+    /// Of the set's two lights, [`key_light`]'s pick.
     pub fn sun_light(&self) -> Option<Vec3> {
-        let d = game_to_bevy(shadows::light_dir(&self.dir_a, 0));
+        let d = game_to_bevy(key_light(&self.set0));
         (d.length_squared() > 1e-6).then(|| d.normalize())
     }
+}
+
+/// A light set's key light (game axes, its travel direction): light A, or light B where A lights from below and B,
+/// from above, is the brighter (of the 19 levels' set 0, only Drek's fleet: A a dim blue under-light, B the sun from
+/// 28.6° up). A raised to the sun's elevation (crate::sun_shadow) would cast toward B, against its shading.
+pub fn key_light(set: &rc_formats::tfrag_light::DirLightSet) -> [f32; 3] {
+    let luma = |c: [f32; 4]| 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+    let (a, b) = ([set.dir_a[0], set.dir_a[1], set.dir_a[2]], [set.dir_b[0], set.dir_b[1], set.dir_b[2]]);
+    if a[2] > 0.0 && b[2] < 0.0 && luma(set.color_b) > luma(set.color_a) { b } else { a }
 }
 
 /// The frame's shadow volumes: triangles (3 points each) in Bevy world axes.
@@ -176,8 +153,10 @@ pub struct ShadowPlugin;
 
 impl Plugin for ShadowPlugin {
     fn build(&self, app: &mut App) {
-        let (settings, source) = ShadowSettings::startup();
-        println!("shadows: {} ({source}){}", settings.mode.key(), if settings.debug { ", RC_SHADOW_DEBUG: count target shown" } else { "" });
+        let settings = ShadowSettings::startup();
+        if settings.off || settings.debug {
+            println!("shadows:{}{}", if settings.off { " RC_SHADOWS=0: none" } else { "" }, if settings.debug { " RC_SHADOW_DEBUG: count target shown" } else { "" });
+        }
         app.insert_resource(settings)
             .init_resource::<ShadowVolumes>()
             .add_systems(crate::level_switch::LevelUnload, (crate::level_switch::reset::<ShadowVolumes>, crate::level_switch::remove::<ShadowGame>))
@@ -198,8 +177,10 @@ impl Plugin for ShadowPlugin {
 fn setup(mut commands: Commands, level: Res<crate::Level>) {
     let lv = &level.0;
     let (root, index) = (crate::level_load::extracted_root(), crate::level_load::level_index());
+    let bank = rc_formats::tfrag_light::parse_light_bank(&lv.gameplay).ok();
     let mut game = ShadowGame {
-        dir_a: rc_formats::tfrag_light::parse_light_bank(&lv.gameplay).map(|b| b.sets.iter().map(|s| s.dir_a).collect()).unwrap_or_default(),
+        dir_a: bank.as_ref().map(|b| b.sets.iter().map(|s| s.dir_a).collect()).unwrap_or_default(),
+        set0: bank.as_ref().map(|b| b.sets[0]).unwrap_or_default(),
         class_index: lv.mobys.classes.iter().enumerate().map(|(i, c)| (c.o_class as i16, i)).collect(),
         ..Default::default()
     };
@@ -278,7 +259,7 @@ struct Deferred {
 /// The frame's casters and their volumes (module docs).
 #[allow(clippy::too_many_arguments)]
 pub fn collect(
-    settings: Res<ShadowSettings>,
+    (settings, gfx): (Res<ShadowSettings>, Res<crate::graphics::GraphicsSettings>),
     play: Option<Res<Play>>,
     level: Res<crate::Level>,
     game: Option<Res<ShadowGame>>,
@@ -297,7 +278,7 @@ pub fn collect(
     let (Some(play), Some(sg), Some((cam, proj))) = (play, game, cams.iter().next()) else { return clear(&mut out) };
     // MobyProc's frustum planes from the view (16:9 widens them, crate::display).
     let tans = crate::game_camera::projection_tans(proj);
-    if !settings.volumes() { return clear(&mut out); }
+    if !settings.volumes(gfx.lighting) { return clear(&mut out); }
     let (eye, rows) = (crate::game_camera::game_eye(cam), crate::game_camera::game_rows(cam));
     let cam_rows = moby_lod::camera_rows(rows[0], rows[1], rows[2]);
     let table = &play.game.mobys;
@@ -620,6 +601,19 @@ mod tests {
         }
         assert_eq!((worst, over2), (3, 12));
         assert_eq!(255 + ((-255 * 0x20) >> 7), 191, "white → 191");
+    }
+
+    #[test]
+    fn key_light_is_b_only_over_a_dim_under_light() {
+        let set = |ca: f32, za: f32, cb: f32, zb: f32| rc_formats::tfrag_light::DirLightSet {
+            color_a: [ca; 4],
+            dir_a: [0.5, 0.0, za, 0.0],
+            color_b: [cb; 4],
+            dir_b: [-0.5, 0.0, zb, 0.0],
+        };
+        assert_eq!(key_light(&set(0.4, 0.87, 0.8, -0.48)), [-0.5, 0.0, -0.48], "Drek's fleet: A from below, B brighter");
+        assert_eq!(key_light(&set(0.9, 0.87, 0.3, -0.48)), [0.5, 0.0, 0.87], "A brighter: kept");
+        assert_eq!(key_light(&set(0.4, -0.5, 0.8, -0.48)), [0.5, 0.0, -0.5], "A from above: kept");
     }
 
     #[test]

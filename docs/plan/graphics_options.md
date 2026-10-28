@@ -23,11 +23,12 @@ stored; it is read back from the options. Options never change game state: the g
 | HUD | Original / Sharp pixels / High resolution | the 512×416 screen through the display copy B (half a pixel across, like the world) and scaled up with bilinear filtering, as the TV and an emulator's display showed it; Sharp pixels = nearest (the port's earlier look); High resolution = drawn at the frame's resolution | Original / Sharp pixels done |
 | Ambient occlusion | Original / On | the baked vertex colours only | built (`ao_render.rs`, `ao.wgsl`): a spiral SSAO from the depth buffer after the opaque pass, a depth-aware 4×4 blur, multiplied into the frame before the transparent pass; faded out by 150 units; the 32 nearest drawn mobys are left unoccluded inside their bounding spheres, above their feet and in front of the sphere's centre (the wall behind a climbing Ratchet keeps its occlusion). Off: the pass is not added (no `AoTarget` on the view) |
 | Particles | Original / Soft | sprites cut where they cross the world | built (`particle_render.rs`, `particle.wgsl`): the blend alpha fades over 1.5 units in front of the depth copy. Original: fade distance 0, the factor is 1 |
-| Shadows | On / Off / Dynamic | On: the game's shadows, cast by characters and enemies (the classes with a shadow block) | On / Off exist; Dynamic built (`sun_shadow.rs`, `sun_shadow.wgsl`, `sun_rays.rs`, `sun_rays.wgsl`): in place of the game's shadows, a sun light along the level's key light (`ShadowGame::sun_light`: light set 0's direction A, fixed for the level, raised to at least 60° on the same bearing) with a cascaded shadow map (3 cascades to 150 units) that every tfrag (its LOD-0 list), tie (LOD 0 unmorphed, the ones culled for the camera too: `tie_lod` hides none while the sun casts), shrub (cut out by its texture's alpha) and moby casts into through its shader's `PREPASS_PIPELINE` branch (the GS alpha test kept, non-Z-writing passes skipped), received by a full-screen pass over the depth buffer (3×3 PCF, multiplied in before the transparent pass); and the same sun's rays, the bright sky around its screen point blurred radially at half resolution (40 taps) and added in PostProcess before the AA blit, skipped with the sun behind the camera, faded at the screen edge and the horizon. Not part of the preset |
+| Lighting | Original / Simple / Enhanced | the game's shadows, cast by characters and enemies (the classes with a shadow block, `shadow_render.rs`) | done (2026-10-23; it replaced the Shadows row On / Off / Dynamic: Original is the old On, Simple the old Dynamic without the rays, Enhanced the old Dynamic). Simple (`sun_shadow.rs`, `sun_shadow.wgsl`): in place of the game's shadows, a sun light along the level's key light (`ShadowGame::sun_light`: light set 0's direction A, or its light B where A lights from below and B is the brighter, as on Drek's fleet (`shadow_render::key_light`), fixed for the level, raised to at least 60° on the same bearing) with a cascaded shadow map (3 cascades to 150 units) that every tfrag (its LOD-0 list), tie (LOD 0 unmorphed, the ones culled for the camera too: `tie_lod` hides none while the sun casts), shrub (cut out by its texture's alpha) and moby casts into through its shader's `PREPASS_PIPELINE` branch (the GS alpha test kept, non-Z-writing passes skipped), received by a full-screen pass over the depth buffer (3×3 PCF, multiplied in before the transparent pass). Enhanced: Simple's shadows and every advanced lighting effect, today the same sun's rays (`sun_rays.rs`, `sun_rays.wgsl`), the bright sky around its screen point blurred radially at half resolution (40 taps) and added in PostProcess before the AA blit, skipped with the sun behind the camera, faded at the screen edge and the horizon. **The gate:** a new lighting effect (volumetric light, global illumination) runs only while `GraphicsSettings::lighting.enhanced()` (`Lighting::enhanced`; `Lighting::sun_shadows` / `game_shadows` pick the shadows), in the main world or the render world's extracted copy. Not part of the preset (a preset keeps it; the Preset row ignores it) |
 | Water | Original / Enhanced | the level-code water as the game draws it | built (`water_render.rs`, `water.wgsl`): on clear FX textures (`clear_water`, by average colour; lava and sludge stay Original; the log names each texture's verdict) the surface passes (kinds 0 and 2) draw the whole water from the scene copy, opaque: travelling sine-wave normals, the bed bent by them (refraction) and absorbed over the thickness toward the texture's colour, caustics on the bed, a Fresnel screen-space reflection (fog colour where the ray leaves the screen), a sun glint and shore foam; the second layers (kinds 1 and 3) draw nothing. Port-only addition: a shallow sheet flowing down every flow chute (class 679's splines, `chute_water.rs`; kind 4: the slope's normal tilted by a height field carried at the chute's speed, white streaks along the flow; rows over strip water left out; a row stops at the chute's walls and at a step up, so it never spreads onto the floor a chute is sunk in, and rows on open ground are left out), which the game leaves bare. Original: the shader's Original branch returns what it did before; kind 4 draws nothing |
 
 Enhanced: Anti-aliasing 4x (the best of 4x / 2x the GPU offers), Detail Far, Textures Smooth, HUD High resolution
-(Original until High resolution exists), Ambient occlusion On, Water Enhanced, Particles Soft.
+(Original until High resolution exists), Ambient occlusion On, Water Enhanced, Particles Soft. Neither preset touches
+Lighting, as it did not touch the Shadows row before it (`GraphicsSettings::with_preset` keeps it, `preset` ignores it).
 
 ## Notes
 
@@ -39,11 +40,14 @@ Enhanced: Anti-aliasing 4x (the best of 4x / 2x the GPU offers), Detail Far, Tex
 * The anti-aliasing row offers 2x / 4x / 8x only where the GPU can multisample the world's attachments (M-series: no 8x);
   the old `msaa = N` key is read once when `anti_aliasing` is missing (N > 1 keeps that multisampling, else Original).
 * Persisted keys in the port settings file: `anti_aliasing` (`original`, `off`, `2x`, `4x`, `8x`), `hud`, `textures`,
-  `detail`, `ambient_occlusion`, `water`, `particles` (values: the lower-case names), `shadows`
-  (`on`, `off`, `dynamic`). `RC_GFX_ANTI_ALIASING`, `RC_MSAA=0|2|4|8`, `RC_GFX_HUD`, `RC_GFX_TEXTURES`,
-  `RC_GFX_DETAIL`, `RC_GFX_AMBIENT_OCCLUSION`, `RC_GFX_WATER`, `RC_GFX_PARTICLES`,
-  `RC_GFX_PRESET=original|enhanced` and `RC_SHADOWS=0|1|dynamic` override at start. A `sun_rays` key left by an
-  earlier build is ignored (the rays are part of Shadows Dynamic).
+  `detail`, `ambient_occlusion`, `water`, `particles` (values: the lower-case names), `lighting`
+  (`original`, `simple`, `enhanced`). `RC_GFX_ANTI_ALIASING`, `RC_MSAA=0|2|4|8`, `RC_GFX_HUD`, `RC_GFX_TEXTURES`,
+  `RC_GFX_DETAIL`, `RC_GFX_AMBIENT_OCCLUSION`, `RC_GFX_WATER`, `RC_GFX_PARTICLES`, `RC_GFX_LIGHTING`,
+  `RC_GFX_PRESET=original|enhanced` (Lighting still from the file) override at start; the older `RC_SHADOWS=1|dynamic`
+  sets Lighting Original / Enhanced (under `RC_GFX_LIGHTING`), and `RC_SHADOWS=0` is a developer switch for no
+  shadows at all (`ShadowSettings::off`; the row has no Off). Migration: the Shadows row's `shadows` key is read once
+  when `lighting` is missing: `on` and `off` → Original, `dynamic` → Enhanced; the next save writes `lighting`. A
+  `sun_rays` key left by an earlier build is ignored (the rays are part of Lighting Enhanced).
 * The shared pieces: `fx_view.rs` / `fx_view.wgsl` (the view uniform, declared in the module at group 0 binding 0
   because naga_oil cannot pass a uniform's struct to an imported function by value, and the full-screen pipeline
   helpers; identifiers in that module must not end in a digit, which naga_oil renames),
@@ -62,4 +66,38 @@ Enhanced: Anti-aliasing 4x (the best of 4x / 2x the GPU offers), Detail Far, Tex
   shadow map was right (read back with `RC_SUN_DUMP`), but the Novalis key light is only 33° high, so the giant
   trees' canopies (ties) covered the spawn area. The sun now keeps the key light's bearing at 60° or more; checked
   with `RC_SUN_DEBUG` at the spawn (Ratchet, plants and tree bases cast onto lit ground).
+* Lighting checked 2026-10-23 (Novalis, `RC_SCENE=0`, `RC_SCREENSHOT_FRAME=400`, against the build before it): at the
+  spawn view Original is byte-identical to Shadows On, and Simple and Enhanced to Dynamic (the sun is off screen there,
+  so no rays); on a fly view toward the sun (`RC_PLAY_FLY=1`, `RC_SUN_DIR`) Enhanced is byte-identical to Dynamic and
+  Simple differs from it only by the rays (about a third of the pixels, the sky brighter toward the sun).
 * The Port Options page (fourteen rows) keeps the Camera sub-page's frame and scrolls, four rows at a time (port.rs `VISIBLE`).
+
+## Light shafts per level
+
+Lighting Enhanced's light shafts (the sun rays, `sun_rays.rs`, and the volumetric light, `volumetric_light.rs`) run
+only on the levels of `graphics::SHAFT_LEVELS` (`LightShafts`, `shafts_on_level`), and never while the title world or a
+level transition's cards, movies and flight show (the space scenes: `Travel::in_transition`, `TitleWorldRt::shown`).
+From the 2026-10-26 play test: on levels without a sun lighting open air the shafts only veil or streak the view.
+`RC_LIGHT_SHAFTS=1|0` forces them on or off everywhere (testing).
+
+| Level | Shafts | Why |
+|---|---|---|
+| 00 Veldin | on | desert daylight |
+| 01 Novalis | on | daylight |
+| 02 Aridia | off | dust haze, no sun to cast them |
+| 03 Kerwan | on | daylight through the tunnels |
+| 04 Eudora | on | daylight in the forest |
+| 05 Rilgar | off | night |
+| 06 Nebula G34 | off | indoor station, no visible sun |
+| 07 Umbris | off | dark swamp, no visible sun |
+| 08 Batalia | off | rain |
+| 09 Gaspar | on | daylight |
+| 10 Orxon | off | night |
+| 11 Pokitaru | on | daylight |
+| 12 Hoven | off | night |
+| 13 Gemlik | on | the sun in its sky |
+| 14 Oltanis | off | overcast, no visible sun |
+| 15 Quartu | off | night, indoor factory |
+| 16 Kalebo III | on | daylight |
+| 17 Drek's fleet | on | the sun in its sky |
+| 18 Veldin | on | daylight |

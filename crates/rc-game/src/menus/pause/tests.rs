@@ -712,9 +712,9 @@ fn port_page_from_the_disc() {
     assert_eq!((o.sounds, m.port_value(Setting::AntiAliasing)), (vec![MenuSound::Confirm], Some(2)));
     for _ in 0..3 { m.tick(&press(button::CROSS), &mut g, &env); }
     assert_eq!(m.port_value(Setting::AntiAliasing), Some(0), "wraps after 8x");
-    // Down moves through the rows and stops at the last one (port::ENTRIES); back up to the shadows row (default on =
-    // value 0), ✕ cycles it off, dynamic and back on.
-    assert_eq!(m.port_value(Setting::Shadows), Some(0));
+    // Down moves through the rows and stops at the last one (port::ENTRIES); back up to the lighting row (default
+    // Original = value 0), ✕ cycles it Simple, Enhanced and back to Original.
+    assert_eq!(m.port_value(Setting::Lighting), Some(0));
     for _ in aa + 1..port::ENTRIES.len() {
         let o = m.tick(&press(button::DOWN), &mut g, &env);
         assert_eq!(o.sounds, vec![MenuSound::Cursor]);
@@ -724,13 +724,16 @@ fn port_page_from_the_disc() {
     // The list scrolls: the last rows are the ones shown.
     let Data::Port(pl) = &m.widgets[&port::LIST_W].data else { panic!() };
     assert_eq!(pl.top as usize, port::ENTRIES.len() - port::VISIBLE);
-    for _ in port::row_of(Setting::Shadows).unwrap() + 1..port::ENTRIES.len() { m.tick(&press(button::UP), &mut g, &env); }
+    for _ in port::row_of(Setting::Lighting).unwrap() + 1..port::ENTRIES.len() { m.tick(&press(button::UP), &mut g, &env); }
     m.tick(&press(button::CROSS), &mut g, &env);
-    assert_eq!((m.port_value(Setting::Shadows), m.port_value(Setting::AntiAliasing)), (Some(1), Some(0)));
+    assert_eq!((m.port_value(Setting::Lighting), m.port_value(Setting::AntiAliasing)), (Some(1), Some(0)));
     m.tick(&press(button::CROSS), &mut g, &env);
-    assert_eq!(m.port_value(Setting::Shadows), Some(2), "dynamic");
+    assert_eq!(m.port_value(Setting::Lighting), Some(2), "enhanced");
     m.tick(&press(button::CROSS), &mut g, &env);
-    assert_eq!(m.port_value(Setting::Shadows), Some(0), "on / off / dynamic wrap");
+    assert_eq!(m.port_value(Setting::Lighting), Some(0), "original / simple / enhanced wrap");
+    let e = port::ENTRIES[port::row_of(Setting::Lighting).unwrap()];
+    let names: Vec<_> = e.values.iter().map(|&v| port::text::get(v)).collect();
+    assert_eq!((port::text::get(e.label), names), (Some(&b"Lighting"[..]), vec![Some(&b"Original"[..]), Some(&b"Simple"[..]), Some(&b"Enhanced"[..])]));
     // Its values are the port's capitalised On / Off, not the game's lower-case ones (the Subtitles toggle's).
     let Data::Toggle(sub_t) = &m.widgets[&0x1b5160].data else { panic!() };
     assert_eq!((sub_t.entries[0].on, sub_t.entries[0].off), (20314, 20315));
