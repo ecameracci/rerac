@@ -178,7 +178,8 @@ pub fn apply_load_pass(root: &Path, index: u32, level: &mut LoadedLevel, save: &
     let ship_index = ship_index(index);
     let ship_class = moby_spawn::SHIP_CLASSES[ship_index];
     // `InitLevelRenderGlobals`: on level 13 with ship 2 and 0x160540 set (Gemlik's placed 533 adopted after the escape) the
-    // placed ship is adopted again (crate::gameplay) and none is created.
+    // placed ship is adopted again (crate::gameplay) and none is created. A load starts with 0x160540 clear (level-overlay
+    // data, crate::level_load::ship_adopted): only the death reload of that visit and `RC_SHIP_ADOPTED` get here.
     let adopts = index == 13 && ship_index == 2 && crate::level_load::ship_adopted();
     if adopts { println!("moby spawn: level 13 with ship 2 after the escape (0x160540): the placed ship 533 is the ship, none created"); }
     match if adopts { None } else { gameplay::ship_placement(&gameplay)? } {
