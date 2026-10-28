@@ -14,13 +14,15 @@
 //!   sphere (0.3, at the next point 0.2 up, flags 4, Ratchet ignored) and then a line from its bottom (0.15 of its
 //!   size under it) to the next bottom (flags 0): nothing → it moves on. A hit: it goes to the sphere's pushed centre
 //!   (0.2 down) or the line's point (the bottom offset back up), the velocity is reflected off the face ×0.5, and
-//!   slower than 0.01 a tick it **opens** (state 3) — on the world or a moby's mesh at once, on a moby's primitive after
-//!   240 slow ticks; then it moves by the velocity and a surface of kinds 0, 1, 3, 8, 0xb, 0xc, 0xd (water, lava…)
-//!   pops it (`0x2ddce0`: 20 type-5 puffs, state 4).
-//! * **3 open**: every 8 ticks one bot (`0x2d5a70`), at most 8 alive: the bots leave at the quarter turns
-//!   `(cos, sin)(k·π/2)·0.05` and 0.02 up from it, with that as their velocity; the fourth one → 4 (15 ticks later
-//!   when 8 are alive). A glow every 4 ticks while fewer than two are out.
-//! * **4 fading**: alpha −4 and scale ×0.92 a tick; deleted at alpha 0.
+//!   slower than 0.01 a tick — plus the length of Ratchet's displacement on a carrier (0x2deb78) — it **opens**
+//!   (state 3) — on the world or a moby's mesh at once, on a moby's primitive after 240 slow ticks; then it moves by
+//!   the velocity and a surface of kinds 0, 1, 3, 8, 0xb, 0xc, 0xd (water, lava…) pops it (`0x2ddce0`: 20 type-5
+//!   puffs, state 4).
+//! * **3 open**: every 8 ticks one bot (`0x2d5a70`), at most 8 alive (the count over every class-0xba moby, alive = state
+//!   `& 0xf0 != 0xf0`; with 8 it waits 15 ticks and retries — the game replaces none): the bots leave at the quarter
+//!   turns `(cos, sin)(k·π/2)·0.05` and 0.02 up from it, with that as their velocity; the fourth one → 4 (15 ticks later
+//!   when 8 are alive). A glow every 4 ticks while fewer than two are out. It rides the carrier under it (0x2dec74).
+//! * **4 fading**: alpha −4 and scale ×0.92 a tick; deleted at alpha 0. It rides the carrier too (0x2dee9c).
 //! * Out of the world box [2, 1021]³: deleted.
 //!
 //! **Pvars** (0x40): +0x00 velocity (the glove's aim writes it; 0 at the create), +0x10 /
@@ -29,13 +31,13 @@
 //! stops), +0x3c the bots made.
 //!
 //! Native `f32`; the rand draws are the game's. **Inferred [L]**: the owner is "the hand holds the Glove of Doom"
-//! (the glove is not a table moby); objects on moving platforms do not ride them (`0x275290` / `0x2752c0`, 0x13f64c:
-//! never set in the port); the pop's type-5 puffs are records only (type 5: G-PRT-001); the gold canister
+//! (the glove is not a table moby); the pop's type-5 puffs are records only (type 5: G-PRT-001); the gold canister
 //! (0x13e534: half the class scale × 2, a sphere of 0.6) reads the mirrored gold table (`Weapons::gold`).
 
 use crate::moby_runtime::{MobyId, MobyTable};
 use crate::moby_update::creature::{self as c, fx, V};
-use crate::moby_update::services::{pvar as p, World};
+use crate::moby_update::services::{pv as pvq, pvar as p, World};
+use crate::moby_update::triggers;
 use crate::particles::type32;
 use crate::ps2v::Pf;
 
@@ -98,11 +100,16 @@ pub fn init_held(table: &mut MobyTable, id: MobyId, point: [f32; 3], hidden: boo
     if hidden { m.mode |= 0x41; }
 }
 
-/// `0x2ddf58(point, canister, vel)`: the release from the hand point, the velocity kept; the line from Ratchet at the
-/// point's height to it (flags 0, the world and the mobys, Ratchet ignored: `hit`, its point and raw normal) moves it
-/// onto the wall, `9·dt² − 0.1·dt²` out along the face, the velocity reflected off it ×0.6. State 2 either way.
-pub fn release(m: &mut crate::moby_runtime::Moby, point: [f32; 3], hit: Option<([f32; 3], [f32; 3])>) {
+/// `0x2ddf58(point, canister, vel)`: the release from the hand point, the velocity kept (plus Ratchet's displacement
+/// `carried` on a carrier: 0x13f450, the Metropolis train); the line from Ratchet at the point's height to it (flags 0,
+/// the world and the mobys, Ratchet ignored: `hit`, its point and raw normal) moves it onto the wall,
+/// `9·dt² − 0.1·dt²` out along the face, the velocity reflected off it ×0.6. State 2 either way.
+pub fn release(m: &mut crate::moby_runtime::Moby, point: [f32; 3], carried: Option<[f32; 3]>, hit: Option<([f32; 3], [f32; 3])>) {
     m.position = [point[0], point[1], point[2], m.position[3]];
+    if let Some(d) = carried {
+        let v = p::v4f(&m.pvars, pv::VEL);
+        p::set_v4f(&mut m.pvars, pv::VEL, c::add(v, [d[0], d[1], d[2], 0.0]));
+    }
     if let Some((hp, n)) = hit {
         let n4 = [n[0], n[1], n[2], 0.0];
         let off = c::set_len3(n4, DT2 * 9.0 - DT2 * 0.1);
@@ -175,6 +182,7 @@ fn step(w: &mut World, id: MobyId) {
         FLYING => fly(w, id),
         OPEN => open(w, id),
         FADING => {
+            ride(w, id);
             let m = w.mm(id);
             m.alpha = m.alpha.wrapping_sub(4);
             m.scale *= 0.92;
@@ -241,7 +249,12 @@ fn fly(w: &mut World, id: MobyId) {
     };
     let n = [hit.normal[0], hit.normal[1], hit.normal[2], 0.0];
     vel = c::scale(super::decoy::reflect(vel, n), 0.5);
-    if c::len3(vel) < 0.01 {
+    // `0x2deb78`: on a carrier (the hero's ground moby, `FUN_00275290`) the slow test's floor grows by the length of
+    // Ratchet's displacement this tick (0x13f450), so the canister opens without its world velocity dying (the train
+    // carries it).
+    let slack = crate::hero::gloves::carrier_disp(w.hero, w.table)
+        .map_or(0.0, |d| (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt());
+    if c::len3(vel) < 0.01 + slack {
         let k = c::pi16(w, id, pv::COUNT).wrapping_add(1);
         c::set_pi16(w, id, pv::COUNT, k);
         if hit.moby.is_none() || 0 < hit.kind || (w.ticks(0xf0) as i16) < k {
@@ -273,6 +286,7 @@ fn pop(w: &mut World, id: MobyId, surface: i32) {
 
 /// State 3 (module doc): the bots come out.
 fn open(w: &mut World, id: MobyId) {
+    ride(w, id);
     if c::dec_timer_pvar_s16(w, id, pv::COUNT) != 0 {
         let alive = w.table.mobys.iter().take_while(|m| m.state != crate::moby_runtime::state::END).filter(|m| m.o_class == super::doom_bot::CLASS && m.state & 0xf0 != 0xf0).count();
         if alive < MAX_BOTS {
@@ -295,6 +309,19 @@ fn open(w: &mut World, id: MobyId) {
         let t4 = w.ticks(4);
         c::set_pi32(w, id, pv::PUFF_T, t4);
         glow(w, id);
+    }
+}
+
+/// `GroundHeight(0.5, pos, 0)` and `CarryRider` (0x2dec74 / 0x2dee9c): an open or fading canister rides the carrier
+/// under it, so it stays where it lands (the Metropolis train, the lifts); the flying state does not.
+fn ride(w: &mut World, id: MobyId) {
+    let q = c::pos(w, id);
+    let on = w.coll_line(pvq([q[0], q[1], q[2] + 0.5, q[3]]), pvq([q[0], q[1], 0.01, q[3]]), 2, None).and_then(|h| h.moby);
+    if let Some(k) = on.and_then(|k| w.table.mobys.get(k)).and_then(triggers::carrier) {
+        let m = w.mm(id);
+        let (p, r) = triggers::carried(&k, [m.position[0], m.position[1], m.position[2]], [m.rotation[0], m.rotation[1], m.rotation[2]]);
+        m.position[..3].copy_from_slice(&p);
+        m.rotation[..3].copy_from_slice(&r);
     }
 }
 
@@ -327,7 +354,7 @@ mod tests {
         let c = b.create(CLASS);
         init_held(&mut b.table, c, at, false);
         set_velocity(&mut b.table.mobys[c], vel);
-        release(&mut b.table.mobys[c], at, None);
+        release(&mut b.table.mobys[c], at, None, None);
         c
     }
 
@@ -416,7 +443,7 @@ mod tests {
             assert!(n[0] == 0.0 && n[1] == 0.0 && 0.0 < n[2], "flat (the face's raw normal): {n:?}");
             assert_eq!(p::v4f(&b.table.mobys[c].pvars, pv::POINT)[..3], r[0].point[..], "kept in +0x10");
         }
-        release(&mut b.table.mobys[c], [20.3, 20.0, 9.0], None);
+        release(&mut b.table.mobys[c], [20.3, 20.0, 9.0], None, None);
         b.tick(None);
         assert!(b.svc.reticles.of_tick(b.counter).is_empty(), "no ring once thrown");
         assert_eq!(p::i16(&b.table.mobys[c].pvars, pv::NEW_HELD), 1, "marked: a new canister in the glove");
@@ -436,5 +463,26 @@ mod tests {
         assert_eq!(b.alive(doom_bot::CLASS), 8, "no ninth bot");
         assert_eq!(p::i16(&b.table.mobys[c].pvars, pv::COUNT), 15, "tries again in 15 ticks");
         assert_eq!(p::i32(&b.table.mobys[c].pvars, pv::BOTS), 0);
+    }
+
+    /// `0x2ddf58` adds Ratchet's displacement 0x13f450 to the throw velocity when he stands on a carrier (the
+    /// Metropolis train): the canister keeps his momentum, and a wall's reflection works on the result.
+    #[test]
+    fn a_carrier_lends_the_throw_his_displacement() {
+        let at = [20.0, 20.0, 8.0];
+        let thrown = |carried: Option<[f32; 3]>, hit: Option<([f32; 3], [f32; 3])>| {
+            let m = crate::moby_runtime::Moby { o_class: CLASS, pvars: vec![0; pv::SIZE], ..Default::default() };
+            let mut table = MobyTable::new(vec![m], 0);
+            init_held(&mut table, 0, at, false);
+            set_velocity(&mut table.mobys[0], [0.02, 0.03, 0.04]);
+            release(&mut table.mobys[0], at, carried, hit);
+            p::v4f(&table.mobys[0].pvars, pv::VEL)
+        };
+        assert_eq!(thrown(None, None), [0.02, 0.03, 0.04, 0.0], "off a carrier: the aim's velocity alone");
+        let carried = thrown(Some([0.1, 0.2, 0.3]), None);
+        assert!((carried[0] - 0.12).abs() < 1e-6 && (carried[1] - 0.23).abs() < 1e-6 && (carried[2] - 0.34).abs() < 1e-6, "{carried:?}");
+        // A wall along z: x and y survive (scaled by 0.6), the z component is reflected.
+        let hit = thrown(Some([0.1, 0.2, 0.3]), Some((at, [0.0, 0.0, 1.0])));
+        assert!((hit[0] - 0.072).abs() < 1e-6 && (hit[1] - 0.138).abs() < 1e-6 && (hit[2] + 0.204).abs() < 1e-6, "{hit:?}");
     }
 }

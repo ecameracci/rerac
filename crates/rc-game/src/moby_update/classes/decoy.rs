@@ -11,7 +11,8 @@
 //!
 //! **States** (+0x20):
 //! * **0 / 1 held** (the glove places it every tick; hidden while the first-person camera is up): deleted when the
-//!   hand no longer holds the Decoy Glove (or Ratchet is not on foot). The landing preview runs while held.
+//!   hand no longer holds the Decoy Glove (or Ratchet is not on foot). The landing preview runs while held from the
+//!   state-1 update (the create leaves the velocity 0: the state-0 update has nothing to preview).
 //! * **2 flying**: grows to the class scale (0.02 a tick), gravity 9·dt², pushed apart from the other decoys within
 //!   1.8, moved by `walker::move_collide` (`0x26d610`: up 0.2, radius 0.2; Ratchet's collision off while he aims in
 //!   first person). On a wall or floor (move bit 0) a sphere test (0.23, 0.2 up) gives the face: the velocity
@@ -166,11 +167,16 @@ pub fn release_line(from: [f32; 3], point: [f32; 3]) -> [f32; 3] {
     if l == 0.0 { from } else { std::array::from_fn(|k| from[k] + d[k] * (l + 0.2) / l) }
 }
 
-/// `0x2d94f0(point, decoy, vel)`: the release from the hand point (the velocity kept); the line of [`release_line`]
-/// (the world and the mobys, Ratchet ignored: `hit`) — none → state 2 (flying); a hit → it stands there, velocity 0,
-/// state 4 with a 30-tick timer, tilted 10 % toward the face.
-pub fn release(m: &mut crate::moby_runtime::Moby, point: [f32; 3], hit: Option<([f32; 3], [f32; 3])>) {
+/// `0x2d94f0(point, decoy, vel)`: the release from the hand point (the velocity kept, plus Ratchet's displacement
+/// `carried` on a carrier: 0x13f450, the Metropolis train); the line of [`release_line`] (the world and the mobys,
+/// Ratchet ignored: `hit`) — none → state 2 (flying); a hit → it stands there, velocity 0, state 4 with a 30-tick
+/// timer, tilted 10 % toward the face.
+pub fn release(m: &mut crate::moby_runtime::Moby, point: [f32; 3], carried: Option<[f32; 3]>, hit: Option<([f32; 3], [f32; 3])>) {
     m.position = [point[0], point[1], point[2], m.position[3]];
+    if let Some(d) = carried {
+        let v = p::v4f(&m.pvars, pv::VEL);
+        p::set_v4f(&mut m.pvars, pv::VEL, c::add(v, [d[0], d[1], d[2], 0.0]));
+    }
     match hit {
         None => m.state = FLYING,
         Some((hp, n)) => {
@@ -641,6 +647,7 @@ pub(crate) fn short_glove_preview(w: &mut World, id: MobyId, held: bool, vel: [f
 pub(crate) mod tests {
     use super::*;
     use crate::hero::testkit::{cell, mesh};
+    use crate::moby_runtime::Moby;
     use crate::moby_update::classes::bomb_water::tests::{pool, Bench};
 
     /// A floor of surface `kind & 0x1f` at `z` over x, y in 0..48.
@@ -661,7 +668,7 @@ pub(crate) mod tests {
         let mut rng = crate::rng::Rng::new();
         init_held(&mut b.table, d, &mut rng, at, false, false);
         set_velocity(&mut b.table.mobys[d], vel);
-        release(&mut b.table.mobys[d], at, None);
+        release(&mut b.table.mobys[d], at, None, None);
         d
     }
 
@@ -709,5 +716,25 @@ pub(crate) mod tests {
         b.hero.f532 = 0;
         for _ in 0..90 { b.tick(None); }
         assert_eq!(p::i32(&b.table.mobys[d].pvars, pv::PUSHED), 0, "the push ends");
+    }
+
+    /// `0x2d94f0` adds Ratchet's displacement 0x13f450 to the throw velocity when he stands on a carrier (the
+    /// Metropolis train): the decoy keeps his momentum. A wall hit still clears the velocity, taking it with it.
+    #[test]
+    fn a_carrier_lends_the_throw_his_displacement() {
+        let at = [20.0, 20.0, 8.0];
+        let thrown = |carried: Option<[f32; 3]>, hit: Option<([f32; 3], [f32; 3])>| {
+            let m = Moby { o_class: CLASS, pvars: vec![0; pv::SIZE], ..Moby::default() };
+            let mut table = MobyTable::new(vec![m], 0);
+            let mut rng = crate::rng::Rng::new();
+            init_held(&mut table, 0, &mut rng, at, false, false);
+            set_velocity(&mut table.mobys[0], [0.02, 0.03, 0.04]);
+            release(&mut table.mobys[0], at, carried, hit);
+            p::v4f(&table.mobys[0].pvars, pv::VEL)
+        };
+        assert_eq!(thrown(None, None), [0.02, 0.03, 0.04, 0.0], "off a carrier: the aim's velocity alone");
+        let carried = thrown(Some([0.1, 0.2, 0.3]), None);
+        assert!((carried[0] - 0.12).abs() < 1e-6 && (carried[1] - 0.23).abs() < 1e-6 && (carried[2] - 0.34).abs() < 1e-6, "{carried:?}");
+        assert_eq!(thrown(Some([0.1, 0.2, 0.3]), Some((at, [0.0, 0.0, 1.0]))), [0.0; 4], "a wall hit clears it");
     }
 }

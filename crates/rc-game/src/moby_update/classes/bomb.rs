@@ -167,7 +167,7 @@ pub fn update(w: &mut World, id: MobyId) {
         if hide && m.state == HELD { m.mode |= 0x41; } else { m.mode &= !0x41; }
     }
     // The glove's bomb (owner +0x50 = the glove) with a velocity and +0x56 clear: the landing preview and its reticle
-    // (`0x2c2be0(pvars, bomb, 1)`; the moving-platform variants 0 / 2 need 0x13f64c, which the port never sets).
+    // (`0x2c2be0(pvars, bomb, 1)`: the plain arc; the carrier variants 0 / 2 are G-WPN-018).
     {
         let pv = &w.m(id).pvars;
         let v = p::v4f(pv, pv::VEL);

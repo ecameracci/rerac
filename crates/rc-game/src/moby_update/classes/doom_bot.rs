@@ -7,7 +7,9 @@
 //! **What a bot does.** It drops out of the canister (state 0xe: gravity, pushed apart from the other bots), then
 //! walks (the shared creature walker: `walker::walk_to` = `0x26de80`, `walker::step`, `walker::move_collide`) toward
 //! a heading it picks with the hop solver (four probe lines over a 106° fan, then two whiskers that nudge it off
-//! walls). One tick in four (`randi(4)`) it searches the **target list** 0x1abe80 for a creature (class type 5)
+//! walls). Every tick it also rides the carrier its ground line finds (`0x2d6260`, `CarryRider` 0x2752c0), so it stays
+//! on the platform it stands on (the Metropolis train, the lifts). One tick in four (`randi(4)`) it searches the
+//! **target list** 0x1abe80 for a creature (class type 5)
 //! within 40 (score: the distance to its aim point 0.4 up + the squared yaw and pitch differences from the bot's
 //! facing, +15 when it stands 3.25 above the bot, +5 when the line to it is blocked — within 30 a line test (flags 6)
 //! unless more than 8 apart in height, farther the "drawn last frame" byte); none found and Ratchet more than 3.2 away
@@ -44,13 +46,14 @@
 //!
 //! Native `f32`; the rand draws are the game's. **Inferred [L]**: J +0x2c (the "arrived" distance), +0x34, +0x38
 //! (the walker flags) and +0x4c are BSS the bots never write (0); the gold bots (0x13e534: size, reach, the anim
-//! speed, class sound 4, the blast's colour shift) read the mirrored gold table (`Weapons::gold`); moving platforms (`0x2752c0`) are n/a (0x13f64c is never set);
-//! the debug prints and lines (`STUB_printf`, `0x2d5478`, `0x26e3e8` only feeds them and the arc test) have no effect;
+//! speed, class sound 4, the blast's colour shift) read the mirrored gold table (`Weapons::gold`); the debug prints and
+//! lines (`STUB_printf`, `0x2d5478`, `0x26e3e8` only feeds them and the arc test) have no effect;
 //! `+0xbc = 0xd` on a planned jump is written and read by nothing.
 
 use crate::moby_runtime::{mode, MobyId};
 use crate::moby_update::creature::{self as c, attack, fx, ground, knock, turn, walker, DT, DT2, SPEED, V};
 use crate::moby_update::services::{pv as pvq, pvar as p, sphere_mobys_in, World};
+use crate::moby_update::triggers;
 use crate::ps2v::Pf;
 use std::f32::consts::{FRAC_PI_2, PI};
 
@@ -645,6 +648,18 @@ pub fn update(w: &mut World, id: MobyId) {
             return;
         }
         if 4000 < c::pi32(w, id, pv::PATIENCE) { w.mm(id).state = st::EXPLODE; }
+    }
+    // `GroundHeight(0.5, pos, 0)`'s hit moby (0x2d6254, 0x1742d8) and `CarryRider` (0x2d629c): a bot standing on a
+    // carrier moves and turns with it every tick, whatever its state, so it rides the Metropolis train and the lifts.
+    {
+        let q = c::pos(w, id);
+        let on = w.coll_line(pvq([q[0], q[1], q[2] + 0.5, q[3]]), pvq([q[0], q[1], 0.01, q[3]]), 2, None).and_then(|h| h.moby);
+        if let Some(k) = on.and_then(|k| w.table.mobys.get(k)).and_then(triggers::carrier) {
+            let m = w.mm(id);
+            let (p, r) = triggers::carried(&k, [m.position[0], m.position[1], m.position[2]], [m.rotation[0], m.rotation[1], m.rotation[2]]);
+            m.position[..3].copy_from_slice(&p);
+            m.rotation[..3].copy_from_slice(&r);
+        }
     }
     let end = match w.m(id).state {
         0 => {
