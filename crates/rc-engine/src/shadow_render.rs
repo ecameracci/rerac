@@ -73,7 +73,8 @@ pub const COUNT_FORMAT: TextureFormat = TextureFormat::R16Float;
 /// The shadows' developer switches; which shadows are drawn is the Lighting option (crate::graphics `Lighting`).
 #[derive(Resource, Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub struct ShadowSettings {
-    /// `RC_SHADOWS=0`: no shadows at all, neither the game's nor the sun's (the Lighting row has no Off).
+    /// `RC_SHADOWS=0`: no shadows at all, neither the game's nor the sun's, nor the sun's rays (crate::sun_rays; the
+    /// Lighting row has no Off).
     pub off: bool,
     /// `RC_SHADOW_DEBUG=1`: show the count target.
     pub debug: bool,
@@ -119,6 +120,14 @@ impl ShadowGame {
     pub fn sun_light(&self) -> Option<Vec3> {
         let d = game_to_bevy(key_light(&self.set0));
         (d.length_squared() > 1e-6).then(|| d.normalize())
+    }
+
+    /// The colour of [`Self::sun_light`]'s light (light set 0's light [`key_light`] picks; 1.0 = 128 on the colour
+    /// byte): crate::volumetric_light's brightness.
+    pub fn sun_color(&self) -> Vec3 {
+        let s = &self.set0;
+        let c = if key_light(s) == [s.dir_a[0], s.dir_a[1], s.dir_a[2]] { s.color_a } else { s.color_b };
+        Vec3::new(c[0], c[1], c[2])
     }
 }
 

@@ -216,10 +216,10 @@ pub struct SkyStarOrder(pub u32);
 #[derive(Component)]
 pub struct SkyCamera;
 
-/// A sky mesh entity of shell `shell`.
+/// A sky mesh entity of shell `shell` (its `Transform` is the shell's SkyM; crate::sky_sun reads it).
 #[derive(Component)]
-struct SkyShellEntity {
-    shell: usize,
+pub(crate) struct SkyShellEntity {
+    pub(crate) shell: usize,
 }
 
 /// Rotating shells of this level and whether the rotation runs (`RC_SKY_ROT`).

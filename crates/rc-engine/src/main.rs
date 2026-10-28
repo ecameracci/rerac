@@ -108,6 +108,7 @@ mod shrub_light;
 mod shrub_render;
 mod sky_render;
 mod sky_stars;
+mod sky_sun;
 mod text_render;
 mod tfrag_light;
 mod tfrag_lod;
@@ -128,6 +129,7 @@ mod scene_copy;
 mod sun_rays;
 mod sun_shadow;
 mod thruster_render;
+mod volumetric_light;
 mod world_lights;
 
 use bevy::core_pipeline::tonemapping::{DebandDither, Tonemapping};
@@ -230,8 +232,8 @@ fn main() -> anyhow::Result<()> {
     .add_plugins(shadow_render::ShadowPlugin)
     .add_plugins(pre_shadow::PreShadowPlugin)
     // The port's modern options (crate::graphics, Lighting Simple / Enhanced): sun shadows, ambient occlusion, the scene copy
-    // the soft particles and the water read, sun rays.
-    .add_plugins((fx_view::FxViewPlugin, sun_shadow::SunShadowPlugin, ao_render::AoPlugin, scene_copy::SceneCopyPlugin, sun_rays::SunRaysPlugin))
+    // the soft particles and the water read, sun rays, volumetric light.
+    .add_plugins((fx_view::FxViewPlugin, sun_shadow::SunShadowPlugin, ao_render::AoPlugin, scene_copy::SceneCopyPlugin, sun_rays::SunRaysPlugin, volumetric_light::VolumetricLightPlugin))
     .add_plugins(frame_log::FrameLogPlugin)
     .add_plugins(session::SessionPlugin)
     .insert_resource(spawn)
