@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.3.8-alpha
+
+Fixes and features from the community's pull requests.
+
+- Coming back to Gemlik after the escape, your ship is waiting for you again.
+- Gold weapons look gold all over, as on the PS2.
+- The Decoy Glove and the Glove of Doom show where they will land, like the Bomb Glove and the Mine Glove.
+- Mines, decoys and Doom bots thrown from the Metropolis train keep the train's speed, land where the reticle shows and ride along with it.
+- Kalebo III's breakroom chickens peck, cluck, run from Ratchet and can be hit again.
+- Wrench throws in first person follow Ratchet's tilt on the Magneboots.
+- The game remembers the language you pick, and the first start follows your computer's language when the game has it.
+- A new Fill aspect ratio uses the whole window, for ultrawide and other uncommon screens.
+- Every connected controller is read, not just the first, and the 8BitDo Ultimate's buttons are right on Linux.
+- The memory card folder can be set in the settings file, and a memcard folder next to the game is used when there is one.
+
 ## v0.3.7-alpha
 
 Fixes from the v0.3.6 bug reports on Discord.
