@@ -75,10 +75,11 @@ pub fn set_velocity(m: &mut crate::moby_runtime::Moby, v: [f32; 3]) {
     p::set_v4f(&mut m.pvars, pv::VEL, [v[0], v[1], v[2], 0.0]);
 }
 
-/// `0x2dde80(glove, point, point)`: the new canister (the caller's `CreateMoby(0xe6)`): update / draw distances 0xff,
-/// visible, state 0 at the hand point, the velocity word = the point (the aim writes it before its next update), the
-/// owner, the counter and the glow timer 0, a hundredth of the class scale; hidden in first person or with the hand
-/// hidden.
+/// `0x2dde80(glove, point, vel)`: the new canister (the caller's `CreateMoby(0xe6)`): update / draw distances 0xff,
+/// visible, state 0 at the hand point, the velocity 0 (the caller's `grip` is zeroed; the aim fills it, and a value
+/// here would let the create tick's preview take its flying branch, whose "a new object in the glove" flag ends every
+/// later held reticle), the owner, the counter and the glow timer 0, a hundredth of the class scale; hidden in first
+/// person or with the hand hidden.
 pub fn init_held(table: &mut MobyTable, id: MobyId, point: [f32; 3], hidden: bool) {
     let m = &mut table.mobys[id];
     m.draw_dist = 0xff;
@@ -88,7 +89,7 @@ pub fn init_held(table: &mut MobyTable, id: MobyId, point: [f32; 3], hidden: boo
     m.position = [point[0], point[1], point[2], m.position[3]];
     if m.pvars.len() < pv::SIZE { m.pvars.resize(pv::SIZE, 0); }
     let pvs = &mut m.pvars;
-    p::set_v4f(pvs, pv::VEL, [point[0], point[1], point[2], 0.0]);
+    p::set_v4f(pvs, pv::VEL, [0.0; 4]);
     p::set_i32(pvs, pv::OWNER, 1);
     p::set_i16(pvs, pv::COUNT, 0);
     p::set_i32(pvs, pv::PUFF_T, 0);
@@ -146,8 +147,8 @@ fn step(w: &mut World, id: MobyId) {
         let m = w.mm(id);
         if fp && m.state <= 1 { m.mode |= 0x41; } else { m.mode &= !0x41; }
     }
-    // The landing preview (the owner is the glove in hand, no new canister in it, a velocity); never draws in the game
-    // (hero_gameplay.md §13: the first update's "flying" branch marks the canister in the glove as a new one).
+    // The landing preview (the owner is the glove in hand, no new canister in it, a velocity): the held canister's
+    // reticle (hero_gameplay.md §13).
     if glove_in_hand(w) && c::pi16(w, id, pv::NEW_HELD) == 0 && 0.0 < c::len3(c::pv4(w, id, pv::VEL)) { preview(w, id); }
     match w.m(id).state {
         0 => {
