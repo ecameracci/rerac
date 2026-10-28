@@ -507,7 +507,7 @@ fn build_sprites(
     mut buffers: ResMut<Assets<ShaderBuffer>>,
     mut draws: Query<(&mut Visibility, &ParticleDraw)>,
     fog: Option<Res<crate::game_camera::GameFog>>,
-    frame: Res<crate::display::GameFrame>,
+    (frame, mut smooth, phase): (Res<crate::display::GameFrame>, ResMut<crate::frame_smooth::ParticleSmooth>, Res<crate::frame_smooth::TickPhase>),
 ) {
     let (Some(mut sim), Some(mut mesh)) = (sim, mesh) else { return };
     let Some((t, proj)) = cams.iter().next() else { return };
@@ -578,6 +578,9 @@ fn build_sprites(
     sim.drawn = items.len();
     sim.culled = culled;
     sim.other_kinds += other;
+    // Frame smoothing (crate::frame_smooth): the drawn points between the last two ticks; the culls above are the tick's.
+    let recs = &sim.sys.pool.recs;
+    smooth.begin(&phase, recs.len(), |i| (recs[i][1] & 0x80 == 0).then(|| (rec::pos(&recs[i]), rec::v3(&recs[i], 0x20))));
 
     let ParticleMesh { sprites: groups, buffers: handles } = &mut *mesh;
     for g in groups.iter_mut() { g.clear(); }
@@ -588,7 +591,7 @@ fn build_sprites(
             // Kind 2 (L3): a one-pixel Gouraud line, untextured, ALPHA 0x44, the raw colours. Kind 3 (L4): the
             // textured ribbon p1 ± n̂·w1, p2 ± n̂·w1·k (n̂ ⟂ the ribbon and the view), colours 1, 1, 2, 2 with the
             // alphas faded, its record's blend. `it.alpha` holds the fade m (0..0x1000).
-            let (p1, p2) = (game_to_bevy(rec::pos(r)).to_array(), game_to_bevy(rec::v3(r, 0x20)).to_array());
+            let (p1, p2) = (game_to_bevy(smooth.pos(it.index, 0, rec::pos(r))).to_array(), game_to_bevy(smooth.pos(it.index, 1, rec::v3(r, 0x20))).to_array());
             let (c1, c2) = (rec::u32(r, 4), rec::u32(r, 0xc));
             let fade = |c: u32| (c & 0x00ff_ffff) | (((c >> 24) * it.alpha) >> 12).min(0xff) << 24;
             let layer = if (r[2] as u32) < n_layers { r[2] as u32 } else { 0 };
@@ -611,7 +614,7 @@ fn build_sprites(
             let (s, c) = (theta.sin() * q, theta.cos() * q);
             ([c, 1.0625 * s], [-s, 1.0625 * c])
         };
-        let centre = game_to_bevy(rec::pos(r)).to_array();
+        let centre = game_to_bevy(smooth.pos(it.index, 0, rec::pos(r))).to_array();
         let rgba = (rec::u32(r, 4) & 0x00ff_ffff) | it.alpha.min(0xff) << 24;
         let layer = if (r[2] as u32) < n_layers { r[2] as u32 } else { 0 };
         let additive = r[3] == 0x48;

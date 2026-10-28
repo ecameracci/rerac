@@ -344,7 +344,41 @@ struct Stats {
     build: Duration,
 }
 
+/// One class part's vertices before they become a mesh (crate::foliage replicates them for its plant copies).
+pub(crate) struct PartGeometry {
+    pub texture: usize,
+    skey: SamplerKey,
+    pub pos: Vec<[f32; 3]>,
+    pub uv: Vec<[f32; 2]>,
+    /// [`ATTRIBUTE_SHRUB_INFO`].
+    pub info: Vec<u32>,
+    pub idx: Vec<u32>,
+    pub tris: usize,
+}
+
+impl PartGeometry {
+    /// The part's texture sampler (its ad-gif's CLAMP wrap).
+    pub fn sampler(&self) -> ImageSamplerDescriptor { self.skey.descriptor() }
+}
+
+/// [`part_geometry`] without the load statistics.
+pub(crate) fn class_geometry(c: &LevelShrubClass) -> Vec<PartGeometry> { part_geometry(c, &mut Stats::default()) }
+
 fn build_parts(c: &LevelShrubClass, meshes: &mut Assets<Mesh>, st: &mut Stats) -> Vec<Part> {
+    part_geometry(c, st)
+        .into_iter()
+        .map(|g| {
+            let mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD)
+                .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, g.pos)
+                .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, g.uv)
+                .with_inserted_attribute(ATTRIBUTE_SHRUB_INFO, VertexAttributeValues::Uint32(g.info))
+                .with_inserted_indices(Indices::U32(g.idx));
+            Part { texture: g.texture, skey: g.skey, mesh: meshes.add(mesh), triangles: g.tris }
+        })
+        .collect()
+}
+
+fn part_geometry(c: &LevelShrubClass, st: &mut Stats) -> Vec<PartGeometry> {
     #[derive(Default)]
     struct B { pos: Vec<[f32; 3]>, uv: Vec<[f32; 2]>, info: Vec<u32>, idx: Vec<u32>, remap: HashMap<(usize, u16, u32), u32>, tris: usize }
     // Texture slot → (wrap, TEX1 K as s12) of the ad-gif block that selects it. The GS state carries across
@@ -389,14 +423,7 @@ fn build_parts(c: &LevelShrubClass, meshes: &mut Assets<Mesh>, st: &mut Stats) -
     }
     by_key
         .into_iter()
-        .map(|((texture, skey), b)| {
-            let mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD)
-                .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, b.pos)
-                .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, b.uv)
-                .with_inserted_attribute(ATTRIBUTE_SHRUB_INFO, VertexAttributeValues::Uint32(b.info))
-                .with_inserted_indices(Indices::U32(b.idx));
-            Part { texture, skey, mesh: meshes.add(mesh), triangles: b.tris }
-        })
+        .map(|((texture, skey), b)| PartGeometry { texture, skey, pos: b.pos, uv: b.uv, info: b.info, idx: b.idx, tris: b.tris })
         .collect()
 }
 

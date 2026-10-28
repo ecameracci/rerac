@@ -2201,7 +2201,7 @@ fn record_placement(bytes: &[u8]) -> Option<([[f32; 3]; 3], [f32; 3], f32)> {
 /// The shine gate and basis of every extra instance with metal entities, from its record's model matrix
 /// (`game_to_bevy · [s/1024 · R | p]`, written by moby_attach) and the class sphere. The draw-distance, LOD
 /// and fade tests are not applied to extras.
-fn update_extra_metal(
+pub(crate) fn update_extra_metal(
     q: Query<&ExtraMetal>,
     cams: Query<&Transform, (With<Camera3d>, Without<crate::sky_render::SkyCamera>)>,
     mut buffers: ResMut<Assets<ShaderBuffer>>,
