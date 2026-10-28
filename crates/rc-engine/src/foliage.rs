@@ -377,9 +377,10 @@ fn follow_option(
 }
 
 /// `RC_FOLIAGE_TRACE=1` (the whole level) or `x,y,r` (the points within r of game x, y): per tfrag texture, its
-/// grass points, the raw texture's mean colour and grass-texel share, the points' mean vertex colour and drawn colour
-/// and their collision surfaces (dev: why a surface grows grass); with `x,y,r` also the plant copies there and their
-/// sources.
+/// grass points and where they lie on average, the raw texture's mean colour, grass-texel and green-lean shares, the
+/// points' mean vertex colour and drawn colour and their collision surfaces (dev: why a surface grows grass); with
+/// `x,y,r` also every upward ground texture there (area, height, vertex colour, its turf verdicts: why it grows
+/// nothing), the plant copies there and their sources.
 fn trace(input: &PlanInput, plan: &Plan) {
     let probe: Option<[f32; 3]> = std::env::var("RC_FOLIAGE_TRACE").ok().and_then(|v| {
         let p: Vec<f32> = v.split(',').filter_map(|s| s.trim().parse().ok()).collect();
@@ -388,6 +389,31 @@ fn trace(input: &PlanInput, plan: &Plan) {
     trace_at(input, plan, None);
     if probe.is_some() { trace_at(input, plan, probe); }
     let Some(p) = probe else { return };
+    // The ground there by texture: the upward faces whose centre lies within r (why it grows nothing).
+    let mut ground: BTreeMap<u32, (f32, [f32; 4], f32)> = BTreeMap::new();
+    for t in &input.tris {
+        let c: [f32; 3] = std::array::from_fn(|k| (t.p[0][k] + t.p[1][k] + t.p[2][k]) / 3.0);
+        if (c[0] - p[0]).hypot(c[1] - p[1]) > p[2] || !plan::faces_up(t.normal()) { continue; }
+        let n = t.normal();
+        let a = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt() * 0.5;
+        let e = ground.entry(t.tex).or_default();
+        e.0 += a;
+        for v in &t.col { for (s, c) in e.1.iter_mut().zip(v) { *s += *c as f32 * a / 3.0; } }
+        e.2 += c[2] * a;
+    }
+    for (tex, (area, col, z)) in &ground {
+        let raw = input.textures.get(*tex as usize).and_then(|x| x.as_ref()).map(plan::texture_stats);
+        let col = col.map(|v| v / area.max(1e-6));
+        println!(
+            "  ground tex {tex:4} {area:7.1} sq  z {:.1}  vtx {:?}  {}",
+            z / area.max(1e-6),
+            col.map(|v| v as u8),
+            raw.map_or("-".into(), |s| format!(
+                "{}x{} mean {:?} grass {:.2} lean {:.2} sd {:.1} turf {} muted turf {} drawn {:?}",
+                s.width, s.height, s.mean, s.grass_share, s.lean_share, s.luma_sd, plan::is_turf(&s), plan::is_muted_turf(&s), plan::modulate(s.mean, col)
+            ))
+        );
+    }
     for c in plan.copies.iter().filter(|c| (c.pos[0] - p[0]).hypot(c.pos[1] - p[1]) <= p[2]) {
         let s = &input.plants[c.src];
         println!("  copy of shrub class {} (instance {} at {:?}) at {:?}", s.class, s.instance, s.origin, c.pos);
@@ -396,7 +422,7 @@ fn trace(input: &PlanInput, plan: &Plan) {
 
 fn trace_at(input: &PlanInput, plan: &Plan, probe: Option<[f32; 3]>) {
     #[derive(Default)]
-    struct T { n: usize, col: [f32; 4], drawn: [f32; 3], surf: BTreeMap<i32, usize>, nz: f32 }
+    struct T { n: usize, col: [f32; 4], drawn: [f32; 3], surf: BTreeMap<i32, usize>, nz: f32, pos: [f32; 3] }
     let mut by: BTreeMap<u32, T> = BTreeMap::new();
     for g in &plan.grass {
         if let Some(p) = probe { if (g.pos[0] - p[0]).hypot(g.pos[1] - p[1]) > p[2] { continue; } }
@@ -406,6 +432,7 @@ fn trace_at(input: &PlanInput, plan: &Plan, probe: Option<[f32; 3]>) {
         for v in &t.col { for (s, c) in e.col.iter_mut().zip(v) { *s += *c as f32 / 3.0; } }
         for (s, c) in e.drawn.iter_mut().zip(g.root) { *s += c as f32 / 0.88; }
         *e.surf.entry(g.surface).or_default() += 1;
+        for (s, c) in e.pos.iter_mut().zip(g.pos) { *s += c; }
         let n = t.normal();
         e.nz += n[2].abs() / (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt().max(1e-9);
     }
@@ -416,9 +443,10 @@ fn trace_at(input: &PlanInput, plan: &Plan, probe: Option<[f32; 3]>) {
         let n = t.n as f32;
         let raw = input.textures.get(*tex as usize).and_then(|x| x.as_ref()).map(plan::texture_stats);
         println!(
-            "  tex {tex:4} {:5} pts  raw {}  vtx {:?}  drawn {:?}  nz {:.2}  surfaces {:?}",
+            "  tex {tex:4} {:5} pts  around {:?}  raw {}  vtx {:?}  drawn {:?}  nz {:.2}  surfaces {:?}",
             t.n,
-            raw.map_or("-".into(), |s| format!("{}x{} mean {:?} grass {:.2} sd {:.1}", s.width, s.height, s.mean, s.grass_share, s.luma_sd)),
+            t.pos.map(|v| (v / n).round() as i32),
+            raw.map_or("-".into(), |s| format!("{}x{} mean {:?} grass {:.2} lean {:.2} sd {:.1}", s.width, s.height, s.mean, s.grass_share, s.lean_share, s.luma_sd)),
             t.col.map(|v| (v / n) as u8),
             t.drawn.map(|v| (v / n) as u8),
             t.nz / n,

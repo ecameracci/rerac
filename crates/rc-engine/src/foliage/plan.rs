@@ -10,7 +10,9 @@
 //!   the baked light alone turns sand, paving and grey metal green on Aridia, Blarg, Pokitaru or Oltanis), no other
 //!   opaque tfrag that is not grass ground lies just over it (a path or a decal: [`Grid::covered`]), and a `coll_line`
 //!   from [`RAY_ABOVE`] above to [`RAY_BELOW`] below first meets walkable collision within [`GROUND_TOLERANCE`] of the
-//!   drawn surface ([`ground_hit`], [`ground_verdict`], [`walkable`]). A kept
+//!   drawn surface ([`ground_hit`], [`ground_verdict`], [`walkable`]). A [`LEVEL_GROUND`] level (Umbris) also grows
+//!   on muted turf ([`is_muted_turf`]: grey-green leaves the vertex light turns olive) and only a share of the
+//!   option's clumps and copies ([`level_density`]). A kept
 //!   point is a blade clump, or with the chances [`Density::ferns`] / [`Density::flowers`] a fern or a flower cluster
 //!   ([`Kind`]).
 //! * **Plant copies**: around each placed instance of the level's small plant shrub classes (crate::foliage
@@ -48,6 +50,14 @@ pub const MIN_GRASS_SHARE: f32 = 0.15;
 /// grass-and-dirt edges the highest); the teal glowing panels of Blarg, Gemlik, Quartu and Veldin's finale, whose
 /// darker texels pass as blue-green, are 46 to 64.
 pub const MAX_LUMA_SD: f32 = 40.0;
+/// Muted turf ([`is_muted_turf`], [`LevelGround::muted_turf`]): a 5×5 texel average leans green when its green
+/// exceeds the mean of red and blue by this much ([`leans_green`]) ...
+pub const MIN_LEAN: f32 = 3.0;
+/// ... and at least this share of a texture's averages do: Umbris' grey-green leaves 0.58 to 0.68, its grass-and-mud
+/// edges 0.31 to 0.54, its grey-purple mud 0.
+pub const MIN_LEAN_SHARE: f32 = 0.25;
+/// The most a leaning average's blue may exceed its green (Umbris' leaves are blue-grey-green; teal is not).
+pub const MAX_BLUE_OVER: f32 = 12.0;
 /// Collision surfaces nothing grows on (rc_game::hero::surface): 0 water, 1 hot floor, 2 magnetic, 3 sinking
 /// liquid, 4 sinking floor, 7 slippery, 8 / 0xc pits, 0xb liquid, 0xd deadly liquid, 0xe shallow water.
 pub const BARREN_SURFACES: [i32; 11] = [0, 1, 2, 3, 4, 7, 8, 0xb, 0xc, 0xd, 0xe];
@@ -75,6 +85,32 @@ pub const NO_FOLIAGE: [(u32, &str); 3] = [
 
 /// Why level `level` grows nothing ([`NO_FOLIAGE`]), None where it may.
 pub fn no_foliage(level: u32) -> Option<&'static str> { NO_FOLIAGE.iter().find(|e| e.0 == level).map(|e| e.1) }
+
+/// A level whose grass is not the usual turf ([`LEVEL_GROUND`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LevelGround {
+    pub level: u32,
+    /// Its grass is painted grey-green and lit olive by the vertex colours: muted turf ([`is_muted_turf`]) grows too.
+    pub muted_turf: bool,
+    /// The share of the option's clumps and plant copies it grows (a sparse cover).
+    pub density: f32,
+    pub why: &'static str,
+}
+
+pub const LEVEL_GROUND: [LevelGround; 1] = [LevelGround {
+    level: 7,
+    muted_turf: true,
+    density: 0.3,
+    why: "Umbris: grey-green leaves lit olive by the vertex light, few texels green on their own",
+}];
+
+pub fn level_ground(level: u32) -> Option<&'static LevelGround> { LEVEL_GROUND.iter().find(|g| g.level == level) }
+
+/// The option's numbers on level `level`: [`LevelGround::density`] of the clumps and copies.
+pub fn level_density(level: u32, d: &Density) -> Density {
+    let k = level_ground(level).map_or(1.0, |g| g.density);
+    Density { clumps: d.clumps * k, copies: d.copies * k, ..*d }
+}
 
 /// One option value's numbers.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -180,7 +216,8 @@ impl Tex {
 }
 
 /// A texture's whole-image numbers: size, the opaque texels' mean colour, the share of them that read as grass on
-/// their own ([`is_grass`]) and the spread (standard deviation) of their luma.
+/// their own ([`is_grass`]), the spread (standard deviation) of their luma and the share of the 5×5 averages on a
+/// 4-texel grid that lean green ([`leans_green`]).
 #[derive(Clone, Copy, Debug)]
 pub struct TexStats {
     pub width: u32,
@@ -188,6 +225,7 @@ pub struct TexStats {
     pub mean: [u8; 3],
     pub grass_share: f32,
     pub luma_sd: f32,
+    pub lean_share: f32,
 }
 
 pub fn texture_stats(t: &Tex) -> TexStats {
@@ -200,7 +238,23 @@ pub fn texture_stats(t: &Tex) -> TexStats {
     }
     let n1 = n.max(1.0);
     let m = l1 / n1;
-    TexStats { width: t.width, height: t.height, mean: s.map(|v| (v / n1) as u8), grass_share: (g / n1) as f32, luma_sd: (l2 / n1 - m * m).max(0.0).sqrt() as f32 }
+    let (mut lean, mut cells) = (0usize, 0usize);
+    for y in (2..t.height.max(1)).step_by(4) {
+        for x in (2..t.width.max(1)).step_by(4) {
+            let (rgb, a) = t.sample([(x as f32 + 0.5) / t.width as f32, (y as f32 + 0.5) / t.height as f32]);
+            if a < OPAQUE_TEXEL { continue; }
+            cells += 1;
+            lean += leans_green(rgb) as usize;
+        }
+    }
+    TexStats {
+        width: t.width,
+        height: t.height,
+        mean: s.map(|v| (v / n1) as u8),
+        grass_share: (g / n1) as f32,
+        luma_sd: (l2 / n1 - m * m).max(0.0).sqrt() as f32,
+        lean_share: lean as f32 / cells.max(1) as f32,
+    }
 }
 
 /// One LOD-0 tfrag triangle: world positions, UVs (S, T / 4096), the lit vertex colours (0x80 = 1.0) and its texture
@@ -393,10 +447,38 @@ pub fn is_grass(rgb: [u8; 3]) -> bool {
 /// [`MAX_LUMA_SD`].
 pub fn is_turf(s: &TexStats) -> bool { s.grass_share >= MIN_GRASS_SHARE && s.luma_sd <= MAX_LUMA_SD }
 
-/// Drawn ground grass grows on: a turf texture ([`is_turf`]) whose texels under the point read as grass on their own
+/// A 5×5 texel average whose green exceeds the mean of its red and blue by [`MIN_LEAN`], exceeds its red and is
+/// within [`MAX_BLUE_OVER`] of its blue: grey-green (not orange, not teal).
+pub fn leans_green(rgb: [u8; 3]) -> bool {
+    let [r, g, b] = rgb.map(|c| c as f32);
+    g - (r + b) * 0.5 >= MIN_LEAN && g > r && b <= g + MAX_BLUE_OVER
+}
+
+/// Muted turf (only on a [`LevelGround::muted_turf`] level): at least [`MIN_LEAN_SHARE`] of its averages lean green
+/// and its luma spreads at most [`MAX_LUMA_SD`].
+pub fn is_muted_turf(s: &TexStats) -> bool { s.lean_share >= MIN_LEAN_SHARE && s.luma_sd <= MAX_LUMA_SD }
+
+/// What a texture is to the grass ([`Grid::new`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Turf {
+    No,
+    /// [`is_turf`].
+    Green,
+    /// [`is_muted_turf`] on a [`LevelGround::muted_turf`] level.
+    Muted,
+}
+
+/// Drawn ground grass grows on: on turf ([`is_turf`]) where the texels under the point read as grass on their own
 /// (`raw`: the texture's colour, so sand or a grey floor lit green by the baked vertex colours does not pass) and as
-/// drawn (`drawn`: × the vertex colour, so turf in shadow or tinted away from green does not).
-pub fn grass_ground(raw: [u8; 3], drawn: [u8; 3], turf: bool) -> bool { turf && is_grass(raw) && is_grass(drawn) }
+/// drawn (`drawn`: × the vertex colour, so turf in shadow or tinted away from green does not); on muted turf where
+/// they lean green ([`leans_green`]: the leaves, not the mud between them) and are not black as drawn.
+pub fn grass_ground(raw: [u8; 3], drawn: [u8; 3], turf: Turf) -> bool {
+    match turf {
+        Turf::No => false,
+        Turf::Green => is_grass(raw) && is_grass(drawn),
+        Turf::Muted => leans_green(raw) && drawn.into_iter().max().unwrap_or(0) as f32 >= 0.08 * 255.0,
+    }
+}
 
 /// A drawn colour: the texel average × the vertex colour (GS MODULATE, 0x80 = 1.0), clamped.
 pub fn modulate(tex: [u8; 3], col: [f32; 4]) -> [u8; 3] {
@@ -421,16 +503,25 @@ pub fn fern_colours(ground: [u8; 3]) -> ([u8; 3], [u8; 3]) {
     (root, tip)
 }
 
-/// The tfrags over a horizontal cell grid, for the cover test and the copies' drawn ground, and whether each texture
-/// is turf ([`is_turf`]).
+/// The tfrags over a horizontal cell grid, for the cover test and the copies' drawn ground, and what each texture is
+/// to the grass ([`Turf`]).
 struct Grid {
     cells: HashMap<(i32, i32), Vec<u32>>,
-    turf: Vec<bool>,
+    turf: Vec<Turf>,
 }
 
 impl Grid {
     fn new(input: &PlanInput) -> Self {
-        let turf = input.textures.iter().map(|t| t.as_ref().is_some_and(|t| is_turf(&texture_stats(t)))).collect();
+        let muted = level_ground(input.level).is_some_and(|g| g.muted_turf);
+        let turf = input
+            .textures
+            .iter()
+            .map(|t| match t.as_ref().map(texture_stats) {
+                Some(s) if is_turf(&s) => Turf::Green,
+                Some(s) if muted && is_muted_turf(&s) => Turf::Muted,
+                _ => Turf::No,
+            })
+            .collect();
         let mut cells: HashMap<(i32, i32), Vec<u32>> = HashMap::new();
         for (i, t) in input.tris.iter().enumerate() {
             let (mut lo, mut hi) = ([f32::MAX; 2], [f32::MIN; 2]);
@@ -447,7 +538,7 @@ impl Grid {
 
     fn at(&self, x: f32, y: f32) -> &[u32] { self.cells.get(&(cell(x), cell(y))).map_or(&[], |v| v) }
 
-    fn turf(&self, tex: u32) -> bool { self.turf.get(tex as usize).copied().unwrap_or(false) }
+    fn turf(&self, tex: u32) -> Turf { self.turf.get(tex as usize).copied().unwrap_or(Turf::No) }
 
     /// Another opaque tfrag that is not grass ground ([`grass_ground`]) lies over `p` (from 0.03 under it to
     /// [`COVER_ABOVE`] over it).
@@ -511,6 +602,7 @@ pub fn plan(input: &PlanInput, d: &Density) -> Plan {
         return Plan { grass: Vec::new(), copies: Vec::new(), stats: PlanStats { no_foliage: Some(why), time: t0.elapsed(), ..PlanStats::default() } };
     }
     let seed = level_seed(input.level);
+    let d = &level_density(input.level, d);
     let grid = Grid::new(input);
     let threads = std::thread::available_parallelism().map_or(1, |n| n.get()).clamp(1, 8);
     let chunk = input.tris.len().div_ceil(threads).max(1);
@@ -547,7 +639,8 @@ fn grass_range(input: &PlanInput, grid: &Grid, d: &Density, seed: u64, range: st
         st.candidates += n;
         if !faces_up(t.normal()) { st.steep += n; continue; }
         let Some(Some(tex)) = input.textures.get(t.tex as usize) else { st.not_grass += n; continue };
-        if !grid.turf(t.tex) { st.not_grass += n; st.non_grass_texture += n; continue; }
+        let turf = grid.turf(t.tex);
+        if turf == Turf::No { st.not_grass += n; st.non_grass_texture += n; continue; }
         for _ in 0..n {
             // Uniform on the triangle.
             let (r1, r2) = (rng.f().sqrt(), rng.f());
@@ -557,7 +650,7 @@ fn grass_range(input: &PlanInput, grid: &Grid, d: &Density, seed: u64, range: st
             let (pick, size) = (rng.f(), rng.f());
             let (rgb, a) = tex.sample(uv);
             let ground = modulate(rgb, col);
-            if !opaque(a, col[3]) || !grass_ground(rgb, ground, true) {
+            if !opaque(a, col[3]) || !grass_ground(rgb, ground, turf) {
                 st.not_grass += 1;
                 if opaque(a, col[3]) && is_grass(ground) { st.tinted += 1; }
                 continue;
@@ -732,22 +825,47 @@ mod tests {
         ];
         for (raw, col) in lit {
             let drawn = modulate(raw, col.map(|c| c as f32));
-            assert!(!is_grass(raw) && !grass_ground(raw, drawn, true), "{raw:?} drawn {drawn:?}");
+            assert!(!is_grass(raw) && !grass_ground(raw, drawn, Turf::Green), "{raw:?} drawn {drawn:?}");
         }
         // The lawns: Novalis' spawn, Kerwan's start, Pokitaru's islands, Batalia's grass, Aridia's green patches.
         for (raw, col) in [([66, 100, 35], [109, 100, 76]), ([62, 79, 31], [117, 110, 71]), ([53, 116, 19], [135, 135, 86]), ([113, 127, 72], [63, 68, 53]), ([61, 96, 30], [43, 72, 79])] {
             let drawn = modulate(raw, [col[0] as f32, col[1] as f32, col[2] as f32, 128.0]);
-            assert!(grass_ground(raw, drawn, true), "{raw:?} drawn {drawn:?}");
+            assert!(grass_ground(raw, drawn, Turf::Green), "{raw:?} drawn {drawn:?}");
             // A green texel on a texture that is not turf grows nothing.
-            assert!(!grass_ground(raw, drawn, false));
+            assert!(!grass_ground(raw, drawn, Turf::No));
         }
         let mixed = Tex { width: 4, height: 1, rgba: [[60u8, 110, 40, 0xff], [150, 135, 85, 0xff], [150, 135, 85, 0xff], [0, 0, 0, 0]].concat() };
         let s = texture_stats(&mixed);
         assert!((s.grass_share - 1.0 / 3.0).abs() < 1e-6 && s.mean == [120, 126, 70] && s.luma_sd > 0.0);
-        let stats = |share: f32, sd: f32| TexStats { width: 1, height: 1, mean: [0; 3], grass_share: share, luma_sd: sd };
+        let stats = |share: f32, sd: f32| TexStats { width: 1, height: 1, mean: [0; 3], grass_share: share, luma_sd: sd, lean_share: 0.0 };
         // Turf (Novalis' edges, Kerwan's mixed ground); sand (0 grass texels); a teal glowing panel (Quartu's 93).
         assert!(is_turf(&stats(0.16, 20.0)) && is_turf(&stats(0.23, 33.8)) && is_turf(&stats(1.0, 3.0)));
         assert!(!is_turf(&stats(0.0, 5.6)) && !is_turf(&stats(0.38, 57.3)) && !is_turf(&stats(0.19, 46.4)));
+    }
+
+    #[test]
+    fn umbris_muted_turf() {
+        // Umbris' ground (5×5 texel averages of its grey-green leaves and grey-purple mud), lit olive at the ship's
+        // pad (marker 6): the leaves grow, the mud and the vertex light alone do not.
+        let (leaves, mud, lit) = ([70u8, 84, 82], [92u8, 96, 112], [116.0, 90.0, 61.0, 128.0]);
+        assert!(leans_green(leaves) && !leans_green(mud) && !is_grass(leaves));
+        // Its orange guide line and a teal panel do not lean green.
+        assert!(!leans_green([122, 75, 0]) && !leans_green([20, 90, 140]));
+        assert!(grass_ground(leaves, modulate(leaves, lit), Turf::Muted) && !grass_ground(leaves, modulate(leaves, lit), Turf::Green));
+        assert!(!grass_ground(mud, modulate(mud, lit), Turf::Muted));
+        assert!(!grass_ground(leaves, modulate(leaves, [8.0, 8.0, 8.0, 128.0]), Turf::Muted), "black as drawn");
+        let tex = |c: [u8; 3]| Tex { width: 8, height: 8, rgba: [c[0], c[1], c[2], 0xff].repeat(64) };
+        let (l, m) = (texture_stats(&tex(leaves)), texture_stats(&tex(mud)));
+        assert!(is_muted_turf(&l) && !is_turf(&l) && !is_muted_turf(&m) && l.lean_share == 1.0 && m.lean_share == 0.0);
+        // Only Umbris takes muted turf, and grows a sparse share of the option's grass.
+        let input = |level| PlanInput { level, tris: vec![], textures: vec![Some(tex(leaves))], collision: None, plants: vec![] };
+        assert_eq!(Grid::new(&input(7)).turf(0), Turf::Muted);
+        assert_eq!(Grid::new(&input(1)).turf(0), Turf::No);
+        let (m, l) = (density(Foliage::Moderate).unwrap(), density(Foliage::Lush).unwrap());
+        let (um, ul) = (level_density(7, &m), level_density(7, &l));
+        assert!(ul.clumps < 0.5 * l.clumps && ul.clumps < m.clumps && um.clumps < ul.clumps && ul.copies < l.copies);
+        assert_eq!(level_density(1, &l), l);
+        for g in LEVEL_GROUND { assert!(no_foliage(g.level).is_none() && g.density > 0.0 && g.density < 1.0); }
     }
 
     #[test]
