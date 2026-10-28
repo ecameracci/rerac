@@ -19,8 +19,6 @@ struct LiquidParams {
     flow: vec4<f32>,
     // xyz = toward the key light (world).
     sun: vec4<f32>,
-    // xyz = the mean colour of a layer the look replaces (display, 0..1; ice).
-    add: vec4<f32>,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(0) var tex: texture_2d<f32>;
@@ -64,21 +62,13 @@ fn modulate(t: vec4<f32>, c: vec3<f32>) -> vec3<f32> {
 fn fragment(in: LiquidVertexOutput) -> @location(0) vec4<f32> {
     var frame = liquid_frame(in.world, in.uv, vec2<f32>(0.0, params.flow.w));
     frame.grid = params.misc.y;
-    frame.add = params.add.xyz;
     let kind = u32(params.misc.x + 0.5);
     let rgb = modulate(textureSample(tex, tex_sampler, in.uv), in.color.rgb);
     // Four taps around for the mud's low-contrast colour.
     let d = 0.37;
-    var soft = (modulate(textureSample(tex, tex_sampler, in.uv + vec2<f32>(d, 0.0)), in.color.rgb)
+    let soft = (modulate(textureSample(tex, tex_sampler, in.uv + vec2<f32>(d, 0.0)), in.color.rgb)
         + modulate(textureSample(tex, tex_sampler, in.uv + vec2<f32>(-d, d)), in.color.rgb)
         + modulate(textureSample(tex, tex_sampler, in.uv + vec2<f32>(0.0, -d)), in.color.rgb) + rgb) * 0.25;
-    // Ice: four more, nearer, for a colour without the pattern.
-    let e = 0.19;
-    let more = (modulate(textureSample(tex, tex_sampler, in.uv + vec2<f32>(e, e)), in.color.rgb)
-        + modulate(textureSample(tex, tex_sampler, in.uv + vec2<f32>(-e, 0.0)), in.color.rgb)
-        + modulate(textureSample(tex, tex_sampler, in.uv + vec2<f32>(0.0, e * 2.0)), in.color.rgb)
-        + modulate(textureSample(tex, tex_sampler, in.uv + vec2<f32>(e * 1.5, -e)), in.color.rgb)) * 0.25;
-    if (kind == 4u) { soft = (soft + more) * 0.5; }
     let to_eye = normalize(view.world_position - in.world);
     let sky = srgb_to_linear(mix(fog.color.rgb, vec3<f32>(1.0), 0.25));
     var col = liquid_look(kind, rgb, soft, in.uv, in.world, vec2<f32>(0.0), params.flow, normalize(params.sun.xyz), sky, to_eye, globals.time, frame);

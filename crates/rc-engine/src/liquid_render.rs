@@ -18,13 +18,15 @@
 //!   (crate::sun_shadow::KeyLight) with a sharp highlight and a Fresnel sky (the fog colour, brightened);
 //! * **sludge**: murky, a weak emissive tint of its colour, slow ripples and bubbles that swell and pop;
 //! * **ice** (Hoven's slush): flat and still. The game scrolls its two layers (FX 0x2f opaque, FX 0x30 added over it
-//!   at `fix2`) against each other, which reads as rolling waves; here the opaque layers drift at [`ICE_DRIFT`] of
-//!   their speed, the added pass is not drawn and its mean colour goes on top instead ([`LiquidGroup::add`]), the
-//!   texture's pattern is mostly smoothed out and taken toward a pale ice blue, with cloudy patches, cracks, frost
-//!   flecks, a sky sheen and a sharp glint (`ICE`).
+//!   at `fix2`) against each other, which reads as rolling waves; here every layer drifts at [`ICE_DRIFT`] of its
+//!   speed. The opaque layers keep the game's own darker green-blue colour and pattern, with only a faint sky sheen
+//!   and a sharp glint (`ICE`); the added pass, the white streaks, stays the game's draw over them.
 //!
-//! Drawn as opaque world surfaces (the main pass, Z written; a translucent grid, Oltanis's FIX 0x40 mud, becomes
-//! opaque), with the level's or the grid's fog, seen from either side. Not in
+//! A translucent grid is a fog or cloud layer, never a liquid ([`layer_verdict`]: Oltanis's 1260, mud-brown at FIX
+//! 0x40, is the haze at the bottom of the world), so it stays Original whatever its colour.
+//!
+//! Drawn as opaque world surfaces (the main pass, Z written), with the level's or the grid's fog, seen from either
+//! side. Not in
 //! the planar reflection (crate::water_mirror): none of them mirrors. Drawing only: collision, damage and the game
 //! state are untouched, no random numbers are drawn.
 //!
@@ -108,6 +110,13 @@ pub fn classify(rgb: [u8; 3]) -> LiquidKind {
     LiquidKind::Original
 }
 
+/// A translucent liquid grid (`grid`, its FIX below 0x80) is a fog or cloud layer under the level, not a liquid
+/// (Oltanis's 1260 at FIX 0x40, the haze at the bottom of the world; Kerwan's 994 cloud floor at 0x20): no look of
+/// this module, it stays Original. Clear water keeps crate::sea_water's verdict.
+pub fn layer_verdict(kind: LiquidKind, grid: bool, fix: u8) -> LiquidKind {
+    if grid && fix < 0x80 && kind.drawn_here() { LiquidKind::Original } else { kind }
+}
+
 /// `RC_LIQUID_FX=0`: only water goes Enhanced.
 pub fn enabled() -> bool { !std::env::var("RC_LIQUID_FX").is_ok_and(|v| v.trim() == "0") }
 
@@ -153,11 +162,10 @@ const LAVA_FINE: Vec4 = Vec4::new(0.85, 3.0, 3.7, 6.0);
 /// [`layer_flow`] without a second pass: ST per second and offset.
 pub const DRIFT: Vec4 = Vec4::new(0.011, -0.017, 0.5, 0.0);
 
-/// The ice look (`liquid_look.wgsl` ICE): the texture's own pattern kept over its smoothed colour, the share taken
-/// toward a pale ice blue, the cracks' and frost's strength, the sky sheen's share of the Fresnel term. The shader
+/// The ice look (`liquid_look.wgsl` ICE): the sky sheen's share of the Fresnel term, the glint's strength. The shader
 /// holds it; this copy is the tests'.
 #[cfg(test)]
-const ICE: Vec4 = Vec4::new(0.25, 0.65, 0.3, 0.6);
+const ICE: Vec2 = Vec2::new(0.35, 0.3);
 
 /// Ice's drift: the share of the game's scroll speed its layers keep (module doc).
 pub const ICE_DRIFT: f32 = 0.05;
@@ -171,15 +179,6 @@ pub fn hoven_ice(water_on: bool) -> bool { water_on && enabled() && forced().is_
 pub fn hoven_scroll(speed: [f32; 2], counter: u64) -> [f32; 2] {
     let t = (counter % (60 * 60 * 60)) as f32 / 60.0;
     speed.map(|v| (v * ICE_DRIFT * t).rem_euclid(1.0))
-}
-
-/// The mean colour an additive pass adds (display, 0..1): the texture's average RGB (bytes) under MODULATE by the strips'
-/// average vertex colour (bytes / 128), times `fix` / 128 (`Cs·FIX + Cd`).
-pub fn added_mean(tex_avg: [f32; 3], prims: &PrimBuf, fix: u8) -> Vec3 {
-    let (_, _, color, _) = prims.parts();
-    let n = color.len().max(1) as f32;
-    let cv = color.iter().fold(Vec3::ZERO, |a, c| a + Vec3::new(c[0], c[1], c[2])) / n;
-    (Vec3::from_array(tex_avg) * cv * (fix as f32 / 128.0) / 255.0).min(Vec3::ONE)
 }
 
 /// A flat draw's ST per world unit (the square root of the ratio of the ST area to the world area of its first
@@ -208,8 +207,6 @@ pub struct LiquidGroup {
     /// A liquid grid's own draw: its ST per world unit ([`st_per_unit`]; the look's layers on the world plane); 0: in
     /// the draw's ST.
     pub grid: f32,
-    /// The mean colour of a pass the look replaces (display, 0..1; ice: Hoven's added layer, [`added_mean`]).
-    pub add: Vec3,
 }
 
 /// `liquid.wgsl`'s static uniform.
@@ -221,8 +218,6 @@ pub struct LiquidParams {
     pub flow: Vec4,
     /// xyz = toward the key light (world).
     pub sun: Vec4,
-    /// xyz = [`LiquidGroup::add`].
-    pub add: Vec4,
 }
 
 #[derive(Asset, TypePath, AsBindGroup, Debug, Clone)]
@@ -332,7 +327,7 @@ pub fn draw(
             hide(&mut vis, &mut st.slots[k]);
             continue;
         }
-        let params = LiquidParams { misc: Vec4::new(g.kind.shader_id(), g.grid, 0.0, 0.0), flow: g.flow, sun, add: g.add.extend(0.0) };
+        let params = LiquidParams { misc: Vec4::new(g.kind.shader_id(), g.grid, 0.0, 0.0), flow: g.flow, sun };
         if let Some((e, mesh, mat, shown)) = &mut st.slots[k] {
             g.prims.update(&mut meshes, mesh);
             if materials.get(&*mat).is_none_or(|m| m.texture != g.image || m.fog != g.fog || m.params != params) {
@@ -394,6 +389,15 @@ mod tests {
     }
 
     #[test]
+    fn a_translucent_grid_is_a_fog_layer() {
+        // Oltanis 1260: mud by colour, FIX 0x40.
+        assert_eq!(layer_verdict(classify([101, 79, 58]), true, 0x40), LiquidKind::Original);
+        assert_eq!(layer_verdict(LiquidKind::Mud, true, 0x80), LiquidKind::Mud);
+        assert_eq!(layer_verdict(LiquidKind::Lava, false, 0x60), LiquidKind::Lava);
+        assert_eq!(layer_verdict(LiquidKind::Water, true, 0x20), LiquidKind::Water);
+    }
+
+    #[test]
     fn the_switches_force_or_drop_the_kinds() {
         assert_eq!(verdict([132, 23, 0], true, None), LiquidKind::Lava);
         assert_eq!(verdict([132, 23, 0], false, None), LiquidKind::Original);
@@ -423,11 +427,8 @@ mod tests {
         let s = hoven_scroll([0.3, -0.2], 600);
         assert!((s[0] - 0.3 * ICE_DRIFT * 10.0).abs() < 1e-5 && (s[1] - (1.0 - 0.2 * ICE_DRIFT * 10.0)).abs() < 1e-5, "{s:?}");
         assert!(hoven_scroll([5.0, 7.0], 123_457).iter().all(|v| (0.0..1.0).contains(v)));
-        // The added pass's mean: texture × vertex colour (0x80 = 1) × FIX / 128.
-        let m = added_mean([100.0, 200.0, 50.0], &b, 0x40);
-        assert!((m - Vec3::new(100.0, 200.0, 50.0) / 255.0 * 0.5).length() < 1e-5, "{m}");
         let look = include_str!("../assets/shaders/liquid_look.wgsl");
-        let line = format!("const ICE: vec4<f32> = vec4<f32>({:?}, {:?}, {:?}, {:?});", ICE.x, ICE.y, ICE.z, ICE.w);
+        let line = format!("const ICE: vec2<f32> = vec2<f32>({:?}, {:?});", ICE.x, ICE.y);
         assert!(look.contains(&line), "{line}");
     }
 

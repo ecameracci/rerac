@@ -67,20 +67,18 @@ fn lfbm(p: vec2<f32>, world: bool) -> f32 {
 
 // What lava's fine detail needs of the surface (`liquid_frame`): the world normal, the world velocity of the draw's
 // scroll, a pixel's footprint in world units and in ST; set by the caller: `grid` a liquid grid's ST per world unit
-// (crate::liquid_render::LiquidGroup::grid; 0: the noise in the draw's ST), `add` the mean colour of a layer the look
-// replaces (display, 0..1; ice: Hoven's additive pass, crate::liquid_render::LiquidGroup::add).
+// (crate::liquid_render::LiquidGroup::grid; 0: the noise in the draw's ST).
 struct LiquidFrame {
     n: vec3<f32>,
     vel: vec3<f32>,
     foot: f32,
     st_foot: f32,
     grid: f32,
-    add: vec3<f32>,
 }
 
 // A flat, still frame without footprints (water.wgsl's patches: never lava).
 fn still_frame() -> LiquidFrame {
-    return LiquidFrame(vec3<f32>(0.0, 1.0, 0.0), vec3<f32>(0.0), 0.0, 0.0, 0.0, vec3<f32>(0.0));
+    return LiquidFrame(vec3<f32>(0.0, 1.0, 0.0), vec3<f32>(0.0), 0.0, 0.0, 0.0);
 }
 
 // The frame from the screen derivatives of the world position and the ST (call in uniform control flow); `scroll` the
@@ -100,7 +98,7 @@ fn liquid_frame(world: vec3<f32>, uv: vec2<f32>, scroll: vec2<f32>) -> LiquidFra
         vel = -(tu * scroll.x + tv * scroll.y);
         vel *= min(1.0, LAVA_FINE.w / max(length(vel), 1e-6));
     }
-    return LiquidFrame(n, vel, max(length(wx), length(wy)), max(length(ux), length(uy)), 0.0, vec3<f32>(0.0));
+    return LiquidFrame(n, vel, max(length(wx), length(wy)), max(length(ux), length(uy)), 0.0);
 }
 
 // Lava's fine detail (crate::liquid_render::LAVA_FINE): x = cells per world unit of its cracks, y = the period (s) of
@@ -145,21 +143,9 @@ fn lava_fine(world: vec3<f32>, f: LiquidFrame, t: f32) -> vec3<f32> {
     return vec3<f32>(a * wa + b * (1.0 - wa), keep);
 }
 
-// Ice (crate::liquid_render::ICE): x = the texture's own pattern kept over its smoothed colour, y = the share taken
-// toward ICE_TINT, z = the cracks' and the frost's strength, w = the sky sheen's share of the Fresnel term.
-const ICE: vec4<f32> = vec4<f32>(0.25, 0.65, 0.3, 0.6);
-// Pale blue ice (display), scaled by the texture's light so its pattern stays.
-const ICE_TINT: vec3<f32> = vec3<f32>(0.6, 0.78, 0.84);
-
-// Ice's cracks at `xz` (1 on a crack): the thin zero lines of a warped noise layer (cells of about 8 units), only in
-// patches (about a third of the surface: a dense web reads as caustics), faded once a line is under a pixel of
-// `foot` (world units per pixel).
-fn ice_cracks(xz: vec2<f32>, foot: f32) -> f32 {
-    let warp = vec2<f32>(wnoise(xz * 0.08 + vec2<f32>(3.1, 0.7)), wnoise(xz * 0.08 + vec2<f32>(-1.7, 5.3)));
-    let crack = pow(clamp(1.0 - abs(wnoise(xz * 0.12 + warp * 0.6) * 3.0), 0.0, 1.0), 24.0);
-    let mask = smoothstep(0.05, 0.3, wnoise(xz * 0.05 + vec2<f32>(1.3, -2.2)));
-    return crack * mask * (1.0 - smoothstep(0.3, 1.0, foot));
-}
+// Ice (crate::liquid_render::ICE): x = the sky sheen's share of the Fresnel term (at most 0.25), y = the glint's
+// strength.
+const ICE: vec2<f32> = vec2<f32>(0.35, 0.3);
 
 // Mud: slow bulges over world xz (height in world units) that rise and settle.
 fn mud_height(xz: vec2<f32>, t: f32) -> f32 {
@@ -197,7 +183,7 @@ fn sludge_height(xz: vec2<f32>, t: f32) -> f32 {
 }
 
 // The look of `kind` in linear light: `rgb` the draw's MODULATE colour (display bytes / 255), `soft` the same at low
-// contrast (mud, ice; else `rgb`), `uv` its ST, `world` the Bevy position, `slope` an extra surface slope over world xz (the
+// contrast (mud; else `rgb`), `uv` its ST, `world` the Bevy position, `slope` an extra surface slope over world xz (the
 // ripple module's), `flow` the second lava layer (crate::liquid_render::layer_flow), `sun` toward the key light, `sky`
 // the reflected sky, `to_eye` toward the camera, `t` the frame time, `frame` the surface's (`liquid_frame`; lava's fine
 // detail).
@@ -241,19 +227,11 @@ fn liquid_look(kind: u32, rgb: vec3<f32>, soft: vec3<f32>, uv: vec2<f32>, world:
     let xz = world.xz;
     let to_v = max(to_eye.y, 0.0);
     if (kind == 4u) {
-        // Ice (Hoven's slush, frozen): flat and still. The texture's pattern mostly smoothed away (`soft`), the replaced
-        // layer's mean on top (`frame.add`), taken toward a pale ice blue; cloudy patches, cracks and frost flecks in
-        // world space; a sky sheen and a sharp glint.
-        let tex = min(mix(soft, rgb, ICE.x) + frame.add, vec3<f32>(1.0));
-        let lum = dot(tex, vec3<f32>(0.3, 0.59, 0.11));
-        let body = srgb_to_linear(mix(tex, ICE_TINT * (0.75 + 0.5 * lum), ICE.y));
-        let cloud = wnoise(xz * 0.4) * 0.6 + wnoise(xz * 1.3 + vec2<f32>(4.3, 1.1)) * 0.4;
-        let fleck = smoothstep(0.42, 0.6, wnoise(xz * 9.0 + vec2<f32>(2.1, 7.7))) * (1.0 - smoothstep(0.02, 0.08, frame.foot));
-        let frost = vec3<f32>(0.8, 0.9, 1.0);
-        var col = body * (1.0 + cloud * 0.25) + frost * (ice_cracks(xz, frame.foot) + fleck * 0.4) * ICE.z;
+        // Ice (Hoven's slush, frozen): the game's own darker green-blue colour and pattern, flat and still (the white
+        // streaks are the game's added layer, drawn over it as in Original); a faint sky sheen and a sharp glint.
         let fres = 0.04 + 0.96 * pow(1.0 - to_v, 5.0);
-        let spec = pow(max(dot(vec3<f32>(0.0, 1.0, 0.0), normalize(sun + to_eye)), 0.0), 80.0) * 0.4 * sun_up;
-        return mix(col, sky, clamp(fres * ICE.w, 0.0, 0.5)) + vec3<f32>(spec);
+        let spec = pow(max(dot(vec3<f32>(0.0, 1.0, 0.0), normalize(sun + to_eye)), 0.0), 120.0) * ICE.y * sun_up;
+        return mix(base, sky, clamp(fres * ICE.x, 0.0, 0.25)) + vec3<f32>(spec);
     }
     // Mud and sludge: a height field over world xz, its normal, the key light, a sharp highlight and a sky Fresnel.
     let e = 0.06;

@@ -56,10 +56,11 @@
 //! [`grid_tint`]; the log names each verdict), seen from above, go to crate::sea_water (drawn after the scene copy by
 //! `water.wgsl`'s Enhanced path, Z written) instead of the opaque or display-blend pass; those whose colour is lava,
 //! mud or sludge (crate::liquid_render::verdict) go to crate::liquid_render, from either side, with the later passes of
-//! their mesh set (Gaspar's two-pass lava flows); the Hoven liquid's opaque groups go there as ice (its scrolls slowed,
-//! its additive pass not drawn: crate::liquid_render `hoven_scroll`, `added_mean`); seen from above, the ocean's band
-//! and layers give way to crate::ocean_water's surface (its wall stays); the other effect groups, the other ports, the
-//! other kinds and every group with the option Original are drawn as above.
+//! their mesh set (Gaspar's two-pass lava flows); the Hoven liquid's opaque groups go there as ice and its additive pass
+//! (the white streaks) stays its own draw, every scroll slowed (crate::liquid_render `hoven_scroll`); a translucent
+//! grid (Oltanis's 1260) is a fog layer and stays Original (crate::liquid_render `layer_verdict`); seen from above, the
+//! ocean's band and layers give way to crate::ocean_water's surface (its wall stays); the other effect groups, the
+//! other ports, the other kinds and every group with the option Original are drawn as above.
 
 use crate::display_blend::DisplayEffect;
 use crate::fx_draw::{FxPrimMaterial, FxPrimParams, PrimBuf, LIST1_BIAS};
@@ -401,14 +402,6 @@ struct SeaDraw {
     kinds: HashMap<(Tex, [u32; 3], u8), LiquidKind>,
     /// [`grid_tint`] by port.
     tints: HashMap<usize, [f32; 3]>,
-    /// [`rgb_average`] of FX textures (Hoven's ice: its added pass).
-    fx_avg: HashMap<usize, [f32; 3]>,
-}
-
-/// The average RGB (bytes) of RGBA pixels.
-fn rgb_average(rgba: &[u8]) -> [f32; 3] {
-    let n = (rgba.len() / 4).max(1) as f32;
-    rgba.as_chunks::<4>().0.iter().fold([0.0f32; 3], |a, p| [a[0] + p[0] as f32, a[1] + p[1] as f32, a[2] + p[2] as f32]).map(|s| s / n)
 }
 
 pub struct SeaRenderPlugin;
@@ -449,7 +442,8 @@ pub fn judged_rgb(avg: [f32; 3], tint: [f32; 3]) -> [u8; 3] { [0, 1, 2].map(|k| 
 /// Water Enhanced's verdict on a group's texture and tint (crate::liquid_render::verdict of [`judged_rgb`]; an
 /// animated image by its first frame as the module reads it), found once per texture, tint and FIX and logged with
 /// the group's box (game space).
-fn tex_kind(st: &mut SeaDraw, sea: &LevelSea, fx: Option<&[Option<rc_formats::texture::Texture>]>, tex: Tex, tint: [f32; 3], fix: u8, prims: &PrimBuf) -> LiquidKind {
+#[allow(clippy::too_many_arguments)]
+fn tex_kind(st: &mut SeaDraw, sea: &LevelSea, fx: Option<&[Option<rc_formats::texture::Texture>]>, tex: Tex, tint: [f32; 3], fix: u8, grid: bool, prims: &PrimBuf) -> LiquidKind {
     let key = (tex, tint.map(f32::to_bits), fix);
     if let Some(&c) = st.kinds.get(&key) { return c; }
     let mut px = Vec::new();
@@ -467,10 +461,12 @@ fn tex_kind(st: &mut SeaDraw, sea: &LevelSea, fx: Option<&[Option<rc_formats::te
     let avg = px.as_chunks::<4>().0.iter().fold([0.0f32; 3], |a, p| [a[0] + p[0] as f32, a[1] + p[1] as f32, a[2] + p[2] as f32]).map(|s| s / n);
     let rgb = judged_rgb(avg, tint);
     let kind = if px.is_empty() { LiquidKind::Original } else { crate::liquid_render::verdict(rgb, crate::liquid_render::enabled(), crate::liquid_render::forced()) };
+    let kind = crate::liquid_render::layer_verdict(kind, grid, fix);
     // Bevy (x, y, z) = game (x, z, −y).
     let (lo, hi) = prims.parts().0.iter().fold(([f32::MAX; 3], [f32::MIN; 3]), |(lo, hi), p| ([lo[0].min(p[0]), lo[1].min(-p[2]), lo[2].min(p[1])], [hi[0].max(p[0]), hi[1].max(-p[2]), hi[2].max(p[1])]));
     let how = match kind {
         LiquidKind::Water => "clear water (Water Enhanced applies)",
+        LiquidKind::Original if grid && fix < 0x80 => "kept Original: a translucent grid is a fog or cloud layer",
         k if k.drawn_here() => "Water Enhanced's liquid look",
         _ => "kept Original",
     };
@@ -559,9 +555,8 @@ fn draw(
     let mut passes: Vec<(usize, usize, gs::MeshSt)> = Vec::new();
     // The grids' own draws (not their meshes'): the group, the record's FIX (crate::sea_water::surface_fix), the port.
     let mut grid_own: Vec<(usize, u8, usize)> = Vec::new();
-    // Hoven's opaque groups drawn as ice (crate::liquid_render) and the mean colour of the pass they replace.
+    // Hoven's opaque groups drawn as ice (crate::liquid_render).
     let mut ice_groups: Vec<usize> = Vec::new();
-    let mut ice_add = Vec3::ZERO;
     // The animated images of this tick, made once each.
     let mut made: Vec<GridAnim> = Vec::new();
     let mut anim = |a: GridAnim, st: &mut SeaDraw, images: &mut Assets<Image>| -> bool {
@@ -626,8 +621,8 @@ fn draw(
                 }
             }
             (SeaKind::Hoven, SeaData::Hoven(h)) => {
-                // Water Enhanced's ice (crate::liquid_render): the opaque layers drift slowly, the added pass gives way
-                // to its mean colour.
+                // Water Enhanced's ice (crate::liquid_render): every layer drifts slowly; the added pass (the white
+                // streaks) stays the game's draw.
                 let ice = crate::liquid_render::hoven_ice(gfx.water.on());
                 let scroll = |speed: [f32; 2], game: [f32; 2]| if ice { crate::liquid_render::hoven_scroll(speed, counter) } else { game };
                 if gs::hoven_group1_drawn(&m.pvars, &p.svc.volumes, cam) {
@@ -636,13 +631,8 @@ fn draw(
                 }
                 if ice { ice_groups.push(groups.len()); }
                 groups.push(Group { tex: Tex::Fx(HOVEN_FX[0], false), effect: None, fog: level_fog, bias: bias + 1.0, prims: strip_prims(&h.groups[1], scroll(h.layer_speed[0], run.scroll[0]), None) });
-                let added = strip_prims(&h.groups[1], run.scroll[1], Some(h.fix2));
-                if ice {
-                    let avg = *st.fx_avg.entry(HOVEN_FX[1]).or_insert_with(|| fx.and_then(|f| f.get(HOVEN_FX[1])?.as_ref()).map_or([0.0; 3], |t| rgb_average(&t.rgba)));
-                    ice_add = crate::liquid_render::added_mean(avg, &added, h.fix2);
-                } else {
-                    groups.push(Group { tex: Tex::Fx(HOVEN_FX[1], true), effect: Some(Blend::Add), fog: level_fog, bias: bias + 2.0, prims: added });
-                }
+                let added = strip_prims(&h.groups[1], scroll(h.layer_speed[1], run.scroll[1]), Some(h.fix2));
+                groups.push(Group { tex: Tex::Fx(HOVEN_FX[1], true), effect: Some(Blend::Add), fog: level_fog, bias: bias + 2.0, prims: added });
             }
             (SeaKind::GridSet, SeaData::GridSet(g)) => {
                 // 854's callback `0x2ea048`: the shared image and fog (`0x2a4818`), the gated records, the fog restore.
@@ -714,7 +704,7 @@ fn draw(
                 continue;
             };
             let ice = ice_groups.contains(&i);
-            let kind = if ice { LiquidKind::Ice } else { tex_kind(st, &level.0.sea, fx, g.tex, tint, fix, &g.prims) };
+            let kind = if ice { LiquidKind::Ice } else { tex_kind(st, &level.0.sea, fx, g.tex, tint, fix, own.is_some(), &g.prims) };
             let water_here = kind == LiquidKind::Water && crate::sea_water::from_above(&g.prims, cam[2]);
             if water_here || kind.drawn_here() {
                 let img = match g.tex {
@@ -729,8 +719,7 @@ fn draw(
                         let flow = crate::liquid_render::layer_flow(pass.as_ref().map(|p| &p.2), second.map(|q| &q.2));
                         if let Some(p) = pass { taken.push(p.1); }
                         let grid = if own.is_some() { crate::liquid_render::st_per_unit(&g.prims) } else { 0.0 };
-                        let add = if ice { ice_add } else { Vec3::ZERO };
-                        looks.push(crate::liquid_render::LiquidGroup { image, fog: g.fog, prims: g.prims, kind, flow, grid, add });
+                        looks.push(crate::liquid_render::LiquidGroup { image, fog: g.fog, prims: g.prims, kind, flow, grid });
                     }
                     continue;
                 }
