@@ -33,6 +33,7 @@
 //   leaves the screen), weighted by a Fresnel term, plus the key light's glint;
 // * foam along the shore: thin water where the bed rises toward the surface (not over a flat shallow floor). At the
 //   shore line (no thickness) the result is the scene behind, so the edge has no seam.
+// A ripple water draw may sit params.misc.w over the game's height (water_render::SURFACE_LIFT), on Enhanced only.
 
 #import bevy_pbr::view_transformations::{position_world_to_clip, position_world_to_view, depth_ndc_to_view_z, position_ndc_to_view, frag_coord_to_ndc, ndc_to_frag_coord}
 #import bevy_pbr::mesh_view_bindings::{view, globals}
@@ -43,7 +44,7 @@ struct WaterFog {
 }
 
 struct WaterParams {
-    // x = FIX / 128, y = kind.
+    // x = FIX / 128, y = kind, w = the Enhanced surface lift (game units; ripple water only).
     misc: vec4<f32>,
     // x = frame slot, y = ripple record's first word, z = water UV offset in the record.
     ids: vec4<u32>,
@@ -147,6 +148,8 @@ fn vertex(v: WaterVertex) -> WaterVertexOutput {
         let g = base + 4u + v.tag.y * 6u;
         pos = vec3<f32>(bitcast<f32>(ripple[g]), bitcast<f32>(ripple[g + 1u]), bitcast<f32>(ripple[g + 2u]));
         z = pos.z;
+        // Enhanced only: the drawn surface over the game's height (water_render::SURFACE_LIFT).
+        if (look.misc.x > 0.5 && textureDimensions(scene_depth).x > 1u) { z += params.misc.w; }
         let k = base + params.ids.z + (v.tag.x >> 8u) * 2u;
         uv = vec2<f32>(bitcast<f32>(ripple[k]), bitcast<f32>(ripple[k + 1u]));
         if (kind == 3u) {

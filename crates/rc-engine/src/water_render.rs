@@ -100,6 +100,20 @@ const CHUTE_FX: [i32; 2] = [42, 41];
 /// The `fx` of a material with the [`CHUTE_TINT_RGBA`] texel (clear water by definition).
 const CHUTE_TINT: i32 = -2;
 const CHUTE_TINT_RGBA: [u8; 4] = [60, 110, 130, 0x80];
+/// **Port-only (Water Enhanced): drawn surface lifts.** (level, game box min, max, lift): a ripple patch whose
+/// load-time centre lies in the box draws its water this much higher on Enhanced (`params.misc.w`, added in the
+/// vertex shader to the height the game moves; the game's water height, the ripple module and Original are
+/// untouched). Rilgar's sewer flood under the slide (831's 32 patches at z 15.2, all of them so no seam shows between
+/// patches): the rims of the round grates sit just under its surface, where the shore foam outlined them.
+const SURFACE_LIFT: [(u32, [f32; 3], [f32; 3], f32); 1] = [(5, [150.0, 240.0, 10.0], [290.0, 355.0, 25.0], 0.25)];
+
+/// The [`SURFACE_LIFT`] of a patch centred at `c` on `level`.
+fn surface_lift(level: u32, c: [f32; 3]) -> f32 {
+    SURFACE_LIFT
+        .iter()
+        .find(|&&(lv, lo, hi, _)| lv == level && (0..3).all(|k| (lo[k]..=hi[k]).contains(&c[k])))
+        .map_or(0.0, |&(.., l)| l)
+}
 
 pub const ATTRIBUTE_WATER_Z1: MeshVertexAttribute = MeshVertexAttribute::new("WaterZ1", 0x5741_5431, VertexFormat::Float32);
 pub const ATTRIBUTE_WATER_UV: MeshVertexAttribute = MeshVertexAttribute::new("WaterUv", 0x5741_5432, VertexFormat::Float32x4);
@@ -124,6 +138,8 @@ pub struct LevelWater {
     pub fx: crate::fx_draw::LevelFx,
     /// The flow chutes' splines (Water Enhanced's chute sheets: crate::chute_water).
     pub chutes: Vec<crate::chute_water::ChuteSpline>,
+    /// The level index (for [`SURFACE_LIFT`]).
+    pub level: u32,
 }
 
 /// Reads the level's water data (by code identity against the reference overlays: rc_game::water::world), the strip
@@ -146,7 +162,7 @@ pub fn load(root: &Path, index: u32, gameplay: &[u8]) -> Result<LevelWater> {
             None
         }
     };
-    if !enabled() { return Ok(LevelWater { data, ..LevelWater::default() }); }
+    if !enabled() { return Ok(LevelWater { data, level: index, ..LevelWater::default() }); }
     let ov = wf::Overlay::parse(&ov_bytes).context("parsing the level overlay")?;
     let strips = match reference(1) {
         Some(r01) => wf::parse_strip_classes(&ov, &wf::strip_tables(&target, &Relocation::new(&r01, &target)))?,
@@ -164,13 +180,14 @@ pub fn load(root: &Path, index: u32, gameplay: &[u8]) -> Result<LevelWater> {
         if !order.contains(&slot) { order.push(slot); }
     }
     let chutes = crate::chute_water::chutes(gameplay, index);
-    Ok(LevelWater { strips, data, order, fire_fields, fx, chutes })
+    Ok(LevelWater { strips, data, order, fire_fields, fx, chutes, level: index })
 }
 
 /// Static uniform of one water draw.
 #[derive(Clone, Copy, Debug, Default, ShaderType)]
 pub struct WaterParams {
-    /// x = FIX / 128, y = kind (0/1 strip layer, 2 ripple water, 3 ripple env).
+    /// x = FIX / 128, y = kind (0/1 strip layer, 2 ripple water, 3 ripple env), w = the Enhanced surface lift
+    /// ([`SURFACE_LIFT`]).
     pub misc: Vec4,
     /// x = callback slot (record in `frame`), y = first word of the patch's `ripple` record, z = offset of its
     /// water UVs in the record (words).
@@ -344,6 +361,8 @@ struct PatchDraw {
     fix: [u8; 2],
     slots: [u32; 2],
     visible: bool,
+    /// The water draw's [`SURFACE_LIFT`].
+    lift: f32,
 }
 
 /// The live water drawing state.
@@ -412,9 +431,12 @@ fn strip_mesh(d: &StripDescriptor) -> Mesh {
         .with_inserted_attribute(ATTRIBUTE_WATER_TAG, VertexAttributeValues::Uint32x2(tag))
 }
 
-fn params(fix: u8, kind: u32, slot: u32, patch: usize) -> WaterParams {
+fn params(fix: u8, kind: u32, slot: u32, patch: usize) -> WaterParams { lifted_params(fix, kind, slot, patch, 0.0) }
+
+/// [`params`] with a ripple water draw's [`SURFACE_LIFT`] (`misc.w`).
+fn lifted_params(fix: u8, kind: u32, slot: u32, patch: usize, lift: f32) -> WaterParams {
     WaterParams {
-        misc: Vec4::new(fix as f32 / 128.0, kind as f32, 0.0, 0.0),
+        misc: Vec4::new(fix as f32 / 128.0, kind as f32, 0.0, lift),
         ids: UVec4::new(slot, (patch * RIPPLE_WORDS) as u32, RIPPLE_UV_AT as u32, 0),
     }
 }
@@ -548,11 +570,12 @@ fn setup(
                     patches.push(None);
                     continue;
                 };
-                let mw = new_mat(&mut materials, tw, params(p.fix_water, 2, slot, i), slot, p.fx_water);
+                let lift = surface_lift(lw.level, p.centre);
+                let mw = new_mat(&mut materials, tw, lifted_params(p.fix_water, 2, slot, i, lift), slot, p.fx_water);
                 let me = new_mat(&mut materials, te, params(p.fix_env, 3, slot + 1, i), slot + 1, p.fx_env);
                 let ew = spawn(&mut commands, mesh.clone(), mw.clone(), Visibility::Hidden, format!("ripple patch {i} water"));
                 let ee = spawn(&mut commands, mesh.clone(), me.clone(), Visibility::Hidden, format!("ripple patch {i} env"));
-                patches.push(Some(PatchDraw { entities: [ew, ee], mats: [mw, me], fx: [p.fx_water, p.fx_env], fix: [p.fix_water, p.fix_env], slots: [slot, slot + 1], visible: false }));
+                patches.push(Some(PatchDraw { entities: [ew, ee], mats: [mw, me], fx: [p.fx_water, p.fx_env], fix: [p.fix_water, p.fix_env], slots: [slot, slot + 1], visible: false, lift }));
                 slot += 2;
             }
             patch_mesh_handle = Some(mesh);
@@ -590,11 +613,12 @@ fn setup(
     if let Some(mesh) = patch_mesh_handle {
         for (i, p) in patches.iter_mut().enumerate() {
             if p.is_some() { continue; }
-            let mw = new_mat(&mut materials, Handle::default(), params(0, 2, slot, i), slot, -1);
+            let lift = records.get(i).map_or(0.0, |r| surface_lift(lw.level, r.centre));
+            let mw = new_mat(&mut materials, Handle::default(), lifted_params(0, 2, slot, i, lift), slot, -1);
             let me = new_mat(&mut materials, Handle::default(), params(0, 3, slot + 1, i), slot + 1, -1);
             let ew = spawn(&mut commands, mesh.clone(), mw.clone(), Visibility::Hidden, format!("ripple patch {i} water"));
             let ee = spawn(&mut commands, mesh.clone(), me.clone(), Visibility::Hidden, format!("ripple patch {i} env"));
-            *p = Some(PatchDraw { entities: [ew, ee], mats: [mw, me], fx: [-1, -1], fix: [0, 0], slots: [slot, slot + 1], visible: false });
+            *p = Some(PatchDraw { entities: [ew, ee], mats: [mw, me], fx: [-1, -1], fix: [0, 0], slots: [slot, slot + 1], visible: false, lift });
             slot += 2;
         }
     }
@@ -828,7 +852,7 @@ fn draw_ripples(
                         let img = tex.and_then(|t| fx_image(&mut st.fx_images, images, t, fx[k]));
                         if let (Some(img), Some(mut m)) = (img, materials.get_mut(&pd.mats[k])) {
                             m.texture = img;
-                            m.params = params(fix[k], 2 + k as u32, pd.slots[k], p);
+                            m.params = lifted_params(fix[k], 2 + k as u32, pd.slots[k], p, if k == 0 { pd.lift } else { 0.0 });
                             m.fx = fx[k];
                             pd.fx[k] = fx[k];
                             pd.fix[k] = fix[k];
