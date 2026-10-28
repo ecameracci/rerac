@@ -19,7 +19,18 @@
 // Blend: ALPHA_1 = (Cs − Cd)·As >> 7 + Cd for both; the fragment returns As / 128 for SrcAlpha /
 // OneMinusSrcAlpha. The textured alpha test (GEQUAL 0x80, AFAIL FB_ONLY) never suppresses the colour write.
 
+//
+// SKY_STAR_GLOW (Particles Enhanced on the flight's textured shells, crate::flight_render): the stars the texture paints
+// glow and twinkle, kept close to the game's starfield. A bright-pass (texel max channel above 0.3, by its alpha) at
+// the pixel and on its 8 neighbours (0.85 × the larger of a texel and the pixel's footprint: no shimmer when the shell
+// is minified) makes a faint core boost and a soft one-texel halo; each 2×2-texel cell twinkles ±15 % at its own rate
+// (a hash of the cell, the frame's time) and is tinted slightly warm or cool; the glow, × the vertex alpha, is added to the GS blend's result (the pipeline's colour source factor One,
+// the shell premultiplied here).
+
 #import bevy_pbr::{forward_io::Vertex, mesh_functions, mesh_view_bindings::view}
+#ifdef SKY_STAR_GLOW
+#import bevy_pbr::mesh_view_bindings::globals
+#endif
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(0) var tex: texture_2d<f32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(1) var tex_sampler: sampler;
@@ -59,6 +70,39 @@ fn srgb_to_linear(c: vec3<f32>) -> vec3<f32> {
     return select(hi, lo, c <= vec3<f32>(0.04045));
 }
 
+#ifdef SKY_STAR_GLOW
+fn star_hash(x: u32) -> u32 {
+    var v = x * 747796405u + 2891336453u;
+    v = ((v >> ((v >> 28u) + 4u)) ^ v) * 277803737u;
+    return (v >> 22u) ^ v;
+}
+
+fn star_unit(x: u32) -> f32 { return f32(star_hash(x) & 0xffffu) / 65535.0; }
+
+fn bright_pass(uv: vec2<f32>) -> f32 {
+    let s = textureSampleLevel(tex, tex_sampler, uv, 0.0);
+    return max(max(s.r, max(s.g, s.b)) - 0.3, 0.0) * min(s.a * 255.0 / 128.0, 1.0);
+}
+
+fn star_glow(uv: vec2<f32>) -> vec3<f32> {
+    let dims = vec2<f32>(textureDimensions(tex));
+    let foot = max(1.0 / dims, fwidth(uv));
+    var halo = 0.0;
+    // An even ring (no axis bias, so no cross): 8 taps at 22.5° + k·45°.
+    for (var k = 0; k < 8; k++) {
+        let t = (f32(k) + 0.5) * 0.7853982;
+        halo += bright_pass(uv + vec2<f32>(cos(t), sin(t)) * foot * 1.1) * 0.035;
+    }
+    let core = bright_pass(uv);
+    let cell = vec2<u32>(floor(uv * dims * 0.5));
+    let seed = star_hash(cell.x * 7919u + cell.y);
+    let f = 1.3 + 2.2 * star_unit(seed);
+    let tw = 1.0 + 0.15 * sin(globals.time * f + 6.2831853 * star_unit(seed + 1u));
+    let tint = mix(vec3<f32>(0.9, 0.94, 1.0), vec3<f32>(1.0, 0.95, 0.88), star_unit(seed + 2u));
+    return srgb_to_linear(tint) * (core * 0.35 + halo) * tw;
+}
+#endif
+
 @fragment
 fn fragment(in: SkyVertexOutput) -> @location(0) vec4<f32> {
     // GS integer colour: the interpolated RGBA is truncated to 8 bits per channel.
@@ -71,5 +115,9 @@ fn fragment(in: SkyVertexOutput) -> @location(0) vec4<f32> {
     let rgb = c.rgb / 255.0;
     let a_s = c.a;
 #endif
+#ifdef SKY_STAR_GLOW
+    return vec4<f32>(srgb_to_linear(rgb) * (a_s / 128.0) + star_glow(in.uv) * (c.a / 128.0), a_s / 128.0);
+#else
     return vec4<f32>(srgb_to_linear(rgb), a_s / 128.0);
+#endif
 }

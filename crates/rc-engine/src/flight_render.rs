@@ -140,7 +140,18 @@ impl Plugin for FlightRenderPlugin {
                 PostUpdate,
                 (update_sky, sky_tan).chain().after(crate::sky_render::follow_main_camera).after(crate::travel_render::view_layers).before(bevy::transform::TransformSystems::Propagate),
             )
-            .add_systems(PostUpdate, draw_fx.before(bevy::asset::AssetEventSystems));
+            .add_systems(PostUpdate, draw_fx.before(bevy::asset::AssetEventSystems))
+            .add_systems(PostUpdate, follow_glow);
+    }
+}
+
+/// Particles Enhanced: the stars the flight's textured shells paint glow and twinkle (`SkyMaterial::glow`).
+fn follow_glow(g: Res<crate::graphics::GraphicsSettings>, shells: Query<&MeshMaterial3d<SkyMaterial>, With<FlightShell>>, mut materials: ResMut<Assets<SkyMaterial>>) {
+    let want = g.particles.atmosphere();
+    for h in &shells {
+        if materials.get(&h.0).is_some_and(|m| m.textured && m.glow != want) {
+            if let Some(mut m) = materials.get_mut(&h.0) { m.glow = want; }
+        }
     }
 }
 

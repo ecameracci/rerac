@@ -55,7 +55,7 @@ use bevy::mesh::{MeshVertexBufferLayoutRef, PrimitiveTopology};
 use bevy::pbr::{MaterialPipeline, MaterialPipelineKey};
 use bevy::prelude::*;
 use bevy::render::render_resource::{
-    AsBindGroup, BlendState, Extent3d, RenderPipelineDescriptor, SpecializedMeshPipelineError, TextureDimension,
+    AsBindGroup, BlendFactor, BlendState, Extent3d, RenderPipelineDescriptor, SpecializedMeshPipelineError, TextureDimension,
     TextureFormat,
 };
 use bevy::shader::ShaderRef;
@@ -159,10 +159,11 @@ pub fn level_rotations(level: u32) -> Vec<ShellRotation> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct SkyMaterialKey {
     textured: bool,
+    glow: bool,
 }
 
 impl From<&SkyMaterial> for SkyMaterialKey {
-    fn from(m: &SkyMaterial) -> Self { SkyMaterialKey { textured: m.textured } }
+    fn from(m: &SkyMaterial) -> Self { SkyMaterialKey { textured: m.textured, glow: m.glow } }
 }
 
 /// One sky draw: a run of consecutive faces of one shell with one texture state.
@@ -176,6 +177,9 @@ pub struct SkyMaterial {
     pub textured: bool,
     /// Position in the game's draw order.
     pub order: u32,
+    /// Particles Enhanced on a space sky's textured shell (crate::flight_render): the stars painted in the texture
+    /// glow and twinkle (`SKY_STAR_GLOW` in sky.wgsl, added to the GS blend's result).
+    pub glow: bool,
 }
 
 impl Material for SkyMaterial {
@@ -201,6 +205,15 @@ impl Material for SkyMaterial {
         if textured {
             descriptor.vertex.shader_defs.push("SKY_TEXTURED".into());
             if let Some(f) = descriptor.fragment.as_mut() { f.shader_defs.push("SKY_TEXTURED".into()); }
+        }
+        if textured && key.bind_group_data.glow {
+            // The shell's colour comes premultiplied (Cs·As + the glow), so its blend's source factor is One.
+            if let Some(f) = descriptor.fragment.as_mut() {
+                f.shader_defs.push("SKY_STAR_GLOW".into());
+                for t in f.targets.iter_mut().flatten() {
+                    if let Some(b) = t.blend.as_mut() { b.color.src_factor = BlendFactor::One; }
+                }
+            }
         }
         Ok(())
     }
@@ -379,7 +392,7 @@ pub(crate) fn spawn_shells(
                 .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, colors);
             let mut e = commands.spawn((
                 Mesh3d(meshes.add(mesh)),
-                MeshMaterial3d(materials.add(SkyMaterial { texture: image, textured, order })),
+                MeshMaterial3d(materials.add(SkyMaterial { texture: image, textured, order, glow: false })),
                 layer.clone(),
                 NoFrustumCulling,
                 Name::new(format!("sky shell {si} tex {tex}")),

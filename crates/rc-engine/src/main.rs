@@ -81,6 +81,7 @@ mod mods;
 mod movie_render;
 mod no_clusters;
 mod occlusion;
+mod particle_lights;
 mod particle_render;
 mod play_camera;
 mod render_settings;
@@ -128,6 +129,7 @@ mod vendor_render;
 mod water_mirror;
 mod water_render;
 mod water_waves;
+mod weather_render;
 mod aa_blit;
 mod afterimage_render;
 mod ao_render;
@@ -260,6 +262,10 @@ fn main() -> anyhow::Result<()> {
     .add_plugins(sky_render::SkyRenderPlugin)
     .add_plugins(display_blend::DisplayBlendPlugin)
     .add_plugins(particle_render::ParticlePlugin)
+    // Particles Enhanced: the bright effects light the world (crate::particle_lights).
+    .add_plugins(particle_lights::ParticleLightsPlugin)
+    // Particles Enhanced: the weather's rain and snow restyled (crate::weather_render).
+    .add_plugins(weather_render::WeatherRenderPlugin)
     .add_plugins(water_render::WaterPlugin)
     .add_plugins(sea_render::SeaRenderPlugin)
     .add_plugins(fx_draw::FxDrawPlugin)
