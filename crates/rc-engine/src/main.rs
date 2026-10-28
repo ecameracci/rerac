@@ -123,6 +123,7 @@ mod travel_render;
 mod flight_render;
 mod title_world;
 mod vendor_render;
+mod water_mirror;
 mod water_render;
 mod aa_blit;
 mod afterimage_render;
@@ -239,8 +240,8 @@ fn main() -> anyhow::Result<()> {
     .add_plugins(shadow_render::ShadowPlugin)
     .add_plugins(pre_shadow::PreShadowPlugin)
     // The port's modern options (crate::graphics, Lighting Simple / Enhanced): sun shadows, ambient occlusion, the scene copy
-    // the soft particles and the water read, sun rays, volumetric light, the image post-process.
-    .add_plugins((fx_view::FxViewPlugin, sun_shadow::SunShadowPlugin, ao_render::AoPlugin, gi_render::GiPlugin, scene_copy::SceneCopyPlugin, sun_rays::SunRaysPlugin, volumetric_light::VolumetricLightPlugin, post_render::PostPlugin))
+    // the soft particles and the water read, sun rays, volumetric light, the image post-process, the water's mirror view.
+    .add_plugins((fx_view::FxViewPlugin, sun_shadow::SunShadowPlugin, ao_render::AoPlugin, gi_render::GiPlugin, scene_copy::SceneCopyPlugin, sun_rays::SunRaysPlugin, volumetric_light::VolumetricLightPlugin, post_render::PostPlugin, water_mirror::WaterMirrorPlugin))
     .add_plugins(frame_log::FrameLogPlugin)
     .add_plugins(session::SessionPlugin)
     .insert_resource(spawn)

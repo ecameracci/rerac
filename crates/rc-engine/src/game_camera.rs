@@ -132,7 +132,7 @@ fn print_game_camera(
 /// The game's perspective: `pixel = 2048 + (256 / tan_x)·x/z`, `2048 + (208 / tan_y)·y/z`, and the
 /// 24-bit GS Z = `Z_OFFSET + Z_SCALE·((f+n)/(f−n) − 2fn/((f−n)·z))` (near → 0xfffff8, far → 32, ZTST GEQUAL),
 /// expressed as a Bevy reverse-Z clip matrix (depth = Z / 2^24, larger = nearer, same ordering).
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GameProjection {
     pub tan_x: f32,
     pub tan_y: f32,
@@ -143,6 +143,9 @@ pub struct GameProjection {
     /// The Draw distance factor on `far` (crate::graphics; 1 = the game's): the clip matrix, Bevy's frustum and
     /// [`projection_far`] use `far × draw_scale`.
     pub draw_scale: f32,
+    /// Port-only: an oblique near plane in view space (`clip·v ≥ 0` is kept; [`oblique_near`]), the mirror view's
+    /// water plane (crate::water_mirror). Zero: none.
+    pub clip: Vec4,
 }
 
 /// The half-angle tangents (x, y) of a camera's projection (the game's 0.63, 0.63·0.775 for any other projection):
@@ -195,7 +198,7 @@ pub fn default_tans() -> (f32, f32) {
 
 impl Default for GameProjection {
     fn default() -> Self {
-        GameProjection { tan_x: TAN_HALF_FOV_X, tan_y: TAN_HALF_FOV_X * NTSC_Y_RATIO, near: NEAR, far: FAR, draw_scale: 1.0 }
+        GameProjection { tan_x: TAN_HALF_FOV_X, tan_y: TAN_HALF_FOV_X * NTSC_Y_RATIO, near: NEAR, far: FAR, draw_scale: 1.0, clip: Vec4::ZERO }
     }
 }
 
@@ -232,12 +235,13 @@ impl CameraProjection for GameProjection {
         // clip = (x / tan_x, y / tan_y, (a·d + b) / 2^24, d) with d = −z_view (game units).
         let (a, b) = self.z_affine();
         let s = 1.0 / 16_777_216.0;
-        Mat4::from_cols(
+        let m = Mat4::from_cols(
             Vec4::new(1.0 / self.tan_x, 0.0, 0.0, 0.0),
             Vec4::new(0.0, 1.0 / self.tan_y, 0.0, 0.0),
             Vec4::new(0.0, 0.0, (-a * s) as f32, -1.0),
             Vec4::new(0.0, 0.0, (b * s) as f32, 0.0),
-        )
+        );
+        if self.clip == Vec4::ZERO { m } else { oblique_near(m, self.clip) }
     }
 
     fn get_clip_from_view_for_sub(&self, sub: &SubCameraView) -> Mat4 {
@@ -281,6 +285,23 @@ impl CameraProjection for GameProjection {
 
 /// The camera's `Projection` component.
 pub fn game_projection() -> Projection { Projection::custom(GameProjection::default()) }
+
+/// Lengyel's oblique near plane for this reverse-Z clip matrix: the near plane `w − z ≥ 0` becomes the view-space
+/// plane `c` (`c·v ≥ 0` kept) by row 2 = row 3 − λ·c, with λ putting the far plane `z = 0` through the frustum corner
+/// opposite `c` (`Q`, from the plane's clip-space signs). `m` as it is when that corner is not on the kept side.
+pub fn oblique_near(m: Mat4, c: Vec4) -> Mat4 {
+    let inv = m.inverse();
+    let cc = inv.transpose() * c;
+    let q = inv * Vec4::new(cc.x.signum(), cc.y.signum(), 0.0, 1.0);
+    if q.w.abs() < 1e-12 { return m; }
+    let q = q / q.w;
+    let r3 = m.row(3);
+    let (cq, wq) = (c.dot(q), r3.dot(q));
+    if cq <= 0.0 || wq <= 0.0 { return m; }
+    let mut t = m.transpose();
+    t.z_axis = r3 - c * (wq / cq);
+    t.transpose()
+}
 
 /// The u32 at byte `off` of the level-settings section (gameplay file pointer 0, wad_layouts_rac1.md §3.3).
 fn level_settings_word(gameplay: &[u8], off: usize) -> anyhow::Result<u32> {

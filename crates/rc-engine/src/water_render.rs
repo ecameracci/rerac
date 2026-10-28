@@ -186,7 +186,8 @@ pub fn load(root: &Path, index: u32, gameplay: &[u8]) -> Result<LevelWater> {
 /// Static uniform of one water draw.
 #[derive(Clone, Copy, Debug, Default, ShaderType)]
 pub struct WaterParams {
-    /// x = FIX / 128, y = kind (0/1 strip layer, 2 ripple water, 3 ripple env), w = the Enhanced surface lift
+    /// x = FIX / 128, y = kind (0/1 strip layer, 2 ripple water, 3 ripple env, 4 chute), z = an even absorption
+    /// (Enhanced; crate::sea_water::clarity; 0 here) or a chute's flow speed, w = the Enhanced surface lift
     /// ([`SURFACE_LIFT`]).
     pub misc: Vec4,
     /// x = callback slot (record in `frame`), y = first word of the patch's `ripple` record, z = offset of its
@@ -230,6 +231,12 @@ pub struct WaterMaterial {
     /// Water Enhanced: the rings where Ratchet meets the water (see [`WaterRings`]).
     #[storage(10, read_only, visibility(fragment))]
     pub rings: Handle<ShaderBuffer>,
+    /// Water Enhanced: the planar reflection's state and picture (crate::water_mirror).
+    #[storage(11, read_only, visibility(fragment))]
+    pub mirror: Handle<ShaderBuffer>,
+    #[texture(12)]
+    #[sampler(13)]
+    pub mirror_color: Handle<Image>,
     /// Callback-order slot (Transparent3d position).
     pub slot: u32,
     /// The FX texture index (−1: none yet), for [`WaterLook`]'s clear-water test.
@@ -407,6 +414,24 @@ pub struct WaterState {
 impl WaterState {
     /// The [`WaterRings`] buffer (crate::sea_water's seas share the rings).
     pub fn rings_buffer(&self) -> Handle<ShaderBuffer> { self.rings_buf.clone() }
+
+    /// The flat regions of this frame's Enhanced water (crate::water_mirror): the clear strips at their z blend and
+    /// the drawn clear ripple patches (`sim`: the moby system's module, else the `RC_PLAY=0` one).
+    pub fn flat_surfaces(&self, sim: Option<&RippleSim>, out: &mut Vec<crate::water_mirror::FlatWater>) {
+        let clear = |fx: i32| self.clear_fx.get(&fx).copied().unwrap_or(false);
+        for c in &self.classes {
+            let w = c.w.to_f32();
+            for s in c.strips.iter().filter(|s| clear(s.desc.fx[0])) {
+                out.extend(crate::water_mirror::flat_region(s.desc.vertices.iter().map(|v| [v[0], v[1], v[2] * w + v[3] * (1.0 - w)])));
+            }
+        }
+        let Some(sim) = sim.or(self.fallback.as_ref()) else { return };
+        for (pd, pa) in self.patches.iter().zip(&sim.patches) {
+            if !pd.as_ref().is_some_and(|pd| pd.visible && clear(pd.fx[0])) { continue; }
+            let [x, y, z] = pa.centre.map(Pf::to_f32);
+            out.push(crate::water_mirror::FlatWater { z, min: Vec2::new(x - 8.0, y - 8.0), max: Vec2::new(x + 8.0, y + 8.0) });
+        }
+    }
 }
 
 pub struct WaterPlugin;
@@ -516,6 +541,7 @@ fn setup(
     mut materials: ResMut<Assets<WaterMaterial>>,
     mut buffers: ResMut<Assets<ShaderBuffer>>,
     copy: Res<crate::scene_copy::SceneCopy>,
+    mirror: Res<crate::water_mirror::WaterMirror>,
 ) {
     let lw = &level.0.water;
     if lw.order.is_empty() && lw.chutes.is_empty() { return; }
@@ -561,6 +587,8 @@ fn setup(
             scene_color: copy.color.clone(),
             look: WaterLook::default(),
             rings: rings_buf.clone(),
+            mirror: mirror.params.clone(),
+            mirror_color: mirror.image.clone(),
             slot,
             fx,
         });
@@ -753,7 +781,7 @@ fn outcode(clip_from_world: &Mat4, p: [f32; 3]) -> u32 {
 
 /// The draw callbacks of this frame, in list order (runs only on frames that followed a tick).
 #[allow(clippy::too_many_arguments)]
-fn draw(
+pub fn draw(
     state: Option<ResMut<WaterState>>,
     mut play: Option<ResMut<crate::gameplay::Play>>,
     cams: MainCamera,

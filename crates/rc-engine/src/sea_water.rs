@@ -1,9 +1,12 @@
 //! **Port-only (Water Enhanced, crate::graphics; docs/plan/graphics_options.md "Water"): the clear seas.** With the
-//! option on, crate::sea_render hands over the opaque draws of the liquid ports ([`liquid_port`]: the liquid grid
-//! module's users, 854's grid set and 1901's FIX 0x7f strips) whose image is clear water (crate::water_render::clear_rgba
-//! by the average colour: lava, mud and sludge stay Original) and whose surface the camera is above ([`from_above`]: a
-//! camera under it keeps the Original surface). Their effect layers (FIX < 0x61, 1901's additive pass) and the
-//! effect-only seas (the ocean 1111, the pool overlays) stay Original, drawn over the Enhanced surface as before.
+//! option on, crate::sea_render hands over the draws of the liquid ports ([`liquid_port`]: the liquid grid module's
+//! users, 854's grid set and 1901's FIX 0x7f strips) that are a surface ([`surface_fix`]: an opaque draw, or a grid's own
+//! translucent draw, FIX < 0x61), whose colour is clear water ([`clear_liquid`] of the image × the grid's vertex colours:
+//! lava, mud and sludge stay Original) and whose surface the camera is above ([`from_above`]: a camera under it keeps the
+//! Original surface). The effect layers (1901's additive pass, the lava flows' FIX 0x60 pass) and the effect-only seas
+//! (the ocean 1111, the pool overlays) stay Original, drawn over the Enhanced surface as before: none of them fakes what
+//! the Enhanced look draws. No translucent grid qualifies today: Kerwan's 994 is a grey cloud floor under the city and
+//! Oltanis's 1260 is mud; one that did would be drawn see-through ([`clarity`], [`look`]).
 //!
 //! Each draw is the strip water's Enhanced path (`water.wgsl` kind 0; this module's one `frame` record holds w = 1, no
 //! scroll and no wobble, so the vertex shader passes the strip's points, ST and RGBA through) instead of the opaque
@@ -16,7 +19,10 @@
 //! * with the far fade ([`FAR_FADE`], `look.misc.yz`): the depth behind distant water is thin and the bent bed seen
 //!   through it flickered from frame to frame, so from the fade's start to its end the bed, the shore and the foam give
 //!   way to the water's own colour (the original's opaque sea) under the reflection and the glint;
-//! * the contact rings of crate::water_render (its buffer while the level has strip or ripple water, else none).
+//! * the contact rings of crate::water_render (its buffer while the level has strip or ripple water, else none);
+//! * the planar reflection (crate::water_mirror): each group's flat blocks ([`SeaWaterDraw`]`::planes`, one region per
+//!   grid block, crate::water_mirror::flat_blocks; Rilgar's 879 grid at one height) are candidates for the mirror view,
+//!   read on the surface instead of the screen-space trace.
 
 use crate::fx_draw::PrimBuf;
 use crate::game_camera::TfragFog;
@@ -30,6 +36,7 @@ use bevy::prelude::*;
 use bevy::render::render_resource::{AsBindGroup, RenderPipelineDescriptor, SpecializedMeshPipelineError};
 use bevy::render::storage::ShaderBuffer;
 use bevy::shader::ShaderRef;
+use rc_formats::sea::GRID_STRIP_LEN;
 use rc_game::water::sea::SeaKind;
 
 const SHADER_PATH: &str = "shaders/water.wgsl";
@@ -43,12 +50,46 @@ const _: () = assert!(FAR_FADE[0] > 0.0 && FAR_FADE[0] < FAR_FADE[1] && FAR_FADE
 /// The deep water's share of the water's colour (`look.misc.w`; the strip water's 0.55 left the deep seas far darker
 /// than their opaque Original surface).
 pub const DEEP: f32 = 0.85;
+/// The path through a translucent grid's water (game units) over which the bed shows as much as through the
+/// original's blend ([`clarity`]).
+pub const CLEAR_PATH: f32 = 1.0;
 /// `water.wgsl`'s `frame` record (crate::water_render `FRAME_RECORD`): w = 1, no scroll, no wobble.
 const FRAME_RECORD: usize = 80;
 
 /// Whether a sea port's opaque draws are liquid surfaces the Enhanced look may take (module doc); the rest (window glass,
 /// reflections, two-texture strips, the effect-only seas) are not.
 pub fn liquid_port(kind: SeaKind) -> bool { matches!(kind, SeaKind::Grid(_) | SeaKind::GridSet | SeaKind::Hoven) }
+
+/// The FIX a liquid port's draw group may go Enhanced with (module doc): an opaque surface 0x80, a grid's own
+/// translucent draw (`grid_fix`: the record's FIX, None for every other group) its FIX; None: it stays Original (the
+/// effect layers: 1901's additive pass, the lava flows' FIX 0x60 pass, the overlays).
+pub fn surface_fix(opaque: bool, grid_fix: Option<u8>) -> Option<u8> {
+    if opaque { return Some(0x80); }
+    grid_fix.filter(|&f| f > 0 && f < 0x61)
+}
+
+/// Whether a liquid draw's judged colour (crate::sea_render `judged_rgb`: its image × its vertex colours) is clear
+/// water (crate::water_render::clear_rgba), opaque or translucent alike. Not: lava, mud, sludge (Oltanis's 1260: 101,
+/// 79, 58) and Kerwan's 994, grey 140: the cloud floor 560 units wide at z −24 under the city (cells of 40), not water.
+pub fn clear_liquid(rgb: [u8; 3]) -> bool { crate::water_render::clear_rgba(&[rgb[0], rgb[1], rgb[2], 0x80]) }
+
+/// The even absorption per game unit of a translucent grid (`params.misc.z`, `water.wgsl`): over [`CLEAR_PATH`] of
+/// water the bed keeps 1 − FIX/128 of its light, as the original's `ALPHA FIX << 32 | 0x64` blend left it; 0 (an opaque
+/// surface): the strip water's coloured absorption.
+pub fn clarity(fix: u8) -> f32 {
+    if fix >= 0x80 { return 0.0; }
+    -(1.0 - fix as f32 / 128.0).ln() / CLEAR_PATH
+}
+
+/// A draw's `look` (module doc): the opaque seas fade into their colour far out and absorb toward [`DEEP`] of it; a
+/// translucent grid (seen through at any distance, as in Original) has no far fade and absorbs toward its full colour.
+pub fn look(fix: u8, sun: Vec3) -> WaterLook {
+    let misc = if fix >= 0x80 { Vec4::new(1.0, FAR_FADE[0], FAR_FADE[1], DEEP) } else { Vec4::new(1.0, 0.0, 0.0, 1.0) };
+    WaterLook { misc, sun: sun.extend(0.0) }
+}
+
+/// A draw's `params`: FIX / 128 (the Original fallback's alpha while the scene copy is not there), kind 0, [`clarity`].
+pub fn params(fix: u8) -> WaterParams { WaterParams { misc: Vec4::new(fix.min(0x80) as f32 / 128.0, 0.0, clarity(fix), 0.0), ids: UVec4::ZERO } }
 
 /// Whether the camera (game z) is above every point of a draw (a camera under the surface keeps the Original one).
 pub fn from_above(prims: &PrimBuf, cam_z: f32) -> bool {
@@ -61,6 +102,8 @@ pub struct SeaGroup {
     pub image: Handle<Image>,
     pub fog: TfragFog,
     pub prims: PrimBuf,
+    /// [`surface_fix`]: 0x80 an opaque surface, below it a translucent grid.
+    pub fix: u8,
 }
 
 /// The bindings of crate::water_render::WaterMaterial (`water.wgsl`), drawn first in Transparent3d with Z (module doc).
@@ -87,6 +130,11 @@ pub struct SeaWaterMaterial {
     pub look: WaterLook,
     #[storage(10, read_only, visibility(fragment))]
     pub rings: Handle<ShaderBuffer>,
+    #[storage(11, read_only, visibility(fragment))]
+    pub mirror: Handle<ShaderBuffer>,
+    #[texture(12)]
+    #[sampler(13)]
+    pub mirror_color: Handle<Image>,
     pub order: f32,
 }
 
@@ -137,6 +185,8 @@ type Slot = (Entity, Handle<Mesh>, Handle<SeaWaterMaterial>, bool);
 #[derive(Resource, Default)]
 pub struct SeaWaterDraw {
     pub pending: Option<Vec<SeaGroup>>,
+    /// The flat regions of the last tick's groups (crate::water_mirror's plane choice).
+    pub planes: Vec<crate::water_mirror::FlatWater>,
     slots: Vec<Option<Slot>>,
     /// The `frame` record and an empty buffer (the unread `ripple`, the `rings` without strip water).
     buffers: Option<(Handle<ShaderBuffer>, Handle<ShaderBuffer>)>,
@@ -156,6 +206,7 @@ pub fn draw(
     mut commands: Commands,
     state: ResMut<SeaWaterDraw>,
     copy: Res<crate::scene_copy::SceneCopy>,
+    mirror: Res<crate::water_mirror::WaterMirror>,
     key: Option<Res<crate::sun_shadow::KeyLight>>,
     water: Option<Res<crate::water_render::WaterState>>,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -164,14 +215,14 @@ pub fn draw(
     mut vis: Query<&mut Visibility>,
 ) {
     let st = state.into_inner();
-    let look = WaterLook { misc: Vec4::new(1.0, FAR_FADE[0], FAR_FADE[1], DEEP), sun: key.map_or(Vec3::Y, |k| k.to_light).extend(0.0) };
+    let sun = key.map_or(Vec3::Y, |k| k.to_light);
     // A resized copy re-binds (Bevy keeps a material's bind group until it changes), a moved key light re-uploads.
     let resized = copy.size != st.copy_size;
     st.copy_size = copy.size;
     for (_, _, mat, _) in st.slots.iter().flatten() {
-        let moved = materials.get(mat).is_some_and(|m| m.look.sun.distance(look.sun) > 0.01);
+        let moved = materials.get(mat).is_some_and(|m| m.look.sun.truncate().distance(sun) > 0.01);
         if resized || moved {
-            if let Some(mut m) = materials.get_mut(mat) { m.look = look; }
+            if let Some(mut m) = materials.get_mut(mat) { m.look.sun = sun.extend(0.0); }
         }
     }
     let Some(groups) = st.pending.take() else { return };
@@ -184,6 +235,12 @@ pub fn draw(
         })
         .clone();
     let rings = water.map_or_else(|| empty.clone(), |w| w.rings_buffer());
+    // Bevy (x, y, z) = game (x, z, −y); a grid's block is one strip (crate::sea_render `grid_prims_into`).
+    st.planes.clear();
+    for g in &groups {
+        let pts: Vec<[f32; 3]> = g.prims.parts().0.iter().map(|p| [p[0], -p[2], p[1]]).collect();
+        st.planes.extend(crate::water_mirror::flat_blocks(&pts, GRID_STRIP_LEN));
+    }
     let n = groups.len();
     for (k, g) in groups.into_iter().enumerate() {
         if st.slots.len() <= k { st.slots.push(None); }
@@ -191,14 +248,17 @@ pub fn draw(
             hide(&mut vis, &mut st.slots[k]);
             continue;
         }
+        let (want_params, want_look) = (params(g.fix), look(g.fix, sun));
         if let Some((e, mesh, mat, shown)) = &mut st.slots[k] {
             if let Some(mut m) = meshes.get_mut(&*mesh) { water_mesh(&g.prims, &mut m); }
-            let need = materials.get(&*mat).is_none_or(|m| m.texture != g.image || m.fog != g.fog || m.rings != rings);
+            let need = materials.get(&*mat).is_none_or(|m| m.texture != g.image || m.fog != g.fog || m.rings != rings || m.params.misc != want_params.misc || m.look.misc != want_look.misc);
             if need {
                 if let Some(mut m) = materials.get_mut(&*mat) {
                     m.texture = g.image;
                     m.fog = g.fog;
                     m.rings = rings.clone();
+                    m.params = want_params;
+                    m.look = want_look;
                 }
             }
             if !*shown {
@@ -213,13 +273,15 @@ pub fn draw(
         let mat = materials.add(SeaWaterMaterial {
             texture: g.image,
             fog: g.fog,
-            params: WaterParams { misc: Vec4::new(1.0, 0.0, 0.0, 0.0), ids: UVec4::ZERO },
+            params: want_params,
             frame: frame.clone(),
             ripple: empty.clone(),
             scene_depth: copy.depth.clone(),
             scene_color: copy.color.clone(),
-            look,
+            look: want_look,
             rings: rings.clone(),
+            mirror: mirror.params.clone(),
+            mirror_color: mirror.image.clone(),
             order: SEA_BAND + k as f32,
         });
         let e = commands.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(mat.clone()), Transform::IDENTITY, NoFrustumCulling, Visibility::Inherited, Name::new(format!("sea water {k}")))).id();
@@ -253,6 +315,48 @@ mod tests {
         assert!(liquid_port(PORTS[gs::HOVEN].kind));
         assert!(!liquid_port(PORTS[gs::OCEAN].kind) && !liquid_port(PORTS[gs::ENV_OVERLAY].kind));
         assert!(PORTS.iter().filter(|p| matches!(p.kind, SeaKind::Reflect(_) | SeaKind::Pool(_) | SeaKind::TwoTex(_))).all(|p| !liquid_port(p.kind)));
+    }
+
+    #[test]
+    fn the_translucent_grids_994_and_1260_qualify_with_their_fix() {
+        let grids: Vec<(&str, Option<u8>)> = PORTS
+            .iter()
+            .filter_map(|p| match p.kind {
+                SeaKind::Grid(g) => Some((p.name, surface_fix(g.fix >= 0x61, Some(g.fix)))),
+                _ => None,
+            })
+            .collect();
+        let translucent: Vec<_> = grids.iter().filter(|g| g.1.is_some_and(|f| f < 0x80)).collect();
+        assert_eq!(translucent, [&("994 liquid", Some(0x20)), &("1260 liquid", Some(0x40))]);
+        assert!(grids.iter().all(|g| g.1.is_some()), "every grid's own draw may go Enhanced: {grids:?}");
+        // The effect layers (no grid FIX: an additive pass, a mesh pass) and a FIX the opaque test already took.
+        assert_eq!(surface_fix(false, None), None);
+        assert_eq!(surface_fix(false, Some(0x70)), None);
+        assert_eq!(surface_fix(false, Some(0)), None);
+        assert_eq!(surface_fix(true, None), Some(0x80));
+    }
+
+    #[test]
+    fn the_judged_colours_of_the_levels_keep_their_verdicts() {
+        // The judged colours the engine logs (crate::sea_render `judged_rgb`): only Rilgar's and Batalia's seas are water.
+        let (kerwan_clouds, oltanis, rilgar, batalia, lava, umbris, aridia) = ([140, 140, 140], [101, 79, 58], [1, 4, 9], [14, 15, 27], [100, 17, 0], [16, 14, 7], [25, 23, 15]);
+        assert!(clear_liquid(rilgar) && clear_liquid(batalia));
+        for c in [kerwan_clouds, oltanis, lava, umbris, aridia] { assert!(!clear_liquid(c), "{c:?}"); }
+    }
+
+    #[test]
+    fn clarity_lets_the_bed_through_as_the_fix_blend_did() {
+        assert_eq!(clarity(0x80), 0.0);
+        for fix in [0x20u8, 0x40] {
+            let trans = (-clarity(fix) * CLEAR_PATH).exp();
+            assert!((trans - (1.0 - fix as f32 / 128.0)).abs() < 1e-6, "{fix:#x}: {trans}");
+        }
+        assert!(clarity(0x20) < clarity(0x40));
+        // Opaque seas keep the far fade and DEEP, translucent grids neither; params carry FIX / 128 and the clarity.
+        assert_eq!(look(0x80, Vec3::Y).misc, Vec4::new(1.0, FAR_FADE[0], FAR_FADE[1], DEEP));
+        assert_eq!(look(0x20, Vec3::Y).misc, Vec4::new(1.0, 0.0, 0.0, 1.0));
+        assert_eq!(params(0x20).misc, Vec4::new(0.25, 0.0, clarity(0x20), 0.0));
+        assert_eq!(params(0x80).misc, Vec4::new(1.0, 0.0, 0.0, 0.0));
     }
 
     #[test]

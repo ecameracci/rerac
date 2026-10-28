@@ -10,6 +10,11 @@
 //! (6 / 8 / 0xa / 0xe / 0x10 / 0x14, `TfragDrawMode::mscal`). The vertex shader drops the triangles of the
 //! lists the mode does not draw and runs the morph/collapse passes of the chosen entry.
 //!
+//! Water Enhanced's mirror (port-only, crate::water_mirror `WaterMirror::cull_plane`): while it draws, a tfrag the
+//! camera's tests cull (not one occluded) whose sphere and box, reflected about the plane, pass them gets the reflected
+//! mode (`TfragCullInfo::mirrored`, as crate::tie_lod for the ties): it lies outside the camera's frustum, so only the
+//! mirror shows it.
+//!
 //! Environment: `RC_LOD=0` forces every drawn tfrag to MSCAL 0x14 (LOD 0, no morph; culling unchanged);
 //! `RC_LOD_TINT=1` tints LOD 1 red, LOD 2 blue and the clipping path green; `RC_NOVSYNC=1` presents without
 //! vsync so `fps:` measures headroom.
@@ -137,6 +142,15 @@ fn update_lod_constants(
 struct TfragCullInfo {
     sphere: [f32; 4],
     corners: [Vec3; 8],
+}
+
+impl TfragCullInfo {
+    /// Reflected about the plane z = `h` (raw units), None when no part of the sphere is above (Water Enhanced's
+    /// mirror, as crate::tie_lod `mirrored`).
+    fn mirrored(&self, h: f32) -> Option<TfragCullInfo> {
+        let [x, y, z, r] = self.sphere;
+        (z + r > h).then(|| TfragCullInfo { sphere: [x, y, 2.0 * h - z, r], corners: self.corners.map(|c| Vec3::new(c.x, c.y, 2.0 * h - c.z)) })
+    }
 }
 
 /// Everything `update_tfrag_modes` needs, plus the buffer it writes.
@@ -280,7 +294,7 @@ fn update_tfrag_modes(
     occl: Option<ResMut<crate::occlusion::OcclusionFrame>>,
     mut buffers: ResMut<Assets<ShaderBuffer>>,
     cams: Query<(&Transform, Option<&Projection>), With<Camera3d>>,
-    (time, gfx): (Res<Time>, Res<crate::graphics::GraphicsSettings>),
+    (time, gfx, mirror): (Res<Time>, Res<crate::graphics::GraphicsSettings>, Option<Res<crate::water_mirror::WaterMirror>>),
     mut last_print: Local<f32>,
 ) {
     let (Some(mut state), Some((cam, proj))) = (state, cams.iter().next()) else { return };
@@ -296,8 +310,9 @@ fn update_tfrag_modes(
     let rows = [-left, -up, fwd];
     let cam_raw = eye * UNITS;
     let mut hist = [0usize; 8];
-    let mut occluded = 0;
+    let (mut occluded, mut for_mirror) = (0, 0);
     let mask = occl.as_ref().map(|o| o.mask);
+    let plane = mirror.as_deref().and_then(|m| m.cull_plane()).map(|h| h * UNITS);
     let modes: Vec<u32> = state
         .tfrags
         .iter()
@@ -311,6 +326,10 @@ fn update_tfrag_modes(
                 return MODE_CULLED;
             }
             let mut m = tfrag_proc(info, t, cam_raw, rows, thresholds, tans, far, dd);
+            if let Some(r) = plane.filter(|_| m == MODE_CULLED).and_then(|h| info.mirrored(h)) {
+                m = tfrag_proc(&r, t, cam_raw, rows, thresholds, tans, far, dd);
+                if m != MODE_CULLED { for_mirror += 1; }
+            }
             if state.force_lod0 && m != MODE_CULLED { m = 0x14; }
             hist[match m { 0 => 0, 2 => 1, 6 => 2, 8 => 3, 0xa => 4, 0xe => 5, 0x10 => 6, _ => 7 }] += 1;
             m
@@ -326,7 +345,8 @@ fn update_tfrag_modes(
     if hist != state.last_hist && time.elapsed_secs() - *last_print >= 1.0 {
         *last_print = time.elapsed_secs();
         state.last_hist = hist;
-        println!("tfrag modes: culled {} ({occluded} occluded), clip {}, LOD2 {}, 0x8 {}, 0xa {}, 0xe {}, 0x10 {}, 0x14 {}", hist[0], hist[1], hist[2], hist[3], hist[4], hist[5], hist[6], hist[7]);
+        let mirror = if plane.is_some() { format!(" ({for_mirror} drawn for the water's mirror)") } else { String::new() };
+        println!("tfrag modes: culled {} ({occluded} occluded), clip {}, LOD2 {}, 0x8 {}, 0xa {}, 0xe {}, 0x10 {}, 0x14 {}{mirror}", hist[0], hist[1], hist[2], hist[3], hist[4], hist[5], hist[6], hist[7]);
     }
 }
 

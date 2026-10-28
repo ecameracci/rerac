@@ -51,9 +51,11 @@
 //! (`SEA_LIST1_BIAS`). The display-blend pass runs after the world's own translucent draws, so a translucent moby part in
 //! front of an after-ties effect draw is drawn before it instead of after (crate::display_blend).
 //!
-//! **Water Enhanced** (port-only, crate::graphics): the opaque groups of the liquid ports whose image is clear water, seen
-//! from above, go to crate::sea_water (drawn after the scene copy by `water.wgsl`'s Enhanced path, Z written) instead of
-//! the opaque pass; the effect groups, the other ports and every group with the option Original are drawn as above.
+//! **Water Enhanced** (port-only, crate::graphics): the surface groups of the liquid ports (the opaque ones and a grid's
+//! own translucent draw, crate::sea_water::surface_fix) whose image × vertex colours is clear water ([`judged_rgb`],
+//! [`grid_tint`]; the log names each verdict), seen from above, go to crate::sea_water (drawn after the scene copy by
+//! `water.wgsl`'s Enhanced path, Z written) instead of the opaque or display-blend pass; the effect groups, the other
+//! ports and every group with the option Original are drawn as above.
 
 use crate::display_blend::DisplayEffect;
 use crate::fx_draw::{FxPrimMaterial, FxPrimParams, PrimBuf, LIST1_BIAS};
@@ -387,8 +389,10 @@ struct SeaDraw {
     anim_images: HashMap<GridAnim, Handle<Image>>,
     drawn: Option<u64>,
     pixels: Vec<u8>,
-    /// [`clear_tex`] by texture.
-    clear: HashMap<Tex, bool>,
+    /// [`clear_tex`] by texture and tint.
+    clear: HashMap<(Tex, [u32; 3], u8), bool>,
+    /// [`grid_tint`] by port.
+    tints: HashMap<usize, [f32; 3]>,
 }
 
 pub struct SeaRenderPlugin;
@@ -403,20 +407,49 @@ impl Plugin for SeaRenderPlugin {
     }
 }
 
-/// Water Enhanced's verdict on a group's texture (crate::water_render::clear_rgba; an animated image by its first frame
-/// as the module reads it), found once per texture.
-fn clear_tex(st: &mut SeaDraw, sea: &LevelSea, fx: Option<&[Option<rc_formats::texture::Texture>]>, tex: Tex) -> bool {
-    if let Some(&c) = st.clear.get(&tex) { return c; }
-    let (clear, what) = match tex {
-        Tex::Fx(i, _) => (fx.and_then(|f| f.get(i)?.as_ref()).is_some_and(|t| crate::water_render::clear_rgba(&t.rgba)), format!("fx texture {i}")),
+/// The average RGB of a grid's vertex colours over its flagged blocks, bytes / 128 (GS MODULATE's factor: `Ct·Cv >> 7`).
+fn grid_tint<'a>(records: impl IntoIterator<Item = &'a rc_formats::sea::LiquidGrid>) -> [f32; 3] {
+    let (mut sum, mut n) = ([0.0f64; 3], 0u32);
+    for r in records {
+        for (k, cols) in r.colours.iter().enumerate() {
+            if r.flags.get(k).copied().unwrap_or(0) == 0 { continue; }
+            for c in cols {
+                for (j, s) in sum.iter_mut().enumerate() { *s += (c >> (8 * j) & 0xff) as f64; }
+                n += 1;
+            }
+        }
+    }
+    if n == 0 { return [1.0; 3]; }
+    sum.map(|s| (s / n as f64 / 128.0) as f32)
+}
+
+/// The colour Water Enhanced judges (crate::water_render::clear_rgba): a texture's average RGB modulated by `tint` (a
+/// grid's vertex colours, [`grid_tint`]; 1 for the other draws), clamped to bytes. Kerwan's 994 and Oltanis's 1260 draw
+/// a grey image (141 on every channel) that only their vertex colours make water.
+pub fn judged_rgb(avg: [f32; 3], tint: [f32; 3]) -> [u8; 3] { [0, 1, 2].map(|k| (avg[k] * tint[k]).floor().clamp(0.0, 255.0) as u8) }
+
+/// Water Enhanced's verdict on a group's texture and tint (crate::sea_water::clear_liquid of [`judged_rgb`]; an
+/// animated image by its first frame as the module reads it), found once per texture, tint and FIX.
+fn clear_tex(st: &mut SeaDraw, sea: &LevelSea, fx: Option<&[Option<rc_formats::texture::Texture>]>, tex: Tex, tint: [f32; 3], fix: u8) -> bool {
+    let key = (tex, tint.map(f32::to_bits), fix);
+    if let Some(&c) = st.clear.get(&key) { return c; }
+    let mut px = Vec::new();
+    let what = match tex {
+        Tex::Fx(i, _) => {
+            if let Some(t) = fx.and_then(|f| f.get(i)?.as_ref()) { px.extend_from_slice(&t.rgba); }
+            format!("fx texture {i}")
+        }
         Tex::Anim(a) => {
-            let mut px = Vec::new();
             if let Some(f) = sea.anim_frames.get(&a) { grid_image(&GridFrames { frames: f.frames.iter().take(1).cloned().collect() }, 1, 0, &mut px); }
-            (!px.is_empty() && crate::water_render::clear_rgba(&px), format!("liquid image fx {}+{}", a.tex, a.frames))
+            format!("liquid image fx {}+{}", a.tex, a.frames)
         }
     };
-    println!("sea: {what} is {}", if clear { "clear water (Water Enhanced applies)" } else { "not clear water (kept Original)" });
-    st.clear.insert(tex, clear);
+    let n = (px.len() / 4).max(1) as f32;
+    let avg = px.as_chunks::<4>().0.iter().fold([0.0f32; 3], |a, p| [a[0] + p[0] as f32, a[1] + p[1] as f32, a[2] + p[2] as f32]).map(|s| s / n);
+    let rgb = judged_rgb(avg, tint);
+    let clear = !px.is_empty() && crate::sea_water::clear_liquid(rgb);
+    println!("sea: {what} × tint {tint:.2?} = {rgb:?} at FIX {fix:#x} is {}", if clear { "clear water (Water Enhanced applies)" } else { "not clear water (kept Original)" });
+    st.clear.insert(key, clear);
     clear
 }
 
@@ -493,6 +526,8 @@ fn draw(
     let mut groups: Vec<Group> = Vec::new();
     // Per callback: its first group and whether its port is a liquid (crate::sea_water::liquid_port).
     let mut liquid: Vec<(usize, bool)> = Vec::new();
+    // The grids' own draws (not their meshes'): the group, the record's FIX (crate::sea_water::surface_fix), the port.
+    let mut grid_own: Vec<(usize, u8, usize)> = Vec::new();
     // The animated images of this tick, made once each.
     let mut made: Vec<GridAnim> = Vec::new();
     let mut anim = |a: GridAnim, st: &mut SeaDraw, images: &mut Assets<Image>| -> bool {
@@ -533,6 +568,7 @@ fn draw(
                 let grid_fog = if missile { level_fog } else { TfragFog::new(&lf) };
                 let opaque = run.fix >= 0x61;
                 let prims = grid_prims(&g.grid, &g.module, gp.scale, run.z, if opaque { 0x80 } else { run.fix }, cam);
+                grid_own.push((groups.len(), run.fix, port));
                 groups.push(Group { tex: Tex::Anim(ga), effect: (!opaque).then_some(Blend::Mix), fog: grid_fog, bias, prims });
                 // Level 9's lava meshes (317's callback `0x2ef750`): the flows before the grid, the grid-textured ones
                 // after it with its image, fog and FIX.
@@ -565,6 +601,7 @@ fn draw(
                 }
                 let lf = LevelFog { color: g.fog_rgb, near_dist: g.fog[0], far_dist: g.fog[1], near_intensity: g.fog[2], far_intensity: g.fog[3] };
                 // (`0x2a4818` has no Visibomb-view branch: the record's fog always.)
+                grid_own.push((groups.len(), g.fix, port));
                 groups.push(Group { tex: Tex::Anim(g.anim), effect: (!opaque).then_some(Blend::Mix), fog: TfragFog::new(&lf), bias, prims });
             }
             (SeaKind::Pool(pm), SeaData::Pool(d)) => {
@@ -596,19 +633,29 @@ fn draw(
             _ => {}
         }
     }
-    // Water Enhanced: the clear liquid surfaces seen from above go to crate::sea_water instead.
+    // Water Enhanced: the clear liquid surfaces seen from above (the opaque ones and the grids' translucent draws) go
+    // to crate::sea_water instead.
     let mut clear_seas = Vec::new();
     if gfx.water.on() {
         let all = std::mem::take(&mut groups);
         for (i, g) in all.into_iter().enumerate() {
             let is_liquid = liquid.iter().rev().find(|m| m.0 <= i).is_some_and(|m| m.1);
-            if is_liquid && g.effect.is_none() && clear_tex(st, &level.0.sea, fx, g.tex) && crate::sea_water::from_above(&g.prims, cam[2]) {
+            let own = grid_own.iter().find(|o| o.0 == i);
+            let fix = crate::sea_water::surface_fix(g.effect.is_none(), own.map(|o| o.1)).filter(|_| is_liquid);
+            let tint = own.map_or([1.0; 3], |o| {
+                *st.tints.entry(o.2).or_insert_with(|| match gs::data(water, o.2) {
+                    Some(SeaData::Grid(d)) => grid_tint([&d.grid]),
+                    Some(SeaData::GridSet(d)) => grid_tint(d.grids.iter().map(|(r, _)| r)),
+                    _ => [1.0; 3],
+                })
+            });
+            if let Some(fix) = fix.filter(|&f| clear_tex(st, &level.0.sea, fx, g.tex, tint, f) && crate::sea_water::from_above(&g.prims, cam[2])) {
                 let img = match g.tex {
                     Tex::Fx(i, a) => fx_handle(st, &mut images, fx, i, a),
                     Tex::Anim(a) => st.anim_images.get(&a).cloned(),
                 };
                 if let Some(image) = img {
-                    clear_seas.push(crate::sea_water::SeaGroup { image, fog: g.fog, prims: g.prims });
+                    clear_seas.push(crate::sea_water::SeaGroup { image, fog: g.fog, prims: g.prims, fix });
                     continue;
                 }
             }
@@ -677,6 +724,22 @@ mod tests {
         assert_eq!(tween(1.0, 0x1020_3040, 0xffff_ffff), 0xffff_ffff);
         // 0x40·0.5 + 0x41·0.5 = 64.5 → 64.
         assert_eq!(tween(0.5, 0x40, 0x41) & 0xff, 0x40);
+    }
+
+    #[test]
+    fn the_judged_colour_is_the_image_modulated_by_the_tint() {
+        let judge = |avg: [f32; 3], tint: [f32; 3]| {
+            let c = judged_rgb(avg, tint);
+            crate::water_render::clear_rgba(&[c[0], c[1], c[2], 0x80])
+        };
+        // A grey image: its verdict is the tint's (no tint: grey is not water).
+        assert!(!judge([141.0; 3], [1.0; 3]));
+        assert!(judge([141.0; 3], [0.3, 0.6, 0.7]));
+        assert!(!judge([141.0; 3], [0.7, 0.5, 0.2]));
+        // Lava and the yellow-brown liquids stay what they were under a neutral tint.
+        assert!(!judge([132.0, 23.0, 0.0], [1.0; 3]) && !judge([140.0, 131.0, 104.0], [1.0; 3]));
+        assert!(judge([14.0, 16.0, 28.0], [1.0; 3]));
+        assert_eq!(judged_rgb([200.0, 10.0, 0.5], [2.0, 1.0, 1.0]), [255, 10, 0]);
     }
 
     #[test]
