@@ -279,13 +279,13 @@ pub struct LevelHud {
     pub lang: u32,
 }
 
-/// 0x15ed88, the game's language: `RC_LANG` (default English) until the front end's Language list changes it
-/// ([`set_language`]); every later load (the level's text, the help voice bank, the movies' and scenes' language, the
-/// space plates) reads it.
+/// 0x15ed88, the game's language: `RC_LANG`, else the one last chosen ([`saved_language`]), else the computer's
+/// ([`system_language`]), else English, until the front end's Language list changes it ([`set_language`]); every
+/// later load (the level's text, the help voice bank, the movies' and scenes' language, the space plates) reads it.
 pub fn language() -> u32 {
     let v = LANGUAGE.load(std::sync::atomic::Ordering::Relaxed);
     if v != u32::MAX { return v; }
-    std::env::var("RC_LANG").ok().and_then(|v| v.trim().parse().ok()).unwrap_or(rc_formats::strings::lang::ENGLISH)
+    std::env::var("RC_LANG").ok().and_then(|v| v.trim().parse().ok()).or_else(saved_language).or_else(system_language).unwrap_or(rc_formats::strings::lang::ENGLISH)
 }
 
 /// The runtime language (u32::MAX: not set, `RC_LANG` applies).
@@ -293,6 +293,97 @@ static LANGUAGE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::ne
 
 /// 0x15ed88 = `lang` (`MenuSetPostAction` action 9).
 pub fn set_language(lang: u32) { LANGUAGE.store(lang, std::sync::atomic::Ordering::Relaxed); }
+
+/// Port-only: the PS2 keeps the Language choice for the session only; the port keeps it in the port settings file
+/// (`language = <slot>`, crate::render_settings::load_key) so the next start is in that language. A slot the disc has
+/// no text for (1, 6, 7) is ignored.
+const LANGUAGE_KEY: &str = "language";
+
+/// The saved language (read once).
+fn saved_language() -> Option<u32> {
+    static SAVED: std::sync::OnceLock<Option<u32>> = std::sync::OnceLock::new();
+    *SAVED.get_or_init(|| {
+        let v = crate::render_settings::load_key(LANGUAGE_KEY)?;
+        let l = v.trim().parse().ok().filter(|l| known_language(*l));
+        if l.is_none() { eprintln!("hud: settings file: language = {v} is not one of the disc's languages; English"); }
+        l
+    })
+}
+
+/// The slots `rc_formats::strings::lang` names (the disc's English, French, German, Spanish and Italian text).
+fn known_language(l: u32) -> bool {
+    use rc_formats::strings::lang::*;
+    [ENGLISH, FRENCH, GERMAN, SPANISH, ITALIAN].contains(&l)
+}
+
+/// Saves the player's Language choice for the next start ([`LANGUAGE_KEY`]).
+pub fn save_language(lang: u32) {
+    if known_language(lang) { crate::render_settings::save_key(LANGUAGE_KEY, &lang.to_string()); }
+}
+
+/// With nothing chosen yet, the computer's display language, as `InitOnce` takes the PS2's system language (EN→0,
+/// FR→2, DE→3, ES→4, IT→5, anything else English: [`language_from_code`]); read once. None (English) when it
+/// cannot be read, and in frame-exact runs (their output must not depend on the host).
+fn system_language() -> Option<u32> {
+    static SYSTEM: std::sync::OnceLock<Option<u32>> = std::sync::OnceLock::new();
+    *SYSTEM.get_or_init(|| {
+        if crate::determinism::deterministic() { return None; }
+        let code = system_language_code();
+        let l = code.as_deref().and_then(language_from_code);
+        println!("hud: system language {}: {}", code.as_deref().unwrap_or("unknown"), l.map_or("English (no text in it)".into(), |l| format!("language {l}")));
+        l
+    })
+}
+
+/// The language slot of a language code (`fr`, `de-DE`, `es_ES.UTF-8`, …: its first two letters), None for one the
+/// disc has no text in.
+fn language_from_code(code: &str) -> Option<u32> {
+    use rc_formats::strings::lang::*;
+    let two: String = code.trim().chars().take_while(|c| c.is_ascii_alphabetic()).collect::<String>().to_ascii_lowercase();
+    match two.as_str() {
+        "en" => Some(ENGLISH),
+        "fr" => Some(FRENCH),
+        "de" => Some(GERMAN),
+        "es" => Some(SPANISH),
+        "it" => Some(ITALIAN),
+        _ => None,
+    }
+}
+
+/// The display language (`GetUserDefaultUILanguage`, kernel32): the primary language of its LANGID as a code.
+#[cfg(windows)]
+fn system_language_code() -> Option<String> {
+    #[link(name = "kernel32")]
+    unsafe extern "system" { fn GetUserDefaultUILanguage() -> u16; }
+    // SAFETY: GetUserDefaultUILanguage takes nothing and returns a value.
+    let id = unsafe { GetUserDefaultUILanguage() };
+    // PRIMARYLANGID: the low 10 bits (LANG_ENGLISH 0x09, LANG_FRENCH 0x0c, LANG_GERMAN 0x07, LANG_SPANISH 0x0a,
+    // LANG_ITALIAN 0x10).
+    Some(match id & 0x3ff {
+        0x09 => "en".into(),
+        0x0c => "fr".into(),
+        0x07 => "de".into(),
+        0x0a => "es".into(),
+        0x10 => "it".into(),
+        p => format!("langid {id:#06x} (primary {p:#x})"),
+    })
+}
+
+/// The messages locale: `LANGUAGE`'s first entry, `LC_ALL`, `LC_MESSAGES`, `LANG` (the first set; `C` / `POSIX`
+/// count as English); on macOS, where an app started from Finder has none of these, then the first of
+/// `defaults read -g AppleLanguages`.
+#[cfg(not(windows))]
+fn system_language_code() -> Option<String> {
+    let env = ["LANGUAGE", "LC_ALL", "LC_MESSAGES", "LANG"].iter().find_map(|k| {
+        let v = std::env::var(k).ok()?;
+        let first = v.split(':').next()?.trim().to_string();
+        (!first.is_empty()).then_some(first)
+    });
+    if env.is_some() || !cfg!(target_os = "macos") { return env; }
+    let out = std::process::Command::new("defaults").args(["read", "-g", "AppleLanguages"]).output().ok()?;
+    // `(\n    "fr-FR",\n    "en-US"\n)`
+    String::from_utf8_lossy(&out.stdout).split('"').nth(1).map(str::to_string)
+}
 
 /// Reads `hud_header`, the banks, the overlay's glyph tables, the FX textures and the level text.
 pub fn load(root: &Path, index: u32, core: &rc_formats::level::LevelCore, core_index: &[u8], core_data: &[u8], gameplay: &[u8]) -> Result<LevelHud> {
@@ -1298,6 +1389,17 @@ fn apply_fx_cuts(rt: Option<ResMut<HudRuntime>>, level: Res<crate::Level>, play:
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn system_language_codes() {
+        use rc_formats::strings::lang::*;
+        for (code, want) in [("fr", Some(FRENCH)), ("de-DE", Some(GERMAN)), ("es_ES.UTF-8", Some(SPANISH)), ("it_IT", Some(ITALIAN)),
+            ("en-GB", Some(ENGLISH)), ("FR-ca", Some(FRENCH)), ("ja-JP", None), ("pt_BR", None), ("C", None), ("POSIX", None), ("", None),
+            ("langid 0x0411 (primary 0x11)", None)] {
+            assert_eq!(language_from_code(code), want, "{code}");
+        }
+        assert!(known_language(GERMAN) && !known_language(1) && !known_language(6));
+    }
 
     #[test]
     fn sprite_variants_map_uv_like_the_gs_packets() {
