@@ -168,6 +168,8 @@ struct GfxActor {
     entities: Vec<Entity>,
     /// The glow word last written to the actor's slot (Clank's pulse: `FUN_00228bc0`).
     glow: Option<u32>,
+    /// A gold weapon's demo actor (`FUN_002aea70`'s `update_item_tint_from_hero`): lit with the hero's warm set 12.
+    gold: bool,
 }
 
 /// The mode-6 and transition state.
@@ -943,13 +945,20 @@ fn upload_actors(
     }
     if t.gfx.uploaded == Some(t.gfx.frames) { return; }
     t.gfx.uploaded = Some(t.gfx.frames);
-    upload_gfx(&mut t.gfx, &level.0, &lump.scene, &t.poses, play.as_deref().map(|p| &p.game.mobys), &mut commands, &mut buffers, &mut q);
+    let play = play.as_deref();
+    // A gold weapon's demo actor takes its lights from the hero moby (`update_item_tint_from_hero`'s second
+    // argument, `hero.moby`): its light word set 12 and the ambient `HeroEnvLighting` left on +0x38..+0x3e.
+    let hero_light = play.and_then(|p| p.game.mobys.mobys.get(p.game.hero_moby)).map(|h| (h.light, [h.ambient[0], h.ambient[1], h.ambient[2]]));
+    upload_gfx(&mut t.gfx, &level.0, &lump.scene, &t.poses, play.map(|p| &p.game.mobys), hero_light, &mut commands, &mut buffers, &mut q);
 }
 
 /// One frame of a scene's actors (module docs): each actor's slot re-pointed at its chunk's streamed sequence, its pose
 /// evaluated into the palette (with its table moby's joint modifiers: the head manipulators of `FUN_0024a1d0` /
 /// `FUN_00228bc0`), its instance record (ship-local rows from its yaw, its lights), its glow word (mode 0x10: Clank's
 /// pulse), its entities moved and shown (hidden when it has no pose or is hidden).
+///
+/// `hero_light`: the live hero moby's light word and ambient. A gold demo actor (`GfxActor::gold`) takes light set 12
+/// from it (`update_item_tint_from_hero`, `FUN_002aea70`); without a hero it keeps the actor's own light word.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn upload_gfx(
     g: &mut ActorGfx,
@@ -957,6 +966,7 @@ pub(crate) fn upload_gfx(
     scene: &Scene,
     poses: &[ActorPose],
     table: Option<&rc_game::moby_runtime::MobyTable>,
+    hero_light: Option<(u32, [u8; 3])>,
     commands: &mut Commands,
     buffers: &mut Assets<ShaderBuffer>,
     q: &mut Query<(&mut Transform, &mut Visibility)>,
@@ -1005,7 +1015,7 @@ pub(crate) fn upload_gfx(
         let (c, sn) = (pose.yaw.cos(), pose.yaw.sin());
         let rows = [[c, sn, 0.0], [-sn, c, 0.0], [0.0, 0.0, 1.0]];
         let rbits: [rc_formats::moby_light::V4; 3] = rows.map(|r| [r[0].to_bits(), r[1].to_bits(), r[2].to_bits(), 0]);
-        let lights = lighting.map(|l| rc_formats::moby_light::moby_lights(&rbits, &l.bank, lw, amb, 0x80));
+        let lights = lighting.map(|l| actor_lights(&rbits, &l.bank, lw, amb, a.gold, hero_light));
         let model = moby_render::extra_model(rows, pose.scale.unwrap_or(a.scale), pose.position);
         records.extend_from_slice(&moby_render::extra_record(&model, lights.as_ref(), a.base));
         shown.push((a.entities.clone(), (!pose.hidden).then_some(model)));
@@ -1042,6 +1052,16 @@ pub(crate) fn upload_gfx(
                 }
             }
         }
+    }
+}
+
+/// The light block of one extra actor: a gold weapon's demo actor takes light set 12 from the hero moby's light word
+/// and ambient (`update_item_tint_from_hero`, `gold_lights`); every other actor, and a gold one without a hero, keeps
+/// the actor's own light word (`moby_lights`).
+fn actor_lights(rows: &[rc_formats::moby_light::V4; 3], bank: &rc_formats::tfrag_light::LightBank, light_word: u32, ambient: [u8; 3], gold: bool, hero_light: Option<(u32, [u8; 3])>) -> rc_formats::moby_light::MobyLights {
+    match hero_light.filter(|_| gold) {
+        Some((word, hero_ambient)) => rc_formats::moby_light::gold_lights(rows, bank, word, hero_ambient, 0x80),
+        None => rc_formats::moby_light::moby_lights(rows, bank, light_word, ambient, 0x80),
     }
 }
 
@@ -1095,6 +1115,7 @@ pub(crate) fn spawn_gfx(
     let Some(c0) = scene.chunks.first() else { return Ok(()) };
     for (k, a) in c0.actors.iter().enumerate() {
         let class = classes.get(k).copied().unwrap_or(a.class);
+        let mut gadget = false;
         let found = match level.mobys.classes.iter().position(|c| c.o_class == class) {
             Some(ci) => Some((level.mobys.classes[ci].clone(), level.mobys.anim[ci].clone())),
             None if (530..=537).contains(&class) => Some(load_spaceship_class(level, class)?),
@@ -1103,6 +1124,7 @@ pub(crate) fn spawn_gfx(
             None => match gadget_class(class) {
                 Some(g) => {
                     gadgets.push((k as u32, class));
+                    gadget = true;
                     Some(g)
                 }
                 None => {
@@ -1111,19 +1133,22 @@ pub(crate) fn spawn_gfx(
                 }
             },
         };
+        // A gold gadget is relit like the one in the hand (`update_item_tint_from_hero`): only the class the game
+        // loaded through the gadget table takes the gold map and the warm set.
+        let gold_actor = gadget && gold(class);
         let Some((cl, mut anim)) = found else {
-            specs.push((None, MobyAnimClass { joint_count: 0, skeleton: vec![], rest: vec![], parent_word: vec![], sequences: vec![None] }, 0u8, palette_len, 0u32));
+            specs.push((None, MobyAnimClass { joint_count: 0, skeleton: vec![], rest: vec![], parent_word: vec![], sequences: vec![None] }, 0u8, palette_len, 0u32, false));
             continue;
         };
         let slot = cl.class.header.sequence_count;
         if anim.sequences.len() <= slot as usize { anim.sequences.resize(slot as usize + 1, None); }
         let slots = (anim.joint_count as u32).max(ExtraMobys::max_skinned_joint(&cl) as u32 + 1).max(1);
-        specs.push((Some(cl), anim, slot, palette_len, slots));
+        specs.push((Some(cl), anim, slot, palette_len, slots, gold_actor));
         palette_len += slots;
     }
     let n = specs.len();
     let mut extra = ExtraMobys::new(level, vec![0; n.max(1) * moby_render::EXTRA_RECORD_SIZE], crate::moby_anim::identity_palette(palette_len), buffers);
-    for (k, (cl, anim, slot, base, slots)) in specs.into_iter().enumerate() {
+    for (k, (cl, anim, slot, base, slots, gold_actor)) in specs.into_iter().enumerate() {
         let entities = match &cl {
             Some(c) => extra.spawn(commands, level, c, k as u32, Transform::IDENTITY, &format!("space actor {k}"), meshes, images, materials),
             None => Vec::new(),
@@ -1133,7 +1158,7 @@ pub(crate) fn spawn_gfx(
             if let Some(l) = &layer { commands.entity(e).insert(l.clone()); }
         }
         let scale = cl.as_ref().map_or(1.0, |c| c.class.header.scale);
-        g.actors.push(GfxActor { anim, slot, chunk: None, scale, base, slots, entities, glow: None });
+        g.actors.push(GfxActor { anim, slot, chunk: None, scale, base, slots, entities, glow: None, gold: gold_actor });
     }
     for (k, class) in gadgets { extra.set_gold(commands, k, class, gold(class)); }
     g.extra = Some(extra);
@@ -1201,3 +1226,24 @@ pub(crate) fn view_layers(
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rc_formats::moby_light::IDENTITY;
+    use rc_formats::tfrag_light::{DirLightSet, LightBank};
+
+    /// `update_item_tint_from_hero` in the gold upgrade's demo (`FUN_002aea70`): the item actor takes set 12 from the
+    /// hero moby's light word, while every other actor (and a gold one with no hero) keeps its own light word.
+    #[test]
+    fn only_a_gold_demo_actor_takes_the_heros_light() {
+        let mut bank = LightBank::default();
+        bank.sets[3] = DirLightSet { color_a: [1.0, 0.5, 0.25, 0.0], dir_a: [0.0, 0.0, -1.0, 0.0], ..Default::default() };
+        let hero = (0x03, [0x20; 3]);
+        let own = actor_lights(&IDENTITY, &bank, 0x03, [0x40; 3], false, Some(hero));
+        assert_eq!(own, rc_formats::moby_light::moby_lights(&IDENTITY, &bank, 0x03, [0x40; 3], 0x80));
+        let gold = actor_lights(&IDENTITY, &bank, 0x03, [0x40; 3], true, Some(hero));
+        assert_eq!(gold, rc_formats::moby_light::gold_lights(&IDENTITY, &bank, 0x03, [0x20; 3], 0x80));
+        assert_ne!(gold, own, "a gold actor does not keep its own light word");
+        assert_eq!(actor_lights(&IDENTITY, &bank, 0x03, [0x40; 3], true, None), own);
+    }
+}
