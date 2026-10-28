@@ -5,7 +5,9 @@
 //! only: nothing here reaches the game state.
 //!
 //! **Shape.** The spline is resampled every [`ROW_STEP`]; each row probes the world collision straight down at
-//! [`COL_STEP`] across the flow (up to [`HALF_WIDTH`] each side, stopping at a wall). A row spans the chute's bed
+//! [`COL_STEP`] across the flow (up to [`HALF_WIDTH`] each side, stopping at a wall or a [`STEP`] up: a row never
+//! climbs out of a chute sunk in a floor onto that floor; a row with floor out to [`HALF_WIDTH`] on both sides is
+//! open ground, not the chute, and is left out). A row spans the chute's bed
 //! between the walls: level across at [`DEPTH`] above the row's lowest floor (the levels smoothed along the chute), and
 //! where the bed rises above that a film [`FILM`] over it (over the higher neighbouring sample, so the curved bed does
 //! not show through between the samples). The sheet fades out over [`FADE`] columns / rows at its
@@ -28,6 +30,9 @@ pub const FADE: f32 = 2.0;
 const FLOW_CLASS: i32 = 679;
 /// A floor this far over the row's start ends the row's walk outward (a wall, not the chute's bed).
 const WALL_RISE: f32 = 1.0;
+/// A floor this far over the previous column's ends it too: a step, not the bed's curve (Rilgar's slide starts sunk
+/// 0.8 under the room's floor).
+const STEP: f32 = 0.35;
 
 /// One chute spline: its points and the flow speed (u/s).
 #[derive(Clone, Debug, PartialEq)]
@@ -119,11 +124,17 @@ pub fn sheet(c: &ChuteSpline, floor: impl Fn([f32; 3], [f32; 3]) -> Option<f32>,
         };
         let z: Vec<Option<f32>> = (-n_cols..=n_cols).map(probe).collect();
         let zi = |k: i32| z[(k + n_cols) as usize];
-        // The bed: out from the spline until a wall or no floor.
+        // The bed: out from the spline until a wall, a step up (the rim of a chute sunk in a floor) or no floor.
         let bed = |k: i32| zi(k).filter(|&h| h < zc + WALL_RISE - 0.05);
+        let next = |from: i32, k: i32| bed(k).filter(|&h| bed(from).is_none_or(|p| h - p <= STEP));
         let (mut lo, mut hi) = (0, 0);
-        while lo > -n_cols && bed(lo - 1).is_some() { lo -= 1; }
-        while hi < n_cols && bed(hi + 1).is_some() { hi += 1; }
+        while lo > -n_cols && next(lo, lo - 1).is_some() { lo -= 1; }
+        while hi < n_cols && next(hi, hi + 1).is_some() { hi += 1; }
+        // Floor out to the widest probe on both sides: open ground (a room's floor, a pool's bed), not a chute.
+        if lo == -n_cols && hi == n_cols {
+            rows.push(None);
+            continue;
+        }
         let low = (lo..=hi).filter_map(bed).fold(zc, f32::min);
         let floor = (lo..=hi).map(|k| bed(k).unwrap_or(low)).collect();
         rows.push(Some(Row { at, along: s, dir, level: low + DEPTH, cols: (lo, hi), floor }));
@@ -220,5 +231,21 @@ mod tests {
         assert!(part.idx.len() < full.idx.len());
         let none = sheet(&line(), |_, _| None, |_| false);
         assert!(none.pos.is_empty() && none.idx.is_empty());
+    }
+
+    /// A chute sunk 0.8 into a floor (under the wall rise): the sheet stops at the rim and never covers the floor;
+    /// rows on open ground (floor out to the widest probe on both sides) are left out.
+    #[test]
+    fn sheet_stays_in_a_sunk_chute() {
+        let flat = ChuteSpline { points: (0..=5).map(|k| [2.0 * k as f32, 0.0, 10.0]).collect(), speed: 5.0 };
+        let sunk = |top: [f32; 3], bottom: [f32; 3]| {
+            let z = if top[1].abs() < 1.4 { 10.0 } else { 10.8 };
+            (bottom[2] <= z && z <= top[2]).then_some(z)
+        };
+        let s = sheet(&flat, sunk, |_| false);
+        assert!(!s.idx.is_empty());
+        assert!(s.pos.iter().all(|p| p[1].abs() < 1.4 && p[2] < 10.5), "{:?}", s.pos);
+        let open = sheet(&flat, |top: [f32; 3], bottom: [f32; 3]| (bottom[2] <= 10.0 && 10.0 <= top[2]).then_some(10.0), |_| false);
+        assert!(open.pos.is_empty() && open.idx.is_empty());
     }
 }
