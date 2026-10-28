@@ -1,6 +1,6 @@
 //! **Port-only: the scene copy** for the materials that read the world behind them (crate::graphics Water Enhanced,
 //! Particles Soft). The main view's depth and colour can not be read by a draw that renders into them, so right before
-//! the transparent pass (after the opaque world, the shadows and the ambient occlusion) a full-screen pass copies them
+//! the transparent pass (after the opaque world, the shadows, the ambient occlusion and crate::gi_render) a full-screen pass copies them
 //! into two images the materials bind: [`SceneCopy::depth`] (`R32Float`, the depth buffer's value, 0 = the sky) and
 //! [`SceneCopy::color`] (the frame as drawn so far, `Rgba8UnormSrgb`; with MSAA the opaque pass's resolve). The
 //! images are the main camera's target size, so a material reads them at its own fragment position.
@@ -16,6 +16,7 @@
 
 use crate::ao_render::AoSet;
 use crate::fx_view::{depth_defs, depth_entry};
+use crate::gi_render::GiSet;
 use crate::graphics::GraphicsSettings;
 use crate::particle_render::ParticleMaterial;
 use crate::shadow_render::{ShadowCamera, ShadowPassSet};
@@ -79,6 +80,7 @@ impl Plugin for SceneCopyPlugin {
                     .after(ShadowPassSet)
                     .after(SunShadowSet)
                     .after(AoSet)
+                    .after(GiSet)
                     .before(main_transparent_pass_3d)
                     .in_set(Core3dSystems::MainPass)
                     .in_set(SceneCopySet),

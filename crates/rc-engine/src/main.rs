@@ -125,6 +125,7 @@ mod aa_blit;
 mod afterimage_render;
 mod ao_render;
 mod fx_view;
+mod gi_render;
 mod scene_copy;
 mod sun_rays;
 mod sun_shadow;
@@ -233,7 +234,7 @@ fn main() -> anyhow::Result<()> {
     .add_plugins(pre_shadow::PreShadowPlugin)
     // The port's modern options (crate::graphics, Lighting Simple / Enhanced): sun shadows, ambient occlusion, the scene copy
     // the soft particles and the water read, sun rays, volumetric light.
-    .add_plugins((fx_view::FxViewPlugin, sun_shadow::SunShadowPlugin, ao_render::AoPlugin, scene_copy::SceneCopyPlugin, sun_rays::SunRaysPlugin, volumetric_light::VolumetricLightPlugin))
+    .add_plugins((fx_view::FxViewPlugin, sun_shadow::SunShadowPlugin, ao_render::AoPlugin, gi_render::GiPlugin, scene_copy::SceneCopyPlugin, sun_rays::SunRaysPlugin, volumetric_light::VolumetricLightPlugin))
     .add_plugins(frame_log::FrameLogPlugin)
     .add_plugins(session::SessionPlugin)
     .insert_resource(spawn)
