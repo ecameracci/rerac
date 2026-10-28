@@ -42,6 +42,7 @@ mod determinism;
 mod display;
 mod display_blend;
 mod dialog;
+mod chute_water;
 mod disc_source;
 mod first_run;
 mod fly_cam;
