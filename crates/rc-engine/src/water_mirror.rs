@@ -31,8 +31,12 @@
 //! **What it draws** ([`keep_world_draws`], after Bevy's visibility check, on the mirror cameras only): the sky shells,
 //! the tfrags, the ties and the mobys (Ratchet among them; their metal pass too), without the effect mobys
 //! (crate::display_blend `DisplayEffect`). Left out: the sky's stars, the shrubs and billboards, the water and seas,
-//! the particles, the draw-callback effects. What the game's own culls hid for the main camera (occlusion, the tie
-//! and moby frustum culls) is missing from it too (G-REN-110).
+//! the particles, the draw-callback effects. The game's culls run for the main camera; while a plane is drawn
+//! ([`WaterMirror::cull_plane`]) a tie or tfrag its frustum and distance tests cull is tested again reflected about the
+//! plane and drawn when that passes (crate::tie_lod `mirrored`, crate::tfrag_lod), so the static world the water
+//! reflects stays in it however the camera pitches (Rilgar's bay: the town's windows went out of the reflection as
+//! its buildings left the top of the view). What occlusion hid, and the mobys the moby culls hid, are still missing
+//! (G-REN-110).
 //!
 //! **The water** (`water.wgsl` `planar`, bindings 11..13 of crate::water_render::WaterMaterial and
 //! crate::sea_water::SeaWaterMaterial): `mirror` = (the weight while drawn, [`fade`]; the plane's height); on pixels
@@ -294,6 +298,12 @@ pub struct WaterMirror {
     chosen: (Option<f32>, usize),
     /// `debug`: the region count and plane last printed.
     logged: (usize, Option<f32>),
+}
+
+impl WaterMirror {
+    /// The plane drawn (game z) while its weight is above 0: crate::tie_lod and crate::tfrag_lod draw what the
+    /// camera's frustum culls but its reflection about it does not (the mirror's last frame; the plane is sticky).
+    pub fn cull_plane(&self) -> Option<f32> { self.drawn.filter(|_| self.weight > 0.0 && self.mode != Mode::Off && self.cams.is_some()) }
 }
 
 /// Both mirror cameras.

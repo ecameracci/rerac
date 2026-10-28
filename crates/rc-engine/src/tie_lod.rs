@@ -22,6 +22,11 @@
 //! nothing is hidden: the sun's cascades cull with their own frusta and every tie casts at LOD 0 (tie.wgsl), so its
 //! shadow does not appear and vanish with the camera's cull; the camera's view keeps Bevy's frustum culling.
 //!
+//! **Water Enhanced's mirror** (port-only, crate::water_mirror `WaterMirror::cull_plane`): while it draws, an instance
+//! the camera's tests cull (not one occluded) whose sphere, reflected about the plane, passes them is drawn with that
+//! reflected record ([`mirrored`]), so what the water reflects does not vanish when the camera's frustum leaves it
+//! (Rilgar's bay under a camera pitched down). The record only draws what lies outside the camera's frustum.
+//!
 //! Environment: `RC_TIE_LOD=0` forces every drawn instance to LOD 0 with k = 0 (culling unchanged);
 //! `RC_TIE_LOD_TINT=1` tints LOD 1 red and LOD 2 blue; `RC_TIE_CPU_CULL=0` leaves culled instances visible
 //! to Bevy (the vertex shader alone drops them, as before).
@@ -180,7 +185,7 @@ pub struct TieLodState {
     /// The fog `fog_value` uses; `crate::fog_state` keeps it equal to the frame's `GameFog`.
     pub(crate) fog: LevelFog,
     force_lod0: bool,
-    last_hist: [usize; 6],
+    last_hist: [usize; 7],
     /// Per instance: its part entities (none for instances that are never drawn).
     entities: Vec<Vec<Entity>>,
     /// Per instance: whether its entities are currently shown (`Visibility::Inherited`).
@@ -208,7 +213,7 @@ impl TieLodState {
         let force_lod0 = std::env::var("RC_TIE_LOD").is_ok_and(|v| v.trim() == "0");
         let cpu_cull = !std::env::var("RC_TIE_CPU_CULL").is_ok_and(|v| v.trim() == "0");
         let n = inputs.len();
-        TieLodState { buffer, inputs, occl, fog, force_lod0, last_hist: [usize::MAX; 6], entities: vec![Vec::new(); n], shown: vec![true; n], cpu_cull, sway: sway_enabled(), tail }
+        TieLodState { buffer, inputs, occl, fog, force_lod0, last_hist: [usize::MAX; 7], entities: vec![Vec::new(); n], shown: vec![true; n], cpu_cull, sway: sway_enabled(), tail }
     }
 
     /// crate::world_lights: the ties' nibble lists and the bank bytes, into the buffer after the instance words.
@@ -267,8 +272,16 @@ const SWAY_BLOCK_BASE: u32 = 0;
 
 type LodInputs<'w> = (Res<'w, Time>, Res<'w, Time<Fixed>>, Res<'w, crate::graphics::GraphicsSettings>, Option<Res<'w, crate::sun_shadow::KeyLight>>);
 
+/// The input with its sphere reflected about the plane z = `h` (game units), None when no part of it is above.
+pub fn mirrored(inp: &TieLodInput, h: f32) -> Option<TieLodInput> {
+    let [x, y, z, r] = inp.sphere;
+    (z + r > h).then_some(TieLodInput { sphere: [x, y, 2.0 * h - z, r], ..*inp })
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn update_tie_lods(
     state: Option<ResMut<TieLodState>>,
+    mirror: Option<Res<crate::water_mirror::WaterMirror>>,
     occl: Option<ResMut<crate::occlusion::OcclusionFrame>>,
     mut buffers: ResMut<Assets<ShaderBuffer>>,
     cams: Query<(&Transform, Option<&Projection>), With<Camera3d>>,
@@ -285,10 +298,11 @@ pub fn update_tie_lods(
     // The game's frame counter: one per 60 Hz game frame (the same `Time<Fixed>` the shrub sway and moby
     // animation use).
     let tick = (fixed.elapsed().as_nanos() / fixed.timestep().as_nanos().max(1)) as u32;
-    // hist: occluded, culled, LOD0, LOD0 morphing, LOD1, LOD2.
-    let mut hist = [0usize; 6];
+    // hist: occluded, culled, LOD0, LOD0 morphing, LOD1, LOD2, drawn for the mirror.
+    let mut hist = [0usize; 7];
     let mut words = Vec::with_capacity(state.inputs.len() * 8);
     let mask = occl.as_ref().map(|o| o.mask);
+    let plane = mirror.as_deref().and_then(|m| m.cull_plane());
     for (ii, (inp, bits)) in state.inputs.iter().zip(&state.occl).enumerate() {
         // TieProc: `mask[+0x19] & +0x18 == 0 → next`, before the draw-distance and sphere tests.
         if mask.as_ref().is_some_and(|m| !bits.visible(m)) {
@@ -296,7 +310,14 @@ pub fn update_tie_lods(
             words.extend_from_slice(&[LOD_CULLED, 0, 0, 0, 0, 0, 0, 0]);
             continue;
         }
-        let (rec, bin) = record(inp, eye, rows, &state.fog, state.force_lod0, tans, scale, draw);
+        let (mut rec, mut bin) = record(inp, eye, rows, &state.fog, state.force_lod0, tans, scale, draw);
+        if let Some(m) = plane.filter(|_| bin == 0).and_then(|h| mirrored(inp, h)) {
+            let (r, b) = record(&m, eye, rows, &state.fog, state.force_lod0, tans, scale, draw);
+            if b != 0 {
+                (rec, bin) = (r, b);
+                hist[6] += 1;
+            }
+        }
         hist[bin + 1] += 1;
         words.extend_from_slice(&rec);
         // `TieProc`'s sway block: the same shear as `ShrubProc`'s, phased by the matrix block's 512-byte page.
@@ -327,7 +348,7 @@ pub fn update_tie_lods(
         }
     }
     if let Some(mut o) = occl {
-        o.ties = crate::occlusion::CullCounts { occluded: hist[0], culled: hist[1], drawn: hist[2..].iter().sum() };
+        o.ties = crate::occlusion::CullCounts { occluded: hist[0], culled: hist[1], drawn: hist[2..6].iter().sum() };
     }
     let mut d = u32_bytes(&words);
     d.extend_from_slice(&state.tail);
@@ -336,8 +357,9 @@ pub fn update_tie_lods(
         *last_print = time.elapsed_secs();
         state.last_hist = hist;
         println!(
-            "tie LODs: occluded {}, culled {}, LOD0 {} + {} morphing, LOD1 {} (morphing), LOD2 {}",
-            hist[0], hist[1], hist[2], hist[3], hist[4], hist[5]
+            "tie LODs: occluded {}, culled {}, LOD0 {} + {} morphing, LOD1 {} (morphing), LOD2 {}{}",
+            hist[0], hist[1], hist[2], hist[3], hist[4], hist[5],
+            if plane.is_some() { format!(" ({} of them for the water's mirror)", hist[6]) } else { String::new() }
         );
     }
 }
@@ -351,6 +373,27 @@ mod tests {
     const D: [f32; 3] = [10.0, 20.0, 30.0];
 
     fn close(a: f32, b: f32) -> bool { (a - b).abs() < 1e-5 }
+
+    #[test]
+    fn the_mirror_keeps_what_its_reflection_shows() {
+        // A camera at z 10 pitched 45° down over water at z 5: a tower at z 40 ahead is behind its near side, its
+        // reflection at −30 in view.
+        let (eye, s) = (Vec3::new(0.0, 0.0, 10.0), std::f32::consts::FRAC_1_SQRT_2);
+        let (fwd, left, up) = (Vec3::new(s, 0.0, -s), Vec3::Y, Vec3::new(s, 0.0, s));
+        let rows = [-left, -up, fwd];
+        let tower = TieLodInput { sphere: [20.0, 0.0, 40.0, 1.0], dist: 720.0, dists: D, sway: None };
+        let cull = |inp: &TieLodInput| {
+            let [x, y, z, r] = inp.sphere;
+            let d = Vec3::new(x, y, z) - eye;
+            tie_cull(Vec3::new(rows[0].dot(d), rows[1].dot(d), rows[2].dot(d)), r, inp.dist, (0.5, 0.5))
+        };
+        assert!(cull(&tower).is_none());
+        let m = mirrored(&tower, 5.0).unwrap();
+        assert_eq!(m.sphere, [20.0, 0.0, -30.0, 1.0]);
+        assert!(cull(&m).is_some());
+        // Under the water: nothing to reflect.
+        assert!(mirrored(&TieLodInput { sphere: [20.0, 0.0, 3.0, 1.0], ..tower }, 5.0).is_none());
+    }
 
     #[test]
     fn lod_boundaries() {
