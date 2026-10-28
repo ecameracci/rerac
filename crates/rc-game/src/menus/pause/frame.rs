@@ -210,6 +210,14 @@ impl FrameMobys {
         if let Some(slots) = self.slots.as_mut() { slots[i].state.speed = if back { -1.0 } else { 1.0 }; }
     }
 
+    /// **Port-only**: holds slot `i` on its sequence's last frame (a page change between two pages of the same frames:
+    /// neither direction's play would end on their layout).
+    pub fn hold(&mut self, i: usize, seq: i32) {
+        let last = self.last_frame(seq).unwrap_or(0);
+        self.cut(i, seq, last);
+        if let Some(slots) = self.slots.as_mut() { slots[i].state.speed = 0.0; }
+    }
+
     /// One `MobyUpdateLoop` for the frame mobys: advance, `MenuMobyUpdate`, corners.
     pub fn update(&mut self) {
         let Some(mut slots) = self.slots.take() else { return };

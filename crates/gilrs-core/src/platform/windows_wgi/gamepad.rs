@@ -264,6 +264,10 @@ impl Gilrs {
             }
         }) {
             Some(id) => id,
+            // Only its Connected event adds a gamepad: the polling thread can read a new controller (and send its
+            // buttons) before RawGameControllerAdded fires, and a gamepad added by such an event reached gilrs before
+            // its Connected one, so gilrs had no data for it and panicked (`Gilrs::gamepad`, index out of bounds).
+            None if !matches!(wgi_event.event, EventType::Connected) => return None,
             None => match Gamepad::new(self.gamepads.len() as u32, wgi_event.raw_game_controller) {
                 Ok(gamepad) => {
                     self.gamepads.push(gamepad);
