@@ -188,10 +188,10 @@ pub fn load(root: &Path, index: u32, gameplay: &[u8]) -> Result<LevelWater> {
 pub struct WaterParams {
     /// x = FIX / 128, y = kind (0/1 strip layer, 2 ripple water, 3 ripple env, 4 chute), z = an even absorption
     /// (Enhanced; crate::sea_water::clarity; 0 here) or a chute's flow speed, w = the Enhanced surface lift
-    /// ([`SURFACE_LIFT`]).
+    /// ([`SURFACE_LIFT`]; ripple water) or 1: Pokitaru's ocean (kind 0, crate::ocean_water).
     pub misc: Vec4,
     /// x = callback slot (record in `frame`), y = first word of the patch's `ripple` record, z = offset of its
-    /// water UVs in the record (words).
+    /// water UVs in the record (words), w = the ocean's sky colour (crate::ocean_water::SKY).
     pub ids: UVec4,
 }
 
@@ -248,7 +248,8 @@ pub struct WaterMaterial {
 pub struct WaterLook {
     /// x = 1: enhanced (the option is on and the texture is clear water: [`clear_water`]).
     pub misc: Vec4,
-    /// xyz = toward the key light (world; crate::sun_shadow::KeyLight), for the glint.
+    /// xyz = toward the key light (world; crate::sun_shadow::KeyLight), for the glint; w = the swell's scale
+    /// (crate::water_waves).
     pub sun: Vec4,
 }
 
@@ -307,7 +308,8 @@ fn follow_look(
     let Some(mut st) = state else { return };
     let st = &mut *st;
     let tex = level.0.particles.textures.as_ref();
-    let sun = key.map_or(Vec3::Y, |k| k.to_light).extend(0.0);
+    // w: the swell's scale (crate::water_waves; the slope only on this water).
+    let sun = key.map_or(Vec3::Y, |k| k.to_light).extend(crate::water_waves::scale());
     for h in &st.materials {
         let Some(m) = materials.get(h) else { continue };
         let clear = *st.clear_fx.entry(m.fx).or_insert_with(|| {
