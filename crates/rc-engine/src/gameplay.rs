@@ -1916,7 +1916,7 @@ fn death_reload(p: &mut Play, lv: &crate::level_load::LoadedLevel, state: Option
     p.svc.hits = Default::default();
     // The "use" system's talk slots and save values by the new instance → moby map (before the load pass, as the load).
     crate::interact_render::install(&mut p.svc, lv, &statics.instance_to_moby, state);
-    if let Some(id) = ship_id.filter(|_| !crate::level_load::ship_adopted()) { p.svc.interact.register_talk_mobys([(id, 0)]); }
+    if let Some(id) = ship_id.filter(|_| !p.svc.travel.adopted) { p.svc.interact.register_talk_mobys([(id, 0)]); }
     p.svc.build_grid(&mut p.game.mobys);
     p.reload_shown = shown;
     println!(
@@ -2081,7 +2081,9 @@ fn debug_dump(
 
 /// `InitLevelRenderGlobals` 0x255958 on level 13 with ship 2 and 0x160540 set: the placed ship of class `0x160550` (ship 2's
 /// 533) is adopted (`0x2a2360`: `rc_game::travel::ship::adopt_table`) and cut to sequence 1 (`hard_cut(m, 1, 0)`), in place of
-/// the ship the loader would create (crate::moby_spawn creates none then).
+/// the ship the loader would create (crate::moby_spawn creates none then). The flag is this visit's (the level load
+/// clears it: crate::level_load::ship_adopted), so this runs on a death reload after Gemlik's escape; a later return to
+/// Gemlik gets a created ship, and the director 1353's state 0xd deletes the placed 533 (issue #47: it was the ship).
 fn adopt_placed_ship(table: &mut MobyTable, travel: &mut rc_game::travel::ShipGlobals, classes: &ClassTable, level: u32) {
     use rc_game::moby_update::services::ClassData;
     const PLACED: i16 = 533;
@@ -2605,8 +2607,6 @@ fn tick(
     }
 
     publish_anim(p, anim.as_deref_mut());
-    // 0x160540 (a placed ship adopted: Gemlik's 533 after the escape) holds for the session.
-    if p.svc.travel.adopted && !crate::level_load::ship_adopted() { crate::level_load::set_ship_adopted(); }
     let hm = &p.game.mobys.mobys[p.hero_id];
     if let Some(a) = attach.as_mut() { a.set_host(rows_bits(&hm.rows), [hm.position[0], hm.position[1], hm.position[2]]); }
     if let Some(v) = view.as_mut() {

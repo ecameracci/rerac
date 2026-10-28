@@ -106,15 +106,20 @@ pub fn set_ship(ship: i16) { SHIP.store(ship.clamp(0, 2) as i32, std::sync::atom
 
 static SHIP: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(-1);
 
-/// 0x160540: a placed ship was adopted (`rc_game::travel::ship::adopt`, Gemlik's 533 after the escape). The game never
-/// clears it: it holds for the session (not in the save).
-/// `RC_SHIP_ADOPTED=1` starts with it set (debug: a level-13 load with `RC_SHIP=2` adopts the placed 533 at once).
+/// 0x160540 at a level's load: a placed ship was adopted (`rc_game::travel::ship::adopt`, Gemlik's 533 after the
+/// escape). The flag is in each level overlay's data (`levels/NN/overlay.bin`, 0 there), so every level load clears it
+/// with the overlay read: it lasts for one visit (`ShipGlobals::adopted`), through its death reloads (the overlay is
+/// not read again), never into the next load (checked on the PS2: set on Gemlik, 0 after the flight to Rilgar; a
+/// return to Gemlik lands at the start in a new ship). So a load sees it only as `RC_SHIP_ADOPTED=1` (debug: the boot's
+/// level-13 load with `RC_SHIP=2` adopts the placed 533 at once), until the first level change ([`level_change_started`]).
 pub fn ship_adopted() -> bool {
-    SHIP_ADOPTED.load(std::sync::atomic::Ordering::Relaxed) || std::env::var("RC_SHIP_ADOPTED").is_ok_and(|v| v.trim() == "1")
+    !LEVEL_CHANGED.load(std::sync::atomic::Ordering::Relaxed) && std::env::var("RC_SHIP_ADOPTED").is_ok_and(|v| v.trim() == "1")
 }
-pub fn set_ship_adopted() { SHIP_ADOPTED.store(true, std::sync::atomic::Ordering::Relaxed); }
 
-static SHIP_ADOPTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// A runtime level change started loading (crate::level_switch): the boot's [`ship_adopted`] no longer applies.
+pub fn level_change_started() { LEVEL_CHANGED.store(true, std::sync::atomic::Ordering::Relaxed); }
+
+static LEVEL_CHANGED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// A per-level cache (one `OnceLock` per level index: the level-keyed tables built from the loaded level's overlay).
 pub type PerLevel<T> = [std::sync::OnceLock<T>; 20];

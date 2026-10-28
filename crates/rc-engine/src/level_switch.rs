@@ -99,6 +99,7 @@ impl LevelChange {
     /// `read_file_entry_with_retry(level)` and the async loader: level `index` loads on a worker thread.
     pub fn start_load(&mut self, index: u32, save: rc_formats::moby_spawn::SpawnSave) {
         if self.load.as_ref().is_some_and(|l| l.index == index) { return; }
+        crate::level_load::level_change_started();
         let root: PathBuf = crate::level_load::extracted_root();
         let t = std::thread::Builder::new().name(format!("level {index:02} load")).spawn(move || load_bundle(&root, index, &save));
         let (thread, result) = match t {
