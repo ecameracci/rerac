@@ -71,7 +71,7 @@ impl Plugin for SunRaysPlugin {
     }
 }
 
-/// The render-world set of the rays pass (crate::volumetric_light runs before it).
+/// The render-world set of the rays pass (crate::volumetric_light runs before it, crate::underwater_render after it).
 #[derive(SystemSet, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct SunRaysSet;
 
