@@ -38,7 +38,7 @@
 struct ShrubFog {
     color: vec4<f32>,
     params: vec4<f32>,
-    // x: the texture option (crate::graphics; sample_world).
+    // x: the texture option (crate::graphics; sample_world), y: the Detail distance factor, z: the Draw distance factor.
     tex_mode: vec4<f32>,
 }
 
@@ -184,7 +184,9 @@ fn vertex(v: ShrubVertex) -> ShrubVertexOutput {
     let tag = mesh_functions::get_tag(v.instance_index);
     let inst = &insts[tag];
     let z = -position_world_to_view((*inst).centre.xyz).z;
-    let d = (*inst).centre.w;
+    // The Draw distance option (crate::graphics, fog.tex_mode.z = s; 1 = the game's): D' = D × s, the fade band × s.
+    let s = fog.tex_mode.z;
+    let d = (*inst).centre.w * s;
     if (d - z < 0.0) { return culled(); }
     // The Detail distance option (crate::graphics, fog.tex_mode.y; 1 = the game's): the mesh keeps to F' = F × scale; when
     // F' comes within 24 units of D the class draws as one without a billboard (the mesh fades over D's last 8 units).
@@ -196,7 +198,7 @@ fn vertex(v: ShrubVertex) -> ShrubVertexOutput {
     }
     var alpha: f32;
     if (f < 0.0) {
-        alpha = floor(min(trunc((d - z) * 4096.0), 32768.0) / 256.0);
+        alpha = floor(min(trunc((d - z) * (4096.0 / s)), 32768.0) / 256.0);
     } else {
         let iz = trunc(max(z, 0.0) * 4096.0) - f * 4096.0;
         if (f == 0.0 || iz >= 32768.0) { return culled(); }

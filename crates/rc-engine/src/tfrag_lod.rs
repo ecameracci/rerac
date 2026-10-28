@@ -30,6 +30,10 @@ use rc_formats::tfrag::{self, Tfrag, TfragBlockHeader};
 /// Draw-mode codes in the per-tfrag storage buffer (besides the MSCAL addresses 6..0x14).
 pub const MODE_CULLED: u32 = 0;
 pub const MODE_CLIP: u32 = 2;
+/// `0x160ec0` = 512000.0 (500 units, set by the level init 0x1e9b10): `TfragProc` culls a tfrag whose sphere starts
+/// beyond it. The Draw distance option (crate::graphics) scales it; tfrag.wgsl fades the last 16 units × the factor
+/// out by pixel depth, so nothing past it shows and the cull never pops.
+pub const DRAW_DISTANCE: f32 = 512000.0;
 
 /// Level data for the LOD path, loaded next to the tfrags.
 pub struct TfragLodData {
@@ -232,7 +236,7 @@ fn clip_flags(c: Vec4) -> u32 {
 ///
 /// Boot 0x2341dc..0x2342d0 (sphere) and 0x2345c0..0x234790 (box), in f32:
 /// * `x, y, z` = camera-space sphere centre, `far = z + r`, `near = z − r`;
-/// * cull if `512000 − near < 0` (0x160ec0, set by the level init 0x1e9b10) or `n − far ≥ 0`, or the sphere is wholly
+/// * cull if `dd − near < 0` (dd = [`DRAW_DISTANCE`] × the Draw distance factor) or `n − far ≥ 0`, or the sphere is wholly
 ///   outside a side plane: `tan·z − |x| + r·k < 0` (x and y; `tan` = 0x18cdb0/4, `k` = 0x18cee0/4 = 1/cos(atan tan));
 /// * the sphere is wholly inside when `tan·z − |x| − r·k ≥ 0` (x and y), `far < f` and `near ≥ n`
 ///   (vf27 = 0x18cef0 = (f, n), f the view context's far plane: [`game_camera::projection_far`]): then the LOD rule (`Tfrag::draw_mode`);
@@ -243,14 +247,15 @@ fn clip_flags(c: Vec4) -> u32 {
 ///
 /// The occlusion test (hdr 0x3a/0x3b against the mask copy at 0x70003b00, level01 0x2a80b8..0x2a80e4) runs
 /// before this, in `update_tfrag_modes`; an occluded tfrag never reaches these tests.
-fn tfrag_proc(info: &TfragCullInfo, t: &Tfrag, cam: Vec3, rows: [Vec3; 3], thresholds: [i32; 3], tans: (f32, f32), f: f32) -> u32 {
+#[allow(clippy::too_many_arguments)]
+fn tfrag_proc(info: &TfragCullInfo, t: &Tfrag, cam: Vec3, rows: [Vec3; 3], thresholds: [i32; 3], tans: (f32, f32), f: f32, dd: f32) -> u32 {
     let (tx, ty) = tans;
     let (kx, ky) = ((1.0 + tx * tx).sqrt(), (1.0 + ty * ty).sqrt());
     let [sx, sy, sz, r] = info.sphere;
     let d = Vec3::new(sx, sy, sz) - cam;
     let p = Vec3::new(rows[0].dot(d), rows[1].dot(d), rows[2].dot(d));
     let (far, near) = (r + p.z, -r + p.z);
-    if 512000.0 - near < 0.0 || NEAR - far >= 0.0 { return MODE_CULLED; }
+    if dd - near < 0.0 || NEAR - far >= 0.0 { return MODE_CULLED; }
     let (ax, ay) = (p.x.abs(), p.y.abs());
     if tx * p.z - (ax - r * kx) < 0.0 || ty * p.z - (ay - r * ky) < 0.0 { return MODE_CULLED; }
     let inside = tx * p.z - (ax + r * kx) >= 0.0 && ty * p.z - (ay + r * ky) >= 0.0 && far - f < 0.0 && near - NEAR >= 0.0;
@@ -284,7 +289,9 @@ fn update_tfrag_modes(
     let thresholds = if scale == 1.0 { state.thresholds } else { state.block.lod_distances().map(|d| (d * scale * 1024.0) as i32) };
     // `UpdateViewContext`'s planes (0x18cdb0 / 0x18cee0) from the view's tangent: a flown ship widens it.
     let tans = game_camera::projection_tans(proj);
+    // The far plane and the draw distance with the Draw distance factor (×1: the game's).
     let far = game_camera::projection_far(proj);
+    let dd = DRAW_DISTANCE * gfx.draw.scale();
     let (eye, [fwd, left, up]) = (game_camera::game_eye(cam), game_camera::game_rows(cam));
     let rows = [-left, -up, fwd];
     let cam_raw = eye * UNITS;
@@ -303,7 +310,7 @@ fn update_tfrag_modes(
                 hist[0] += 1;
                 return MODE_CULLED;
             }
-            let mut m = tfrag_proc(info, t, cam_raw, rows, thresholds, tans, far);
+            let mut m = tfrag_proc(info, t, cam_raw, rows, thresholds, tans, far, dd);
             if state.force_lod0 && m != MODE_CULLED { m = 0x14; }
             hist[match m { 0 => 0, 2 => 1, 6 => 2, 8 => 3, 0xa => 4, 0xe => 5, 0x10 => 6, _ => 7 }] += 1;
             m
@@ -366,7 +373,7 @@ mod tests {
         let m = |info: TfragCullInfo| {
             let mut t = Tfrag::default();
             t.header.bsphere = info.sphere;
-            tfrag_proc(&info, &t, Vec3::ZERO, rows, th, crate::game_camera::default_tans(), crate::game_camera::FAR)
+            tfrag_proc(&info, &t, Vec3::ZERO, rows, th, crate::game_camera::default_tans(), crate::game_camera::FAR, DRAW_DISTANCE)
         };
         assert_eq!(m(at(20.0, 0.0, 4.0)), 0x14);   // far 24 < D2 = 30
         assert_eq!(m(at(40.0, 0.0, 4.0)), 0x10);
@@ -378,5 +385,14 @@ mod tests {
         assert_eq!(m(at(600.0, 0.0, 4.0)), MODE_CULLED); // near > 500 units
         assert_eq!(m(at(40.0, 200.0, 4.0)), MODE_CULLED); // far outside the side plane
         assert_eq!(m(at(2.0, 0.0, 4.0)), MODE_CLIP);  // crosses the near plane
+        // The Draw distance factor moves the cull and the far plane out: ×2 draws the 600-unit tfrag (LOD 2).
+        let far = |info: TfragCullInfo, s: f32| {
+            let mut t = Tfrag::default();
+            t.header.bsphere = info.sphere;
+            tfrag_proc(&info, &t, Vec3::ZERO, rows, th, crate::game_camera::default_tans(), crate::game_camera::FAR * s, DRAW_DISTANCE * s)
+        };
+        assert_eq!(far(at(600.0, 0.0, 4.0), 1.0), MODE_CULLED);
+        assert_eq!(far(at(600.0, 0.0, 4.0), 2.0), 6);
+        assert_eq!(far(at(1010.0, 0.0, 4.0), 2.0), MODE_CULLED); // near 1006 > 1000
     }
 }

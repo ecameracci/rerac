@@ -78,10 +78,11 @@ pub fn fog_buffer() -> Handle<bevy::render::storage::ShaderBuffer> { FOG_BUFFER.
 
 /// The fog (colour, params), then the graphics options the world shaders read (crate::graphics; every world material
 /// binds this buffer): `tex_mode.x` the texture option for `sample_world` (0 Original, 1 Smooth, 2 Sharp), `.y` the
-/// Detail distance factor (1 = the game's; the shrub and billboard fade distance).
+/// Detail distance factor (1 = the game's; the shrub and billboard fade distance), `.z` the Draw distance factor (1 =
+/// the game's; the shrub D and the tfrag / tie end fades).
 fn fog_bytes(f: &TfragFog, g: &crate::graphics::GraphicsSettings) -> Vec<u8> {
     use crate::graphics::GfxOption;
-    let filter = [g.textures.index() as f32, g.detail.lod_scale(), 0.0, 0.0];
+    let filter = [g.textures.index() as f32, g.detail.lod_scale(), g.draw.scale(), 0.0];
     f.color.to_array().iter().chain(&f.params.to_array()).chain(&filter).flat_map(|v| v.to_le_bytes()).collect()
 }
 
@@ -137,7 +138,11 @@ pub struct GameProjection {
     pub tan_y: f32,
     /// Integer units.
     pub near: f32,
+    /// The view context's far plane (0x16cf64), as the game sets it.
     pub far: f32,
+    /// The Draw distance factor on `far` (crate::graphics; 1 = the game's): the clip matrix, Bevy's frustum and
+    /// [`projection_far`] use `far × draw_scale`.
+    pub draw_scale: f32,
 }
 
 /// The half-angle tangents (x, y) of a camera's projection (the game's 0.63, 0.63·0.775 for any other projection):
@@ -151,10 +156,11 @@ pub fn projection_tans(p: Option<&Projection>) -> (f32, f32) {
     }
 }
 
-/// The far plane of a camera's projection in integer units (the game's 745 472 for any other projection).
+/// The far plane of a camera's projection in integer units, with the Draw distance factor (the game's 745 472 for any
+/// other projection).
 pub fn projection_far(p: Option<&Projection>) -> f32 {
     match p {
-        Some(Projection::Custom(c)) => c.get::<GameProjection>().map_or(FAR, |g| g.far),
+        Some(Projection::Custom(c)) => c.get::<GameProjection>().map_or(FAR, |g| g.draw_far()),
         _ => FAR,
     }
 }
@@ -166,6 +172,20 @@ pub fn set_view_far(p: &mut Projection, far: f32) {
     if g.far != far { g.far = far; }
 }
 
+/// `p`'s Draw distance factor (None: not the game's projection).
+pub fn draw_scale(p: &Projection) -> Option<f32> {
+    match p {
+        Projection::Custom(c) => c.get::<GameProjection>().map(|g| g.draw_scale),
+        _ => None,
+    }
+}
+
+/// Sets `p`'s Draw distance factor (crate::graphics).
+pub fn set_draw_scale(p: &mut Projection, s: f32) {
+    let Projection::Custom(c) = p else { return };
+    if let Some(g) = c.get_mut::<GameProjection>() { g.draw_scale = s; }
+}
+
 /// The game's default tangents (x, y).
 #[cfg(test)]
 pub fn default_tans() -> (f32, f32) {
@@ -175,16 +195,19 @@ pub fn default_tans() -> (f32, f32) {
 
 impl Default for GameProjection {
     fn default() -> Self {
-        GameProjection { tan_x: TAN_HALF_FOV_X, tan_y: TAN_HALF_FOV_X * NTSC_Y_RATIO, near: NEAR, far: FAR }
+        GameProjection { tan_x: TAN_HALF_FOV_X, tan_y: TAN_HALF_FOV_X * NTSC_Y_RATIO, near: NEAR, far: FAR, draw_scale: 1.0 }
     }
 }
 
 impl GameProjection {
+    /// The far plane drawn with: `far × draw_scale` (integer units).
+    pub fn draw_far(&self) -> f32 { self.far * self.draw_scale }
+
     /// GS Z as `a + b / d` for Bevy view depth `d` in game units, from the EE's matrix entries
     /// (`0x18cde8` = (f+n)/(n(f−n))·Zs, `0x18cdf8` = −2nf/(n(f−n))·Zs) and Q = n / z.
     /// f64 because `Z_OFFSET + n·A` cancels to about −688 (the VU does it in f32 per vertex).
     fn z_affine(&self) -> (f64, f64) {
-        let (n, f, zs) = (self.near as f64, self.far as f64, Z_SCALE as f64);
+        let (n, f, zs) = (self.near as f64, self.draw_far() as f64, Z_SCALE as f64);
         let a_m = (f + n) / (n * (f - n)) * zs;
         let c_m = (n * -2.0 * f) / (n * (f - n)) * zs;
         (n * a_m + Z_OFFSET as f64, n * c_m / UNITS as f64)
@@ -238,7 +261,7 @@ impl CameraProjection for GameProjection {
     /// (crate::display), always of that aspect.
     fn update(&mut self, _width: f32, _height: f32) {}
 
-    fn far(&self) -> f32 { self.far / UNITS }
+    fn far(&self) -> f32 { self.draw_far() / UNITS }
 
     fn get_frustum_corners(&self, z_near: f32, z_far: f32) -> [Vec3A; 8] {
         let (n, f) = (z_near.abs(), z_far.abs());
@@ -453,5 +476,12 @@ mod tests {
         // Near plane maps to the top of the 24-bit Z range, far to the bottom.
         assert!((proj.gs_xyz(Vec3::new(0.0, 0.0, NEAR)).z - 16776192.0).abs() < 1.0);
         assert!((proj.gs_xyz(Vec3::new(0.0, 0.0, FAR)).z - 32.0).abs() < 1.0);
+        // The Draw distance factor moves only the far plane: ×1 is the game's matrix bit for bit.
+        let same = GameProjection { draw_scale: 1.0, ..proj };
+        assert_eq!(same.get_clip_from_view(), clip_from_view);
+        let far = GameProjection { draw_scale: 2.0, ..proj };
+        assert!((far.gs_xyz(Vec3::new(0.0, 0.0, FAR * 2.0)).z - 32.0).abs() < 1.0);
+        assert!((far.gs_xyz(Vec3::new(0.0, 0.0, NEAR)).z - 16776192.0).abs() < 1.0);
+        assert_eq!((far.far(), projection_far(Some(&Projection::custom(far)))), (FAR * 2.0 / UNITS, FAR * 2.0));
     }
 }

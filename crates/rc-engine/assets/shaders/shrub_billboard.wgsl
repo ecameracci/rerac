@@ -23,7 +23,7 @@
 struct BillboardFog {
     color: vec4<f32>,
     params: vec4<f32>,
-    // x: the texture option (crate::graphics; sample_world).
+    // x: the texture option (crate::graphics; sample_world), y: the Detail distance factor, z: the Draw distance factor.
     tex_mode: vec4<f32>,
 }
 
@@ -87,9 +87,11 @@ fn vertex(v: BillboardVertex) -> BillboardVertexOutput {
     let inst = &insts[v.info & 0xffffffu];
     let corner = v.info >> 24u;
     let z = -position_world_to_view((*inst).centre.xyz).z;
-    let d = (*inst).centre.w;
+    // The Draw distance option (crate::graphics, fog.tex_mode.z = s; 1 = the game's): D' = D × s, the 16-unit fade × s.
+    let s = fog.tex_mode.z;
+    let d = (*inst).centre.w * s;
     if (d - z < 0.0) { return culled(); }
-    let far = min(i32(trunc((d - z) * 4096.0)) >> 1u, 0x8000) >> 8u;
+    let far = min(i32(trunc((d - z) * (4096.0 / s))) >> 1u, 0x8000) >> 8u;
     // The Detail distance option (crate::graphics, fog.tex_mode.y; 1 = the game's): the mesh keeps to F' = F × scale (the
     // cross-fade moves there); within 24 units of D the class has no billboard (shrub.wgsl fades the mesh instead).
     var f = i32((*inst).origin.w);

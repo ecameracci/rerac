@@ -18,7 +18,8 @@ stored; it is read back from the options. Options never change game state: the g
 | Preset | Original / Enhanced / (Custom) | every row Original | done |
 | Fullscreen, Resolution, Gameplay aspect, Cutscene aspect, FPS limit | | | exist (not part of the preset: they depend on the screen) |
 | Anti-aliasing | Original / Off / 2x / 4x / 8x | the game's two full-screen bilinear copies, drawn at the frame's resolution: the AA blit A (`PutAABlitPacket_A` 0x223200, before the HUD: U = X across, 416 → 415 lines down) and the display copy B (`PutAABlitPacket_B` 0x223260, every frame: U = X across, 416 → 448 lines). Off = neither; 2x..8x = multisampling | done (`aa_blit.rs`, `aa_blit.wgsl`: four one-axis draws, each frame pixel reads the box of one game pixel a GS bilinear tap is; at 416 lines the vertical is the GS's result; checked against an independent reference at 416p, within 3 levels over four 8-bit draws). Off byte-identical to the earlier build |
-| Detail distance | Original / Far / Farther / Maximum | the game's LOD distances (×1, ×2, ×4; Maximum ×1000, past every draw distance) | done: tfrag (`trunc(D·1024)` thresholds and the morph constants), tie (class near/mid/far), moby (`lod_trans << 10`, `moby_lod::set_lod_scale`; drawing only: every joint is evaluated whatever LOD is drawn), shrub mesh/billboard (F' = F × scale; within 24 units of D the class draws as one without a billboard: `shrub_render::detail_fade`, shrub.wgsl, shrub_billboard.wgsl; the factor rides in `tex_mode.y`). Draw distances are never scaled. Original byte-identical to the earlier build |
+| Detail distance | Original / Far / Farther / Maximum | the game's LOD distances (×1, ×2, ×4; Maximum ×1000, past every draw distance) | done: tfrag (`trunc(D·1024)` thresholds and the morph constants), tie (class near/mid/far), moby (`lod_trans << 10`, `moby_lod::set_lod_scale`; drawing only: every joint is evaluated whatever LOD is drawn), shrub mesh/billboard (F' = F × scale; within 24 units of D the class draws as one without a billboard: `shrub_render::detail_fade`, shrub.wgsl, shrub_billboard.wgsl; the factor rides in `tex_mode.y`). Draw distances are the Draw distance row's. Original byte-identical to the earlier build |
+| Draw distance | Original / Far / Farther / Maximum | the game's draw distances (×1, ×1.5, ×2, ×4; see "Draw distances" below) | done: tfrag (`tfrag_lod::DRAW_DISTANCE`), tie (per-instance distance), shrub (D and both fade bands), the main camera's far plane (`GameProjection::draw_scale`); above ×1 tfrags and ties fade out over the last 16·s units (4×4 ordered dither, tfrag.wgsl / tie.wgsl); the factor rides in `tex_mode.z`. Mobys, particles, the sky and the level fog are not scaled. Not part of the preset yet. Original byte-identical to the earlier build (8 views on Novalis, Kerwan, Rilgar, Pokitaru, 2026-10-24) |
 | Texture filtering | Original / Smooth / Sharp | the GS mip rule: one level from depth, `round(log2(z/32)+K)`; Smooth = the same level unrounded, two levels blended; Sharp = the GPU's footprint level + anisotropic | done (tfrag, tie, shrub, shrub billboard: `sample_world`; the mode rides in the shared fog buffer's third vec4 `tex_mode`; samplers linear between levels + anisotropy 16, an integer level reads one level: Original verified byte-identical to the earlier build on a Novalis walk) |
 | HUD | Original / Sharp pixels / High resolution | the 512×416 screen through the display copy B (half a pixel across, like the world) and scaled up with bilinear filtering, as the TV and an emulator's display showed it; Sharp pixels = nearest (the port's earlier look); High resolution = drawn at the frame's resolution | Original / Sharp pixels done |
 | Ambient occlusion | Original / On | the baked vertex colours only | built (`ao_render.rs`, `ao.wgsl`): a spiral SSAO from the depth buffer after the opaque pass, a depth-aware 4×4 blur, multiplied into the frame before the transparent pass; faded out by 150 units; the 32 nearest drawn mobys are left unoccluded inside their bounding spheres, above their feet and in front of the sphere's centre (the wall behind a climbing Ratchet keeps its occlusion). Off: the pass is not added (no `AoTarget` on the view) |
@@ -40,9 +41,9 @@ Lighting, as it did not touch the Shadows row before it (`GraphicsSettings::with
 * The anti-aliasing row offers 2x / 4x / 8x only where the GPU can multisample the world's attachments (M-series: no 8x);
   the old `msaa = N` key is read once when `anti_aliasing` is missing (N > 1 keeps that multisampling, else Original).
 * Persisted keys in the port settings file: `anti_aliasing` (`original`, `off`, `2x`, `4x`, `8x`), `hud`, `textures`,
-  `detail`, `ambient_occlusion`, `water`, `particles` (values: the lower-case names), `lighting`
+  `detail`, `draw_distance`, `ambient_occlusion`, `water`, `particles` (values: the lower-case names), `lighting`
   (`original`, `simple`, `enhanced`). `RC_GFX_ANTI_ALIASING`, `RC_MSAA=0|2|4|8`, `RC_GFX_HUD`, `RC_GFX_TEXTURES`,
-  `RC_GFX_DETAIL`, `RC_GFX_AMBIENT_OCCLUSION`, `RC_GFX_WATER`, `RC_GFX_PARTICLES`, `RC_GFX_LIGHTING`,
+  `RC_GFX_DETAIL`, `RC_GFX_DRAW_DISTANCE`, `RC_GFX_AMBIENT_OCCLUSION`, `RC_GFX_WATER`, `RC_GFX_PARTICLES`, `RC_GFX_LIGHTING`,
   `RC_GFX_PRESET=original|enhanced` (Lighting still from the file) override at start; the older `RC_SHADOWS=1|dynamic`
   sets Lighting Original / Enhanced (under `RC_GFX_LIGHTING`), and `RC_SHADOWS=0` is a developer switch for no
   shadows at all (`ShadowSettings::off`; the row has no Off). Migration: the Shadows row's `shadows` key is read once
@@ -108,7 +109,37 @@ Lighting, as it did not touch the Shadows row before it (`GraphicsSettings::with
   apart; Veldin's from −65° at 20°, its sunset from 1° at 8°: 66°. Only the port's sun light moves; the game's baked
   vertex lighting keeps the key light. Checked with `RC_SUN_DEBUG=1` facing Gemlik's sun: the shadows now run toward
   the camera, away from the sun (before: across the view); Lighting Original byte-identical on Gemlik and Drek's fleet.
-* The Port Options page (fourteen rows) keeps the Camera sub-page's frame and scrolls, four rows at a time (port.rs `VISIBLE`).
+* The Port Options page (seventeen rows) keeps the Camera sub-page's frame and scrolls, four rows at a time (port.rs `VISIBLE`).
+
+## Draw distances
+
+What ends the view in the game, and what the Draw distance row (factor s) does with it (units: game units, 1024
+integer units each; depth is along the view axis):
+
+| Kind | The game's | At s > 1 |
+|---|---|---|
+| Tfrag | `TfragProc`: culled when the sphere's near edge is past 512000 (0x160ec0, 500 units); no fade (pop) | 500·s (`tfrag_lod::DRAW_DISTANCE`); faded per pixel by depth over the last 16·s units (tfrag.wgsl `end_fade`) |
+| Tie | per instance, capped at 720 (0x160fe0), culled when the centre's depth passes it; no fade. The Visibomb view caps it at 144 | the distance ×s (the Visibomb's cap kept); faded per instance by the centre's depth over the last 16·s units (`tie_lod` x bits 16..23, tie.wgsl) |
+| Shrub | D = max(dd, 16), F + 24 for billboard classes, capped at 500 (0x1604a4); meshes fade over the last 8 units, billboards over the last 16 | D ×s, both fade bands ×s (shrub.wgsl, shrub_billboard.wgsl, `shrub_render::cull_shows`) |
+| Moby | MobyProc: cap 500 (0x15fff0), 16-unit fade | not scaled: the result is game state (G-REN-050) |
+| Particle | 32·m per record, capped at 500 (64 underwater), 16-unit fade | not scaled: `FLAG_DRAWN` is the simulation's (G-REN-051) |
+| Far plane | 745472 (728 units) | 728·s on the main camera (`GameProjection::draw_scale`); the sky's camera keeps its own |
+| Sea / liquid grids | no far cap in the port | end at the far plane (G-REN-052) |
+| Fog | the level's (Novalis F 255 → 102 over 0..240 units, Kerwan → 153, Rilgar → 64, Pokitaru → 153) | unchanged |
+
+* The factors: ×1.5 is the first step that puts everything the game's far plane could show (728 units) inside the tfrag
+  distance (750); ×2 and ×4 cover the views across the largest levels from their edges (Rilgar's bounding sphere is
+  608 units across). At ×1 no fade is added: Original keeps the game's pop.
+* Fog: kept as the level sets it. Scaled with s (near and far ×s, tried with a temporary switch), it took the haze off
+  everything in front of the camera too (15–59 % of the pixels changed at ×4 on Novalis and Kerwan, the island no
+  longer blended into the sky backdrop): that is a different look, not a longer view. With the level's fog the
+  geometry the row adds sits at the level's far intensity, as the game's farthest geometry did.
+* Checked 2026-10-24 from a fly camera (`RC_PLAY=0`) on Novalis, Kerwan, Rilgar and Pokitaru, one view from a level's
+  edge across it and one from outside: Original is byte-identical to the earlier build in all 8; Far fills in the
+  far city blocks on Kerwan, the island's far side on Novalis and Rilgar's far buildings (0.01–5.3 % of the pixels);
+  Maximum adds little to Far there (at most 0.06 %). Nothing that was not meant to be seen showed in these views.
+* fps (`RC_NOVSYNC=1`, Novalis from its edge, 20 s): about 52 / 53 / 58 / 52 for Original / Far / Farther / Maximum,
+  equal within the noise.
 
 ## Light shafts per level
 
