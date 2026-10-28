@@ -14,8 +14,10 @@
 //!   targetable moby (mode 0x5000) other than a mine or Ratchet: it explodes. Another mine: bounces off it (×0.4).
 //!   Ground (not water, not falling faster than 9.8 u/s): bounces (reflected ×0.6, half the vertical), the first
 //!   bounce starts the bob (twice the fall speed, fading in over 6 ticks, decaying 1.2 % a tick to 0.05); on ground
-//!   flatter than 45° it flips upward, and **lands** once slower than 0.5 u/s (collision on). Anything else: explodes.
-//!   It eases its tilt to the face (3° a tick).
+//!   flatter than 45° it flips upward, and **lands** once slower than 0.5 u/s (collision on), or at once when the face
+//!   is a carrier (`FUN_00275290`: the Metropolis train, which would otherwise slide out from under it). Anything else:
+//!   explodes. It eases its tilt to the face (3° a tick). The display bob's offset is undone with the fade it was added
+//!   with (the counter has advanced by then), so the z the landing check reads is the physical one.
 //! * **Landed**: snapped to the ground (it is out again, unarmed, if the ground drops 40·dt² away); a slow wobble
 //!   (`0x277a80`: 0.525 rad, phases at 30°/s and 17°/s); Ratchet within 0.75 pushes it out from under him
 //!   (`walker::move_ground`, up 0.4, radius 0.25, step 0.25, slope 0.525).
@@ -23,8 +25,9 @@
 //!   within 1.5 sets it off; else the nearest (xy) non-crate target within `4 + record radius / 8` (×3 while the
 //!   Taunter lures it, +0x78), less than 2 above or below, becomes its target and it **seeks** (0x10): sequence 1 then
 //!   2, class sound 0 once and its loop sound 1, speed up by 15·dt² to 4 u/s straight at the target, hopping (0.05 a
-//!   tick for 7 up, 7 down), a 0.35 sphere 0.35 up (damage 1, flags 0x10000) — any moby it touches but mines and a few
-//!   classes (0x363, 0x365, 0x367, 0x458) sets it off — pushed out of walls (0.25), for at most 600 ticks. A target
+//!   tick for 7 up, 7 down), a 0.35 sphere 0.35 up (damage 1, flags 0x10000) — any moby it touches but mines, a few
+//!   classes (0x363, 0x365, 0x367, 0x458) and the carrier it rides [L] sets it off — pushed out of walls (0.25), for
+//!   at most 600 ticks. A target
 //!   gone or no longer targetable: it stops (out again, the loop released). Armed while still out: it explodes. A hit
 //!   (mask 0x830000) from anything but a mine explodes it; more than 8 mines: the oldest (+0x5c) goes (a death
 //!   explosion `0x273f50`).
@@ -140,11 +143,12 @@ pub fn init_held(m: &mut crate::moby_runtime::Moby, rng: &mut crate::rng::Rng, p
 }
 
 /// `0x2bf7d8(point, mine, vel)`: the release: out (state 1), the scale back up (÷0.65), a random nudge of the velocity
-/// (`randf(±1)` ×3 normalised to `randf(0.01·dt, 0.1·dt)`), the 120-tick arming timer; with more than 7 other mines the
-/// oldest is told to go (+0x5c = −1); at the launch point. The caller then runs the wall test (Ratchet at the point's
-/// height → the point, the world and the mobys, Ratchet ignored: the disassembly's `lq` of his position) and hands a
-/// hit to [`release_hit`].
-pub fn release(table: &mut MobyTable, id: MobyId, rng: &mut crate::rng::Rng, point: [f32; 3]) {
+/// (`randf(±1)` ×3 normalised to `randf(0.01·dt, 0.1·dt)`), the 120-tick arming timer; on a carrier Ratchet's
+/// displacement `carried` (0x13f450) is added to the velocity after the nudge, so the mine keeps his momentum (the
+/// Metropolis train, 0x2bf8e0); with more than 7 other mines the oldest is told to go (+0x5c = −1); at the launch point.
+/// The caller then runs the wall test (Ratchet at the point's height → the point, the world and the mobys, Ratchet
+/// ignored: the disassembly's `lq` of his position) and hands a hit to [`release_hit`].
+pub fn release(table: &mut MobyTable, id: MobyId, rng: &mut crate::rng::Rng, point: [f32; 3], carried: Option<[f32; 3]>) {
     let x = rng.randf(-1.0, 1.0);
     let y = rng.randf(-1.0, 1.0);
     let z = rng.randf(-1.0, 1.0);
@@ -157,8 +161,9 @@ pub fn release(table: &mut MobyTable, id: MobyId, rng: &mut crate::rng::Rng, poi
     let nudge = c::set_len3([x, y, z, 0.0], s);
     {
         let m = &mut table.mobys[id];
-        let v = p::v4f(&m.pvars, pv::VEL);
-        p::set_v4f(&mut m.pvars, pv::VEL, c::add(nudge, v));
+        let v = c::add(nudge, p::v4f(&m.pvars, pv::VEL));
+        let v = match carried { Some(d) => c::add(v, [d[0], d[1], d[2], 0.0]), None => v };
+        p::set_v4f(&mut m.pvars, pv::VEL, v);
         p::set_i16(&mut m.pvars, pv::TIMER, 120);
     }
     // More than 7 other mines: the oldest goes.
@@ -209,11 +214,14 @@ fn is_crate(w: &World, m: MobyId) -> bool { (500..=540).contains(&(w.m(m).o_clas
 /// Whether the hand holds the Mine Glove.
 fn glove_in_hand(w: &World) -> bool { w.hero.items.slot.item.as_ref().is_some_and(|m| m.o_class == GLOVE_CLASS) }
 
-/// The bob's fade-in: `(frame − start) / 6`, clamped to [0, 1].
-fn bob_fade(w: &World, id: MobyId) -> f32 {
-    let t = (w.counter as i32).wrapping_sub(c::pi32(w, id, pv::BOB_START)) as f32 / 6.0;
+/// The display bob's fade `n` ticks after it started (`+0x74`): `((counter − n − start) / 6)` clamped.
+fn bob_fade_at(w: &World, id: MobyId, n: i32) -> f32 {
+    let t = (w.counter as i32).wrapping_sub(n).wrapping_sub(c::pi32(w, id, pv::BOB_START)) as f32 / 6.0;
     t.clamp(0.0, 1.0)
 }
+
+/// The bob's fade-in at this tick: `(frame − start) / 6`, clamped to [0, 1].
+fn bob_fade(w: &World, id: MobyId) -> f32 { bob_fade_at(w, id, 0) }
 
 /// `0x2bfe40`.
 pub fn update(w: &mut World, id: MobyId) {
@@ -262,9 +270,11 @@ pub fn update(w: &mut World, id: MobyId) {
         let d = c::set_len2([vel[0], vel[1], 0.0, 0.0], 1.0);
         HitTemplate { dir: [Pf::f(d[0]), Pf::f(d[1]), Pf::ONE, Pf::b(0x45af_df66)], attacker: Some(id), flags: 0x83_0000, b18: 2, b19: 1, h1a: CLASS as u16, damage: Pf::f(3.0), w20: 1 }
     };
-    // Undo the display bob of the last tick.
+    // Undo the display bob of the last tick. The offset was added at the end of the previous tick, whose fade is
+    // one step younger (the counter has advanced): using this tick's fade would leave the position `amp/6` too high,
+    // enough to trip the `landed` ground check below (`DT2·40`) on a carrier and make the mine fall and re-land.
     {
-        let fade = bob_fade(w, id);
+        let fade = bob_fade_at(w, id, 1);
         let (amp, ph) = (c::pf(w, id, pv::BOB_AMP), c::pf(w, id, pv::BOB_PHASE));
         let m = w.mm(id);
         m.position[2] -= 0.4;
@@ -303,7 +313,7 @@ fn flight_hit(w: &mut World, id: MobyId, h: &crate::collision_query::CollOutput,
     };
     let landing = |w: &mut World, id: MobyId, drift: &mut V, normal: &mut V, explode_at: &mut dyn FnMut(&mut World, MobyId, &mut V, &mut V)| {
         if !water && surface != 0 && DT * -9.8 <= vel[2] {
-            ground_bounce(w, id, hp, hn, vel);
+            ground_bounce(w, id, hp, hn, vel, h.moby);
         } else {
             explode_at(w, id, drift, normal);
         }
@@ -349,8 +359,10 @@ fn flight_hit(w: &mut World, id: MobyId, h: &crate::collision_query::CollOutput,
 
 /// A bounce off the ground or a wall (module doc): the point 9.7·dt² off the face, the velocity reflected ×0.6 and
 /// half its vertical; the first bounce starts the bob; onto a floor (more than 45° flat) while falling: flipped up,
-/// landed when slow; the tilt eased toward the face.
-fn ground_bounce(w: &mut World, id: MobyId, hp: V, hn: V, vel: V) {
+/// landed when slow (the velocity cleared, +0x94 = collision), and the tilt eased toward the face. It lands at once
+/// when the face is a **carrier** (the line's moby satisfies `FUN_00275290`, 0x2c091c), so it does not slide on the
+/// Metropolis train. Its platform is recorded by the next tick's [`landed`] ground line.
+fn ground_bounce(w: &mut World, id: MobyId, hp: V, hn: V, vel: V, hit_moby: Option<MobyId>) {
     let q = c::add(hp, c::set_len3(hn, DT2 * 9.7));
     c::set_pos(w, id, q);
     let vz0 = vel[2];
@@ -367,7 +379,8 @@ fn ground_bounce(w: &mut World, id: MobyId, hp: V, hn: V, vel: V) {
         let g = w.ground_height(Pf::f(0.5), pvq(q), 0).to_f32();
         if w.m(id).position[2] < g { w.mm(id).position[2] = g; }
         v[2] = -v[2];
-        if c::len3(v) < DT * 0.5 {
+        let on_carrier = hit_moby.and_then(|m| w.table.mobys.get(m)).is_some_and(|m| triggers::platform_block(m).is_some());
+        if c::len3(v) < DT * 0.5 || on_carrier {
             v = [0.0; 4];
             let coll = w.classes.info(CLASS).is_some_and(|i| i.has_collision);
             let m = w.mm(id);
@@ -502,7 +515,14 @@ fn landed(w: &mut World, id: MobyId, old: V) {
         let seek = HitTemplate { dir: pvq(d), attacker: Some(id), flags: 0x1_0000, b18: 0, b19: 0, h1a: 0, damage: Pf::ONE, w20: 1 };
         let centre = [pos[0], pos[1], pos[2] + 0.35, pos[3]];
         let list = sv::sphere_mobys_in(w.table, w.svc, w.classes, Pf::f(f32::from_bits(0x3eb3_3333)), pvq(centre), 0x10, Some(id), Some(&seek));
-        if let Some(&first) = list.first() {
+        // The game checks the class of the **first moby the sphere lists** (the CollOutput's hit moby, 0x2c0eac) and
+        // exempts 0x363 / 0x4a / 0x458 / 0x365 / 0x367; it has no platform exemption. The port's `coll_sphere_mobys`
+        // lists the deck it rides (the 0.35 sphere at +0.35 is exactly tangent, and the moby-only kernel's best is
+        // unshrunk), so the carrier is skipped here: that is what the PS2 sphere must have omitted, since the mine
+        // does not detonate on its platform. Skipping it leaves the first non-platform moby, which is the game's first
+        // listed one when the deck is absent. [L: the kernel side is not pinned by the available decomp.]
+        let plat = platform(w, id);
+        if let Some(&first) = list.iter().find(|&&m| Some(m) != plat) {
             if !matches!(w.m(first).o_class, 0x363 | 0x4a | 0x458 | 0x365 | 0x367) { w.mm(id).cmd = 1; }
         }
         let centre = [pos[0], pos[1], pos[2] + 0.25, pos[3]];
@@ -784,7 +804,7 @@ mod tests {
         let mut rng = crate::rng::Rng::new();
         init_held(&mut b.table.mobys[m], &mut rng, [20.0, 20.0, 13.0], 0);
         p::set_v4f(&mut b.table.mobys[m].pvars, pv::VEL, [0.02, 0.0, 0.0, 0.0]);
-        release(&mut b.table, m, &mut rng, [20.0, 20.0, 13.0]);
+        release(&mut b.table, m, &mut rng, [20.0, 20.0, 13.0], None);
         let (d35, mut entered, mut entry_tick) = (b.parts(35), false, 0u64);
         for _ in 0..400 {
             let (p34, p64, p15, lights, sounds) = (b.parts(34), b.parts(64), b.parts(15), b.alive(LIGHT_CLASS), b.svc.sounds.len());
@@ -830,5 +850,57 @@ mod tests {
         assert_eq!(mo.rows[0], f[0], "row 0");
         assert_eq!(mo.rows[1], [-1.0, 0.0, 0.0, 0.0], "row 1 (negated)");
         assert_eq!(mo.rows[2], [0.0, 0.0, -1.0, 0.0], "row 2 (negated)");
+    }
+
+    /// `0x2bf8e0`: on a carrier (Ratchet on the Metropolis train) his displacement 0x13f450 is added to the lob
+    /// velocity after the nudge, so the mine keeps his momentum; off a carrier the velocity is the lob plus the nudge.
+    #[test]
+    fn a_carrier_lends_the_lob_his_displacement() {
+        let lob = [0.02, 0.03, 0.04];
+        let thrown = |carried: Option<[f32; 3]>| {
+            let m = crate::moby_runtime::Moby { o_class: CLASS, pvars: vec![0; pv::SIZE], ..Default::default() };
+            let mut table = MobyTable::new(vec![m], 0);
+            p::set_v4f(&mut table.mobys[0].pvars, pv::VEL, [lob[0], lob[1], lob[2], 0.0]);
+            let mut rng = crate::rng::Rng::new();
+            release(&mut table, 0, &mut rng, [20.0, 20.0, 8.0], carried);
+            p::v4f(&table.mobys[0].pvars, pv::VEL)
+        };
+        let plain = thrown(None);
+        assert!((0..3).all(|k| (plain[k] - lob[k]).abs() <= DT * 0.1 + 1e-6), "off a carrier only the nudge moves it: {plain:?}");
+        let carried = thrown(Some([0.1, 0.2, 0.3]));
+        assert!((0..3).all(|k| (carried[k] - plain[k] - [0.1, 0.2, 0.3][k]).abs() < 1e-6), "the same nudge plus his displacement: {carried:?}");
+    }
+
+    /// `0x2c091c`: a flat landing on a carrier (the Metropolis train) ends the bounce at once — the velocity is cleared
+    /// and it lands — while the same hit on the world bounces first. The train deck's primitive is not modelled here:
+    /// the hit moby is passed to `ground_bounce`, as `flight_hit` does.
+    #[test]
+    fn a_carrier_ends_the_bounce_at_once() {
+        let landed = |carrier: bool| {
+            let mut b = Bench::new(pool(8.0, 12.0), &[CLASS], [40.0, 40.0, 20.0]);
+            let m = b.create(CLASS);
+            let mut rng = crate::rng::Rng::new();
+            init_held(&mut b.table.mobys[m], &mut rng, [20.0, 20.0, 9.0], 0);
+            b.table.mobys[m].state = OUT;
+            let hit = if carrier {
+                let c = b.create(CLASS);
+                let x = &mut b.table.mobys[c];
+                x.mode |= 0x20;
+                x.pvars[8..12].copy_from_slice(&0x40i32.to_le_bytes());
+                Some(c)
+            } else {
+                None
+            };
+            let mut w = World::new(&mut b.table, &b.hero, &mut b.rng, &b.ct, &mut b.svc, 1);
+            w.coll = Some(&b.coll);
+            let vel = [0.05, 0.0, DT * -0.6, 0.0];
+            ground_bounce(&mut w, m, [20.0, 20.0, 8.0, 1.0], [0.0, 0.0, 1.0, 0.0], vel, hit);
+            let mo = &w.table.mobys[m];
+            (p::v4f(&mo.pvars, pv::VEL), mo.state & LANDED != 0)
+        };
+        let (v, on_ground) = landed(false);
+        assert!(!on_ground && c::len3(v) > DT * 0.5, "the world bounces first: {v:?}");
+        let (v, on_ground) = landed(true);
+        assert!(on_ground && v == [0.0; 4], "a carrier settles it at once: {v:?}");
     }
 }

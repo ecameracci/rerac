@@ -1,5 +1,6 @@
-//! Moby collision on Novalis (level 1): the crate stacks after the load pass, a line cast onto a crate, and a
-//! bolt dropped above a crate settling on it. Skipped when `extracted/` (the extracted game data) is absent.
+//! Moby collision: Novalis (level 1) crate stacks after the load pass, a line cast onto a crate, a bolt dropped
+//! above a crate settling on it, and a mine riding a Kerwan (level 3) train car. Skipped when `extracted/` (the
+//! extracted game data) is absent.
 
 use rc_formats::moby_anim::{parse_sequences, MobyAnimClass};
 use rc_formats::moby_collision::MobyCollision;
@@ -15,6 +16,7 @@ use rc_game::ps2v::Pf;
 use rc_game::tick::{Game, GameOptions};
 
 struct Level {
+    level: u32,
     mesh: collision::Collision,
     instances: Vec<gameplay::MobyInstance>,
     pvars: Vec<Option<Vec<u8>>>,
@@ -24,11 +26,13 @@ struct Level {
     blobs: Vec<(i32, MobyCollision)>,
 }
 
-fn load() -> Option<Level> {
-    let dir = rc_formats::test_data::root().join("levels/01");
-    let data = rc_formats::test_data::core_data(1)?;
+fn load() -> Option<Level> { load_level(1) }
+
+fn load_level(n: u32) -> Option<Level> {
+    let dir = rc_formats::test_data::root().join(format!("levels/{n:02}"));
+    let data = rc_formats::test_data::core_data(n)?;
     let idx = std::fs::read(dir.join("core_index.bin")).ok()?;
-    let gp = rc_formats::test_data::gameplay(1)?;
+    let gp = rc_formats::test_data::gameplay(n)?;
     let core = level::parse_level_core(&idx, data.len()).unwrap();
     let mesh = collision::parse_collision(&core, &data).unwrap();
     let instances = gameplay::parse_moby_instances(&gp).unwrap();
@@ -38,7 +42,7 @@ fn load() -> Option<Level> {
     let mut classes = ClassTable::default();
     for (slot, e) in core.moby_classes.iter().enumerate() {
         let oc = e.o_class as i16;
-        let Some(blob) = rc_formats::test_data::core_block(1, &format!("moby_class/{:04}", e.o_class)) else { continue };
+        let Some(blob) = rc_formats::test_data::core_block(n, &format!("moby_class/{:04}", e.o_class)) else { continue };
         let Ok(c) = rc_formats::moby::parse_moby_class(&blob) else { continue };
         let anim = MobyAnimClass::new(&c, parse_sequences(&blob, &c).unwrap_or_default());
         let mut info = class_info(&c, slot as u8, scheduler::port_update_fn(oc));
@@ -46,7 +50,7 @@ fn load() -> Option<Level> {
         classes.classes.insert(oc, (info, Some(anim)));
     }
     let blobs = rc_formats::moby_collision::parse_level(&core, &data).unwrap();
-    Some(Level { mesh, instances, pvars, gp: gp.to_vec(), classes, spawnable, blobs })
+    Some(Level { level: n, mesh, instances, pvars, gp: gp.to_vec(), classes, spawnable, blobs })
 }
 
 /// The table after the loader, the load pass and `ticks` moby-loop ticks (camera at the 344 stack), with moby
@@ -59,7 +63,7 @@ fn loaded(lv: &Level, with_mobys: bool, ticks: u64) -> (Game, Services, ClassTab
     table.mobys[hero_idx].mode |= mode::NO_UPDATE;
     let mut game = Game::new(&lv.mesh, table, hero_idx, GameOptions::default(), -100.0);
     let mut svc = Services::new();
-    svc.level = 1;
+    svc.level = lv.level;
     svc.groups = Groups::parse(&lv.gp, &|i| (i < lv.instances.len()).then_some(i));
     if with_mobys { svc.set_moby_collision(lv.blobs.clone()); }
     svc.build_grid(&mut game.mobys);
@@ -84,6 +88,126 @@ fn loaded(lv: &Level, with_mobys: bool, ticks: u64) -> (Game, Services, ClassTab
 
 const CRATE_344: usize = 344;
 const CRATE_342: usize = 342;
+
+/// Kerwan's train: a mine seeking from a car deck does not detonate on the deck it rides [L: the 0.35 sphere is
+/// tangent to the car's mesh; the port skips the carrier it rides] and moves toward its target. Before the skip it
+/// exploded on the first seek tick, usually outside the target's blast range.
+#[test]
+fn kerwan_train_mine_seeks_from_a_car_deck() {
+    use rc_game::moby_update::classes::mine;
+    let Some(lv) = load_level(3) else { eprintln!("skipped: no extracted/"); return };
+    let (mut game, mut svc, classes) = loaded(&lv, true, 60);
+    let car = game.mobys.mobys.iter().position(|m| m.o_class == 1210).expect("a car");
+    let target = game.mobys.mobys.iter().enumerate()
+        .find(|(i, m)| *i != car && m.mode & mode::TARGETABLE != 0 && m.state < 0x80)
+        .map(|(i, _)| i)
+        .expect("a targetable moby");
+    let cpos = game.mobys.mobys[car].position;
+    let hero = game.hero.clone();
+    let deck = {
+        let mut w = World::new(&mut game.mobys, &hero, &mut game.rng, &classes, &mut svc, 61);
+        w.coll = Some(&lv.mesh);
+        w.coll_line(ph::from_f32x3([cpos[0], cpos[1], cpos[2] + 5.0]), ph::from_f32x3([cpos[0], cpos[1], cpos[2] - 5.0]), 2, None)
+    }
+    .expect("the car's deck");
+    assert_eq!(deck.moby, Some(car));
+    let mut rng = rc_game::rng::Rng::new();
+    let m = {
+        let hero = game.hero.clone();
+        let mut w = World::new(&mut game.mobys, &hero, &mut game.rng, &classes, &mut svc, 62);
+        w.coll = Some(&lv.mesh);
+        let info = classes.classes.get(&74).map(|c| &c.0);
+        let id = w.table.create(74, info, 62).expect("mine");
+        let at = [deck.point[0] + 0.1, deck.point[1] + 0.05, deck.point[2]];
+        mine::init_held(&mut w.table.mobys[id], &mut rng, at, 0);
+        mine::release(w.table, id, &mut rng, at, None);
+        rc_game::moby_update::services::pvar::set_v4f(&mut w.table.mobys[id].pvars, mine::pv::VEL, [0.0; 4]);
+        // Armed, landed and seeking from the deck (the search's own record of the platform and of a 600-tick life).
+        w.table.mobys[id].state = mine::OUT | mine::ARMED | mine::LANDED | mine::SEEKING;
+        let pv = &mut w.table.mobys[id].pvars;
+        rc_game::moby_update::services::pvar::set_i32(pv, mine::pv::PLATFORM, car as i32 + 1);
+        rc_game::moby_update::services::pvar::set_i32(pv, mine::pv::TARGET, target as i32 + 1);
+        rc_game::moby_update::services::pvar::set_i32(pv, mine::pv::LIFE, 600);
+        id
+    };
+    let dist = |g: &Game| {
+        let (a, b) = (&g.mobys.mobys[m], &g.mobys.mobys[target]);
+        ((a.position[0] - b.position[0]).powi(2) + (a.position[1] - b.position[1]).powi(2) + (a.position[2] - b.position[2]).powi(2)).sqrt()
+    };
+    let d0 = dist(&game);
+    let mut sched = Scheduler::new();
+    for counter in 63..=74u64 {
+        game.mobys.free_slot_pass(counter);
+        let hero = game.hero.clone();
+        let mut w = World::new(&mut game.mobys, &hero, &mut game.rng, &classes, &mut svc, counter);
+        w.coll = Some(&lv.mesh);
+        sched.tick(&mut w);
+        assert!(!game.mobys.mobys[m].is_deleted(), "the mine does not detonate on the car deck at tick {counter}");
+    }
+    let d1 = dist(&game);
+    assert!(d1 < d0 - 0.2, "it moves toward the target: {d0} -> {d1}");
+}
+
+/// Kerwan's train: a mine dropped on a car's deck records the carrier on its first landed tick and rides it.
+/// The display bob's undo used to leave the "physical" z `amp/6` high (it used this tick's fade, not the one the
+/// offset was added with), tripping `landed`'s ground-drop check (`DT2·40`): the mine fell and re-landed for a dozen
+/// ticks, sitting still in world space while the train moved (the Metropolis train's slip).
+#[test]
+fn kerwan_train_mine_rides_a_car() {
+    use rc_game::moby_update::classes::mine;
+    let Some(lv) = load_level(3) else { eprintln!("skipped: no extracted/"); return };
+    let (mut game, mut svc, classes) = loaded(&lv, true, 60);
+    let car = game.mobys.mobys.iter().position(|m| m.o_class == 1210).expect("a car");
+    let cpos = game.mobys.mobys[car].position;
+    let hero = game.hero.clone();
+    let deck = {
+        let mut w = World::new(&mut game.mobys, &hero, &mut game.rng, &classes, &mut svc, 61);
+        w.coll = Some(&lv.mesh);
+        w.coll_line(ph::from_f32x3([cpos[0], cpos[1], cpos[2] + 5.0]), ph::from_f32x3([cpos[0], cpos[1], cpos[2] - 5.0]), 2, None)
+    }
+    .expect("the car's deck");
+    assert_eq!(deck.moby, Some(car), "the deck line hits the car");
+    let mut sched = Scheduler::new();
+    let mut rng = rc_game::rng::Rng::new();
+    let mut id = None;
+    let mut settled_at = None;
+    let mut offsets: Vec<f32> = Vec::new();
+    for counter in 62..=200u64 {
+        game.mobys.free_slot_pass(counter);
+        let hero = game.hero.clone();
+        let mut w = World::new(&mut game.mobys, &hero, &mut game.rng, &classes, &mut svc, counter);
+        w.coll = Some(&lv.mesh);
+        if counter == 62 {
+            let info = classes.classes.get(&74).map(|c| &c.0);
+            let m = w.table.create(74, info, counter).expect("mine");
+            let at = [deck.point[0] + 0.1, deck.point[1] + 0.05, deck.point[2] + 1.0];
+            mine::init_held(&mut w.table.mobys[m], &mut rng, at, 0);
+            mine::release(w.table, m, &mut rng, at, None);
+            rc_game::moby_update::services::pvar::set_v4f(&mut w.table.mobys[m].pvars, mine::pv::VEL, [0.0; 4]);
+            id = Some(m);
+        }
+        sched.tick(&mut w);
+        let plat = i32::from_le_bytes(game.mobys.mobys[id.unwrap()].pvars[0x4c..0x50].try_into().unwrap());
+        if plat != 0 && settled_at.is_none() { settled_at = Some(counter); }
+        if let Some(settled) = settled_at {
+            // The carrier moves 0.05 a tick, with its block delta as the train's `drive` writes it.
+            let c = &mut game.mobys.mobys[car];
+            c.position[0] += 0.05;
+            let rot = c.rotation;
+            rc_game::moby_update::triggers::carry_riders(&mut c.pvars, 0x20, [0.05, 0.0, 0.0, 0.0], rot, rot);
+            svc.build_matrix_in(&mut game.mobys, &classes, car);
+            if counter <= settled + 30 {
+                let m = &game.mobys.mobys[id.unwrap()];
+                offsets.push(m.position[0] - game.mobys.mobys[car].position[0]);
+            }
+        }
+    }
+    let settled = settled_at.expect("the mine never recorded the car");
+    // The drop takes ~21 ticks (62 to 83), the record the tick after. The bob mismatch delayed it by about 12.
+    assert!(settled <= 86, "recorded on the landing tick ({settled})");
+    let (lo, hi) = offsets.iter().fold((f32::MAX, f32::MIN), |(lo, hi), &x| (lo.min(x), hi.max(x)));
+    assert!(hi - lo < 0.02, "the mine rides the car: offset {lo}..{hi}");
+}
 
 #[test]
 fn novalis_line_onto_crate_344() {
