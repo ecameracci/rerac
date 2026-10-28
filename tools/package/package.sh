@@ -135,6 +135,12 @@ Reporting a bug:
   3. If the game crashed, the session folder also holds crash.txt; every crash is also
      added to ${settings}crash.log
   Say which version you played (ReRAC $build_version, $os-$arch).
+
+Credits: the PS5 and Xbox button icons (Port Options > Controller > Button icons) are
+"PS5 Button Icons and Controls" and "Xbox Series Button Icons and Controls" by Zacksly
+(https://zacksly.itch.io), licensed under CC BY 3.0
+(https://creativecommons.org/licenses/by/3.0/). They are renamed, and ReRAC resizes
+them to the text's size and tints them with the text's colour.
 EOF
 if [ "$os" = windows ]; then
   sed -i 's#\./rerac#rerac#g; s/$/\r/' "$out/README.txt"
