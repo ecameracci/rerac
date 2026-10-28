@@ -197,6 +197,9 @@ pub fn fx_image(images: &mut Assets<Image>, t: &rc_formats::texture::Texture) ->
     images.add(img)
 }
 
+/// [`PrimBuf::parts`]: Bevy-space points, (s, t), RGBA bytes / 128, the triangle list.
+pub type PrimParts<'a> = (&'a [[f32; 3]], &'a [[f32; 2]], &'a [[f32; 4]], &'a [u32]);
+
 /// Mesh data of one draw group being built: game-space points, (s, t), GS RGBA bytes.
 #[derive(Default)]
 pub struct PrimBuf {
@@ -233,6 +236,9 @@ impl PrimBuf {
     }
 
     pub fn is_empty(&self) -> bool { self.idx.is_empty() }
+
+    /// The primitives as built (crate::sea_water).
+    pub fn parts(&self) -> PrimParts<'_> { (&self.pos, &self.uv, &self.color, &self.idx) }
 
     /// Whether `mesh` already holds these primitives (crate::asset_write: a rewrite is an upload).
     fn same_as(&self, mesh: &Mesh) -> bool {

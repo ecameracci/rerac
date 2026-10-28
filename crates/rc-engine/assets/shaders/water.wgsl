@@ -350,8 +350,10 @@ fn fragment(in: WaterVertexOutput) -> @location(0) vec4<f32> {
     let here = vec2<i32>(floor(in.position.xy));
     let thickness = clamp(vp.z - scene_z(here, size), 0.0, 1e4);
     let chute = kind == 4u;
+    // Far water (look.misc.yz = the fade's start / end view depth, crate::sea_water; 0: none): no bed, shore or foam.
+    let far = select(0.0, smoothstep(look.misc.y, look.misc.z, -vp.z), look.misc.z > 0.0);
     // Kind 4 is a film everywhere: its edges fade by the vertex fade instead.
-    let shore = select(smoothstep(0.0, 0.6, thickness), 1.0, chute);
+    let shore = select(max(smoothstep(0.0, 0.6, thickness), far), 1.0, chute);
 
     var n_world: vec3<f32>;
     var tilt: vec2<f32>;
@@ -393,11 +395,13 @@ fn fragment(in: WaterVertexOutput) -> @location(0) vec4<f32> {
     }
     // Absorption toward the water's own colour (the texture as the game drew it, darkened with depth).
     let tint = srgb_to_linear(rgb);
-    let deep = tint * 0.55;
+    // look.misc.w: the deep water's share of the colour (crate::sea_water's seas; 0: 0.55).
+    let deep = tint * select(0.55, look.misc.w, look.misc.w > 0.0);
     let absorb = vec3<f32>(0.30, 0.12, 0.07) * (0.6 + params.misc.x);
     let trans = exp(-absorb * path);
     var col = bed * trans + deep * (1.0 - trans);
     col = mix(col, tint, select(0.12, 0.4, chute) * shore);
+    col = mix(col, tint, far);
     if (chute) {
         // White streaks stretched along the flow and carried with it.
         let q = vec2<f32>(in.flow.x * 5.0, (in.flow.y - t_now * params.misc.z * 1.1) * 0.5);
@@ -418,6 +422,6 @@ fn fragment(in: WaterVertexOutput) -> @location(0) vec4<f32> {
     // Foam along the shore (thin water over a rising bed), broken up by drifting noise.
     let foam_n = smoothstep(0.1, 0.5, gnoise(wp.xz * 3.0 + vec2<f32>(t_now * 0.2, -t_now * 0.15)) + 0.35);
     let foam = (1.0 - smoothstep(0.05, 0.45, thickness)) * smoothstep(0.02, 0.1, thickness) * smoothstep(0.02, 0.1, rise) * foam_n;
-    col = mix(col, vec3<f32>(0.92, 0.96, 1.0), foam * 0.55);
+    col = mix(col, vec3<f32>(0.92, 0.96, 1.0), foam * 0.55 * (1.0 - far));
     return vec4<f32>(col, 1.0);
 }
