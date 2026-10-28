@@ -208,7 +208,7 @@ Ratchet's head in the pause menu, Can't Start New Game (keymapping), the Xbox pa
 | 1561285436104642710 | HMDSOLO | Pokitaru waterfalls | §2.12 |
 | 1561283743984132266 | HMDSOLO | Thruster-Pack turbo (dark trails) | the smoke's texture is dark in the data (§4 third pass); needs a PS2 clip |
 | 1561282673308213278 | HMDSOLO | Jet fighter: no reticle, no missile HUD | keepcount: fixed in his upcoming batch |
-| 1561274678180315166 | HMDSOLO | Decoy Glove: no reticle on the ground | not triaged before (the index had it as "Pokitaru sand rings") |
+| 1561274678180315166 | HMDSOLO | Decoy Glove: no reticle on the ground | fixed: the create left the velocity at the hand point, so the preview read it as thrown and the held reticle never drew |
 | 1561272266459709460 | HMDSOLO | Decoy Glove: the decoy not held inside the glove | not triaged before (indexed as "Pokitaru deck"); likely the glove hand offset be6e72f |
 | 1561271052456296448 | HMDSOLO | Decoys do not stay on Pokitaru's boats | not triaged before (indexed as "mines riding the boat") |
 | 1561266123788255302 | HMDSOLO | Clank's second antenna in mission scenes | fixed ac0f9a3 on main |

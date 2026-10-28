@@ -340,6 +340,19 @@ pub fn launch_at(hero: &Hero, height: f32) -> [f32; 3] {
     p
 }
 
+/// `FUN_00275290(0x13f64c)`: Ratchet's ground moby is a carrier (the Metropolis train, a lift), so a throw adds his
+/// displacement this tick (0x13f450) to the object's velocity and it keeps his momentum; None on ordinary ground.
+pub(crate) fn carrier_disp(hero: &Hero, table: &MobyTable) -> Option<[f32; 3]> {
+    let carried = hero.ground_moby.and_then(|g| table.mobys.get(g)).is_some_and(|m| crate::moby_update::triggers::platform_block(m).is_some());
+    carried.then(|| to_f32x3(hero.disp))
+}
+
+/// The Bomb Glove's release displacement (0x2c27a8): Ratchet's while grinding (group 0xf) or standing on a carrier. The
+/// mine, decoy and canister releases add only the carrier's (their copies have no grind branch).
+fn throw_disp(hero: &Hero, table: &MobyTable) -> Option<[f32; 3]> {
+    if hero.group == 0xf { Some(to_f32x3(hero.disp)) } else { carrier_disp(hero, table) }
+}
+
 /// The releases' wall test `CollLine_Fix(from, to, 0, Ratchet, 0)` (the mine's and the decoy's: the world and the
 /// mobys, Ratchet ignored): the hit point and its raw normal. Through the hit sink's probe; a sink without collision
 /// tests the world mesh alone.
@@ -401,9 +414,8 @@ fn create_bomb(hero: &mut Hero, table: &mut MobyTable, env: &ItemEnv, hits: &mut
 /// on a carrier, `FUN_00275290(0x13f64c)`: the Metropolis train); a wall between Ratchet (at the launch height) and the
 /// launch point explodes it there.
 fn release_bomb(hero: &mut Hero, table: &mut MobyTable, env: &ItemEnv, _hits: &mut dyn HitSink, _rng: &mut Rng, b: MobyId, t: Throw) {
-    let carried = hero.ground_moby.and_then(|g| table.mobys.get(g)).is_some_and(|m| crate::moby_update::triggers::platform_block(m).is_some());
-    let grind = if hero.group == 0xf || carried { Some(to_f32x3(hero.disp)) } else { None };
-    bomb::release(&mut table.mobys[b], t.launch, grind);
+    let disp = throw_disp(hero, table);
+    bomb::release(&mut table.mobys[b], t.launch, disp);
     let r = &table.mobys[env.hero_moby];
     let from = [r.position[0], r.position[1], t.launch[2]];
     if let Some(o) = env.coll.and_then(|c| line_world(c, from_f32x3(from), from_f32x3(t.launch), 0)) {
@@ -459,9 +471,11 @@ fn create_mine(hero: &mut Hero, table: &mut MobyTable, env: &ItemEnv, hits: &mut
     Some(m)
 }
 
-/// `0x2bf7d8`: the mine leaves from the launch point (the mines' list 0x1b0c30 is the table's).
-fn release_mine(_hero: &mut Hero, table: &mut MobyTable, env: &ItemEnv, hits: &mut dyn HitSink, rng: &mut Rng, m: MobyId, t: Throw) {
-    mine::release(table, m, rng, t.launch);
+/// `0x2bf7d8`: the mine leaves from the launch point, its velocity plus Ratchet's displacement on a carrier
+/// (`FUN_00275290(0x13f64c)`: the Metropolis train; 0x2bf8e0); the mines' list 0x1b0c30 is the table's.
+fn release_mine(hero: &mut Hero, table: &mut MobyTable, env: &ItemEnv, hits: &mut dyn HitSink, rng: &mut Rng, m: MobyId, t: Throw) {
+    let disp = carrier_disp(hero, table);
+    mine::release(table, m, rng, t.launch, disp);
     let r = table.mobys[env.hero_moby].position;
     let from = [r[0], r[1], t.launch[2]];
     if let Some(h) = wall_probe(table, env, hits, from, t.launch) { mine::release_hit(&mut table.mobys[m], h.0, h.1); }
@@ -506,13 +520,15 @@ fn create_decoy(hero: &mut Hero, table: &mut MobyTable, env: &ItemEnv, hits: &mu
     Some(d)
 }
 
-/// `0x2d94f0`: the decoy leaves from the hand point.
+/// `0x2d94f0`: the decoy leaves from the hand point, its velocity plus Ratchet's displacement on a carrier
+/// (`FUN_00275290(0x13f64c)`: the Metropolis train).
 fn release_decoy(hero: &mut Hero, table: &mut MobyTable, env: &ItemEnv, hits: &mut dyn HitSink, _rng: &mut Rng, d: MobyId, t: Throw) {
     let r = table.mobys[env.hero_moby].position;
     let from = [r[0], r[1], t.hand[2]];
     let end = decoy::release_line(from, t.hand);
     let hit = wall_probe(table, env, hits, from, end);
-    decoy::release(&mut table.mobys[d], t.hand, hit);
+    let disp = carrier_disp(hero, table);
+    decoy::release(&mut table.mobys[d], t.hand, disp, hit);
     hero.weapons.glove.hand = end;
 }
 
@@ -535,11 +551,44 @@ fn create_canister(hero: &mut Hero, table: &mut MobyTable, env: &ItemEnv, hits: 
     Some(c)
 }
 
-/// `0x2ddf58`: the canister leaves from the hand point; the line from Ratchet at its height (the world and the mobys,
+/// `0x2ddf58`: the canister leaves from the hand point, its velocity plus Ratchet's displacement on a carrier
+/// (`FUN_00275290(0x13f64c)`: the Metropolis train); the line from Ratchet at its height (the world and the mobys,
 /// Ratchet ignored) puts it on a wall in between.
-fn release_canister(_hero: &mut Hero, table: &mut MobyTable, env: &ItemEnv, hits: &mut dyn HitSink, _rng: &mut Rng, c: MobyId, t: Throw) {
+fn release_canister(hero: &mut Hero, table: &mut MobyTable, env: &ItemEnv, hits: &mut dyn HitSink, _rng: &mut Rng, c: MobyId, t: Throw) {
     let r = table.mobys[env.hero_moby].position;
     let from = [r[0], r[1], t.hand[2]];
     let hit = wall_probe(table, env, hits, from, t.hand);
-    doom_canister::release(&mut table.mobys[c], t.hand, hit);
+    let disp = carrier_disp(hero, table);
+    doom_canister::release(&mut table.mobys[c], t.hand, disp, hit);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::moby_runtime::Moby;
+    use crate::ps2v::Pf;
+
+    /// `FUN_00275290(0x13f64c)`: only a ground moby that is a carrier (mode 0x20 with a platform block at pvar +0x08)
+    /// lends Ratchet's displacement 0x13f450 to a throw — the Metropolis train and the lifts; ordinary mobys and an
+    /// empty ground do not. Grinding lends it to the Bomb Glove only.
+    #[test]
+    fn only_a_carrier_lends_his_displacement() {
+        let mut hero = Hero::spawn([10.0, 10.0, 20.0], 0.0);
+        hero.disp = [0.1f32, -0.2, 0.3, 0.0].map(Pf::f);
+        let mut carrier = Moby { mode: 0x20, ..Moby::default() };
+        carrier.pvars = vec![0; 0x80];
+        carrier.pvars[8..12].copy_from_slice(&0x40i32.to_le_bytes());
+        let table = MobyTable::new(vec![Moby::default(), carrier], 0);
+        hero.ground_moby = Some(1);
+        assert_eq!(carrier_disp(&hero, &table), Some([0.1, -0.2, 0.3]));
+        assert_eq!(throw_disp(&hero, &table), Some([0.1, -0.2, 0.3]));
+        hero.ground_moby = Some(0);
+        assert_eq!(carrier_disp(&hero, &table), None, "a moby without a platform block is no carrier");
+        assert_eq!(throw_disp(&hero, &table), None);
+        hero.ground_moby = None;
+        assert_eq!(carrier_disp(&hero, &table), None);
+        hero.group = 0xf;
+        assert_eq!(carrier_disp(&hero, &table), None, "grinding is not a carrier");
+        assert_eq!(throw_disp(&hero, &table), Some([0.1, -0.2, 0.3]), "the Bomb Glove adds it while grinding");
+    }
 }
