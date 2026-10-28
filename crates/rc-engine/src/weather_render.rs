@@ -12,7 +12,11 @@
 //!   level's fog colour (the scene's light), soft where it meets the world;
 //! * snow: a round soft flake of the record's size varied ±30 % per flake, fluttering sideways (a visual offset of
 //!   at most `weather.wgsl`'s `FLUTTER` units, from the record's pool index and the tick count: no game state, no `rand`), sharp
-//!   at mid range and blurred larger and fainter near the camera and far away (a depth-of-field look).
+//!   at mid range and blurred larger and fainter near the camera and far away (a depth-of-field look); and
+//!   [`FLAKE_COPIES`] − 1 more flakes per record, each at its own hashed offset of up to `weather.wgsl`'s
+//!   `EXTRA_SPREAD` from it (2.2 units across, 2.6 up and down), sized for its own depth, 0.6..0.9 of the size and a
+//!   little fainter: the snowfall about four times as thick, only where and while the game's flakes fall (they move,
+//!   fade and die with their record; nothing of the game's is added or read but the record).
 //!
 //! Splashes (type 1) keep the game's look. Original and Soft never reach this module (no entity, no resource).
 //!
@@ -47,6 +51,8 @@ pub const BLUR_TICKS: f32 = 0.5;
 pub const STREAK_SHARE: f32 = 0.4;
 /// After every particle draw (crate::particle_render's four slots).
 const DRAW_BIAS: f32 = 1.0e6 + 10.0;
+/// Quads per sprite (`weather.wgsl`'s `COPIES`): a flake record draws its own flake and this many − 1 more around it.
+pub const FLAKE_COPIES: u32 = 4;
 
 /// This frame's weather sprites (filled by crate::particle_render's `build_sprites` while Particles is Enhanced).
 #[derive(Resource)]
@@ -176,7 +182,7 @@ fn ensure(
     let mat = materials.add(WeatherMaterial { sprites: buffer.clone(), scene_depth: depth });
     println!("weather: Particles Enhanced draws level {:02}'s rain and snow", sim.map_or(0, |s| s.sys.level));
     commands.spawn((
-        Mesh3d(meshes.add(quad_mesh(POOL_RECORDS as u32))),
+        Mesh3d(meshes.add(quad_mesh(POOL_RECORDS as u32 * FLAKE_COPIES))),
         MeshMaterial3d(mat),
         Transform::IDENTITY,
         NoFrustumCulling,
@@ -218,6 +224,12 @@ pub fn rain_streak(end1: Vec3, end2: Vec3, d: Vec3) -> (Vec3, Vec3) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The shader draws as many quads per sprite as the mesh holds.
+    #[test]
+    fn flake_copies_match_the_shader() {
+        assert!(include_str!("../assets/shaders/weather.wgsl").contains(&format!("const COPIES: u32 = {FLAKE_COPIES}u;")));
+    }
 
     /// A streak keeps its head, points along the drop and covers at least the blur's travel.
     #[test]

@@ -1,6 +1,6 @@
 // Particles Enhanced's rain and snow (weather_render.rs): the game's type-0 / type-73 records drawn as thin
-// motion-blurred streaks and soft fluttering flakes. Per vertex: sprite index << 2 | corner (particle_render's quad
-// mesh). Header: (count, ticks, fog RGBA8, 0). Rain: p = (tail, half-width), q = (head, 0), c = (RGBA tail, 1,
+// motion-blurred streaks and soft fluttering flakes, each flake record with COPIES - 1 extra flakes around it. Per
+// vertex: quad << 2 | corner (particle_render's quad mesh), quad = sprite index * COPIES + copy. Header: (count, ticks, fog RGBA8, 0). Rain: p = (tail, half-width), q = (head, 0), c = (RGBA tail, 1,
 // RGBA head, index). Snow: p = (centre, a.x), q = (a.y, b.x, b.y, 0) in 512x416 game pixels, c = (RGBA, 2, 0, index).
 // RGBA bytes as the game's (0x80 = 1.0, alpha already faded by PartProc's near / far rule). Output premultiplied
 // (One, OneMinusSrcAlpha) in linear light; soft where it meets the opaque scene (scene_copy's depth, 1.5 units, as
@@ -30,6 +30,10 @@ const FLAKE: f32 = 0.32;
 const FLAKE_COVER: f32 = 0.3;
 // The flakes' largest sideways flutter (world units).
 const FLUTTER: f32 = 0.18;
+// Quads per sprite (weather_render.rs FLAKE_COPIES): a snow record draws its flake and COPIES − 1 extra ones up to
+// EXTRA_SPREAD units off on each axis; a rain record only the first.
+const COPIES: u32 = 4u;
+const EXTRA_SPREAD: vec3<f32> = vec3<f32>(2.2, 2.6, 2.2);
 
 fn half_w() -> f32 { return 256.0 * 0.775 * view.clip_from_view[1][1] / view.clip_from_view[0][0]; }
 
@@ -81,10 +85,12 @@ fn culled() -> WeatherOut {
 
 @vertex
 fn vertex(v: WeatherVertex) -> WeatherOut {
-    let i = v.sprite_corner >> 2u;
+    let i = (v.sprite_corner >> 2u) / COPIES;
+    let j = (v.sprite_corner >> 2u) % COPIES;
     let k = v.sprite_corner & 3u;
     if (i >= sprites.head.x) { return culled(); }
     let s = sprites.items[i];
+    if (j != 0u && s.c.y != 2u) { return culled(); }
     var out: WeatherOut;
     out.style = s.c.y;
     let vp = view.viewport.zw;
@@ -115,8 +121,21 @@ fn vertex(v: WeatherVertex) -> WeatherOut {
         out.blur = 0.0;
         return out;
     }
-    // Snow.
-    let seed = s.c.w;
+    // Snow. Copy j > 0 is an extra flake at a hashed offset from the record's (within EXTRA_SPREAD), sized for its
+    // own depth, a little smaller and fainter.
+    let seed = s.c.w + j * 0x10000u;
+    var centre = s.p.xyz;
+    var size_k = 1.0;
+    var fade = 1.0;
+    if (j != 0u) {
+        let o = vec3<f32>(unit(seed + 606u), unit(seed + 707u), unit(seed + 808u)) * 2.0 - 1.0;
+        centre = centre + o * EXTRA_SPREAD;
+        let w0 = position_world_to_clip(s.p.xyz).w;
+        let w1 = position_world_to_clip(centre).w;
+        if (w1 < 0.3) { return culled(); }
+        size_k = (max(w0, 0.0) + 0.5) / (w1 + 0.5) * (0.6 + 0.3 * unit(seed + 909u));
+        fade = 0.85;
+    }
     let t = f32(sprites.head.y) / 60.0;
     let ph = vec3<f32>(unit(seed), unit(seed + 101u), unit(seed + 202u)) * 6.2831853;
     let f = vec3<f32>(0.9, 1.3, 2.3) * (0.8 + 0.4 * unit(seed + 303u));
@@ -126,10 +145,10 @@ fn vertex(v: WeatherVertex) -> WeatherOut {
         0.25 * sin(t * f.z * 0.7 + ph.y),
         cos(t * f.y + ph.y) + 0.35 * cos(t * f.z + ph.x),
     ) * amp;
-    var clip = position_world_to_clip(s.p.xyz + sway);
+    var clip = position_world_to_clip(centre + sway);
     let depth = clip.w;
     let blur = saturate((depth - 12.0) / 30.0) * 0.8 + saturate((1.6 - depth) / 1.2) * 1.2;
-    let scale = FLAKE * (0.7 + 0.6 * unit(seed + 505u)) * (1.0 + blur);
+    let scale = FLAKE * size_k * (0.7 + 0.6 * unit(seed + 505u)) * (1.0 + blur);
     let a = vec2<f32>(s.p.w, s.q.x) * scale;
     let b = s.q.yz * scale;
     var corner = a;
@@ -141,7 +160,7 @@ fn vertex(v: WeatherVertex) -> WeatherOut {
     clip.y -= corner.y * (1.0 / 208.0) * clip.w;
     out.position = clip;
     out.uv = st;
-    out.alpha = bytes(s.c.x).a / 128.0 / ((1.0 + blur) * (1.0 + blur));
+    out.alpha = fade * bytes(s.c.x).a / 128.0 / ((1.0 + blur) * (1.0 + blur));
     out.blur = blur;
     return out;
 }
