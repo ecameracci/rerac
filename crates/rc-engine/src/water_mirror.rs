@@ -207,28 +207,31 @@ pub const STICK: f32 = 1.5;
 
 /// The plane to mirror (game z) and the planes' scores. Each region the eye (game) is [`MIN_ABOVE`] over whose
 /// rectangle is partly in the view frustum ([`visible_part`]) scores the screen area of that part ([`screen_area`])
-/// times the share of it seen ([`seen_share`]); the regions of one height ([`SAME_PLANE`]: a sea's blocks) add up. The
+/// times the share of it seen ([`seen_share`]); the regions of one height ([`SAME_PLANE`]: a sea's blocks) add up, at
+/// the height of the one scoring most (Novalis's river strips, 38.7..39.5, are one plane at the pool's). The
 /// plane covering the most of the screen wins (Rilgar's start: the bay over the beach's ripple pools at 61.2, which
 /// keep the screen-space reflection), but the `drawn` one stays until another covers [`STICK`] times as much. Nothing
 /// seen at all (lines cut by an invisible wall): by area alone.
 pub fn choose_plane(eye: Vec3, clip_from_world: &Mat4, regions: &[FlatWater], drawn: Option<f32>, mut blocked: impl FnMut(Vec3, Vec3) -> bool) -> (Option<f32>, Vec<(f32, f32)>) {
-    // (z, area, area seen) per height.
-    let mut planes: Vec<(f32, f32, f32)> = Vec::new();
+    // (first z, area, area seen, z of the region scoring most, its score) per height.
+    let mut planes: Vec<(f32, f32, f32, f32, f32)> = Vec::new();
     for f in regions.iter().filter(|f| eye.z > f.z + MIN_ABOVE) {
         let part = visible_part(clip_from_world, f);
         if part.is_empty() { continue; }
         let area = screen_area(clip_from_world, &part);
         let seen = area * seen_share(eye, &part, &mut blocked);
+        let own = seen + area * 1e-3;
         match planes.iter_mut().find(|p| (p.0 - f.z).abs() <= SAME_PLANE) {
             Some(p) => {
                 p.1 += area;
                 p.2 += seen;
+                if own > p.4 { (p.3, p.4) = (f.z, own); }
             }
-            None => planes.push((f.z, area, seen)),
+            None => planes.push((f.z, area, seen, f.z, own)),
         }
     }
     let by_seen = planes.iter().any(|p| p.2 > 0.0);
-    let scores: Vec<(f32, f32)> = planes.iter().map(|p| (p.0, if by_seen { p.2 } else { p.1 })).collect();
+    let scores: Vec<(f32, f32)> = planes.iter().map(|p| (p.3, if by_seen { p.2 } else { p.1 })).collect();
     let best = scores.iter().copied().max_by(|a, b| a.1.total_cmp(&b.1));
     let kept = drawn.and_then(|d| scores.iter().copied().find(|p| (p.0 - d).abs() <= SAME_PLANE));
     let choice = match (best, kept) {
@@ -236,6 +239,13 @@ pub fn choose_plane(eye: Vec3, clip_from_world: &Mat4, regions: &[FlatWater], dr
         (b, _) => b.map(|b| b.0),
     };
     (choice, scores)
+}
+
+/// The chosen plane `z` at this frame's height, between choices ([`CHOOSE_EVERY`]; a sea's moves with its swell): the
+/// nearest region within [`SAME_PLANE`], not the first, as the strips of one plane lie up to that far apart (Novalis's
+/// river, 38.7..39.5: the first was a 39.5 strip, and the plane jumped 0.5 three frames in four).
+pub fn nearest_plane(regions: &[FlatWater], z: f32) -> Option<f32> {
+    regions.iter().map(|f| f.z).filter(|h| (h - z).abs() <= SAME_PLANE).min_by(|a, b| (a - z).abs().total_cmp(&(b - z).abs()))
 }
 
 /// Two choices this close (game units) are the same plane ([`fade`]: a sea's height moves with its swell; the shader
@@ -438,8 +448,7 @@ fn place(
     let t0 = std::time::Instant::now();
     m.age = m.age.wrapping_add(1);
     let due = m.age.is_multiple_of(CHOOSE_EVERY) || m.regions.len() != m.chosen.1;
-    // Between choices the chosen plane at this frame's height (a sea's moves with its swell).
-    let now = |z: f32| m.regions.iter().find(|f| (f.z - z).abs() <= SAME_PLANE).map(|f| f.z);
+    let now = |z: f32| nearest_plane(&m.regions, z);
     let (choice, scores) = match () {
         _ if m.regions.is_empty() => (None, Vec::new()),
         _ if due => choose_plane(game_eye(t), &clip_from_world, &m.regions, m.drawn, blocked),
@@ -610,6 +619,21 @@ mod tests {
         let kept = choose_plane(eye, &clip, &[left, pool], Some(2.01), clear).0;
         assert_eq!(kept, if a_p > a_l * STICK { Some(4.0) } else { Some(2.0) });
         assert_eq!(choose_plane(eye, &clip, &[pool], Some(2.0), clear).0, Some(4.0), "a drawn plane out of view gives way");
+    }
+
+    #[test]
+    fn river_strips_of_one_plane_keep_one_height() {
+        // Novalis's pool (marker 1): a strip at 39.5 listed first, the pool at 39.0 under the view.
+        let g = cam([0.0, 0.0, 41.0], [0.0, 20.0, 39.0]);
+        let clip = GameProjection::default().get_clip_from_view() * Mat4::from(g.inverse());
+        let eye = Vec3::new(0.0, 0.0, 41.0);
+        let (strip, pool) = (flat(39.5, [-8.0, 30.0], [8.0, 34.0]), flat(39.0, [-10.0, 4.0], [10.0, 30.0]));
+        let (choice, scores) = choose_plane(eye, &clip, &[strip, pool], None, clear);
+        assert_eq!((choice, scores.len()), (Some(39.0), 1), "the height of the strip covering most of the plane");
+        // Between choices the nearest region, not the first within SAME_PLANE.
+        assert_eq!(nearest_plane(&[strip, pool], 39.0), Some(39.0));
+        assert_eq!(nearest_plane(&[strip, flat(39.04, [0.0, 0.0], [1.0, 1.0])], 39.0), Some(39.04));
+        assert_eq!(nearest_plane(&[strip], 38.0), None);
     }
 
     #[test]
