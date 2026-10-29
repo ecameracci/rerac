@@ -15,11 +15,13 @@
 //!   grid's ST scale instead ([`LiquidGroup::grid`], [`st_per_unit`]), so they neither repeat block by block nor
 //!   break at the block edges (Umbris 460, Gaspar 317);
 //! * **mud** (Aridia's quicksand 854, by its port: [`quicksand_kind`]): thick and slow, the game's texture and colour
-//!   kept at about their brightness: a gentle swell in the normals (no waves, a few hundredths of a unit over 4 to 11
-//!   units), slow bubbles in one 3.5-unit cell in four that swell for eight to thirteen seconds, pop and leave a
-//!   settling ring, wet and drier patches, a drier crust along the banks ([`shore_map`]: the collision's faces that are not
-//!   the quicksand at its height), shaded by the key light (crate::sun_shadow::KeyLight) relative to the flat surface,
-//!   a soft wet sheen and a dull sky reflection (the fog colour, brightened) at grazing angles only;
+//!   kept: a slow swell in the normals only (no waves; slopes of about a tenth over 3 to 22 units, so it shows 20 to 60
+//!   units away), bubbles in a little under half of the 5-unit cells, 0.45 to 0.9 units, that swell glossy for six to
+//!   ten seconds, pop and leave a settling ring; dark, glossy wet patches and a lighter, matte dry crust along the banks
+//!   ([`shore_map`]: the collision's faces that are not the quicksand at its height), finely cracked there; shaded by
+//!   the key light (crate::sun_shadow::KeyLight) relative to the flat surface; a wet sheen of the sky (brightest at its
+//!   horizon, so the swell shows as glossy bands) by Fresnel and the key light's highlight, the wet patches' darkening
+//!   paying for most of it (Aridia's marker 2: the mud's mean about a fifth up, the frame's about 5 %);
 //! * **sludge**: murky, a weak emissive tint of its colour, slow ripples and bubbles that swell and pop;
 //! * **ice** (Hoven's slush): flat and still. The game scrolls its two layers (FX 0x2f opaque, FX 0x30 added over it
 //!   at `fix2`) against each other, which reads as rolling waves; here every layer drifts at [`ICE_DRIFT`] of its

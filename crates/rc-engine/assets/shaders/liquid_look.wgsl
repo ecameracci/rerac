@@ -149,17 +149,20 @@ fn lava_fine(world: vec3<f32>, f: LiquidFrame, t: f32) -> vec3<f32> {
 // strength.
 const ICE: vec2<f32> = vec2<f32>(0.35, 0.3);
 
-// Mud (crate::liquid_render, Aridia's quicksand): a slow, gentle swell over world xz (world units, a few hundredths):
-// two broad layers drifting apart at a few centimetres a second, no waves.
+// Mud (crate::liquid_render, Aridia's quicksand): a slow, gentle swell over world xz, only for the normals (slopes of
+// about a tenth, so it still shows 20 to 60 units away): three layers of about 22, 9 and 3 units drifting apart at a
+// few centimetres a second, no waves.
 fn mud_swell(xz: vec2<f32>, t: f32) -> f32 {
-    let a = wnoise(xz * 0.09 + vec2<f32>(t * 0.006, -t * 0.004));
-    let b = wnoise(xz * 0.23 + vec2<f32>(-t * 0.011, t * 0.008) + vec2<f32>(4.7, 1.9));
-    return a * 0.09 + b * 0.035;
+    let a = wnoise(xz * 0.045 + vec2<f32>(t * 0.004, -t * 0.003));
+    let b = wnoise(xz * 0.11 + vec2<f32>(-t * 0.008, t * 0.006) + vec2<f32>(4.7, 1.9));
+    let c = wnoise(xz * 0.31 + vec2<f32>(t * 0.012, t * 0.01) + vec2<f32>(1.3, 8.2));
+    return a * 2.2 + b * 0.7 + c * 0.12;
 }
 
-// Mud's bubbles, in cells of MUD_CELL units, about one cell in four: a dome swells slowly over most of its period,
-// pops and leaves a ring that spreads and settles. x = the height (world units), y = the wet shine it leaves (0..1).
-const MUD_CELL: f32 = 3.5;
+// Mud's bubbles, in cells of MUD_CELL units, a little under half of them: a dome swells slowly over most of its
+// period, pops and leaves a ring that spreads and settles. x = the height (world units), y = the wet shine it leaves
+// (0..1).
+const MUD_CELL: f32 = 5.0;
 fn mud_bubbles(xz: vec2<f32>, t: f32) -> vec2<f32> {
     let c = floor(xz / MUD_CELL);
     var h = 0.0;
@@ -169,27 +172,27 @@ fn mud_bubbles(xz: vec2<f32>, t: f32) -> vec2<f32> {
             let id = c + vec2<f32>(f32(i), f32(j));
             let r = whash2(id);
             let u = whash2(id + vec2<f32>(17.0, 31.0)) * 0.5 + 0.5;
-            if (u.x > 0.27) { continue; }
+            if (u.x > 0.45) { continue; }
             let centre = (id + 0.5 + r * 0.3) * MUD_CELL;
-            let period = 8.0 + 5.0 * u.y;
+            let period = 6.0 + 4.0 * u.y;
             let age = fract(t / period + r.x * 0.5 + 0.5);
-            let size = 0.2 + 0.25 * fract(r.y * 7.3 + 0.5);
+            let size = 0.45 + 0.45 * fract(r.y * 7.3 + 0.5);
             let d = length(xz - centre);
             if (age < 0.82) {
                 // The dome: from a quarter of its size to all of it, rising.
                 let grow = smoothstep(0.0, 0.82, age);
                 let rad = size * (0.25 + 0.75 * grow);
                 let dome = max(1.0 - d * d / (rad * rad), 0.0);
-                h += dome * size * 0.3 * grow;
+                h += dome * size * 0.4 * grow;
                 wet = max(wet, sqrt(dome) * grow);
             } else {
                 // The pop: a small crater and a ring running out to three times the dome, flattening.
                 let a = (age - 0.82) / 0.18;
                 let ring_r = size * (0.6 + 2.4 * a);
-                let w = 0.05 + 0.12 * a;
+                let w = 0.08 + 0.15 * a;
                 let ring = exp(-(d - ring_r) * (d - ring_r) / (w * w)) * (1.0 - a);
                 let crater = max(1.0 - d * d / (size * size * 0.5), 0.0) * (1.0 - a);
-                h += ring * 0.02 - crater * 0.03;
+                h += ring * 0.06 - crater * 0.08;
                 wet = max(wet, max(ring, crater));
             }
         }
@@ -225,14 +228,15 @@ fn sludge_height(xz: vec2<f32>, t: f32) -> f32 {
 }
 
 // Mud's look (liquid_look's kind 2; the arguments as there). The game's texture (a little smoothed: thick) keeps its
-// colour and about its brightness: wetter patches darker and a touch richer, drier ones lighter and greyer, the drier
-// crust along the banks (`frame.shore`) with a fine grain; the swell and the bubbles shade it by the key light against
-// the flat surface's light (so the level's light is not changed), a soft wet sheen of that light, and the sky (`sky`
-// dimmed) reflected dully at grazing angles only. Bubbles and grain fade out before they would alias
+// colour: wet patches darker, richer and glossy, the dry crust lighter, greyer and matte, drier toward the banks
+// (`frame.shore`) and finely cracked along them. The swell and the bubbles shade it by the key light against the flat
+// surface's light (so the level's light is not changed), and bend a wet sheen: the sky (`sky` dimmed, brightest at its
+// horizon, so the swell shows as glossy bands) reflected by Fresnel, and the key light's highlight, sharp with a soft
+// skirt. The wet patches' darkening pays for most of the sheen. Bubbles and cracks fade out before they would alias
 // (`frame.foot`, a pixel's world size; 0 on water.wgsl's patches).
 fn mud_look(rgb: vec3<f32>, soft: vec3<f32>, xz: vec2<f32>, slope: vec2<f32>, sun: vec3<f32>, sky: vec3<f32>, to_eye: vec3<f32>, t: f32, frame: LiquidFrame) -> vec3<f32> {
-    let sun_up = smoothstep(0.0, 0.15, sun.y);
-    let keep_b = 1.0 - smoothstep(0.03, 0.09, frame.foot);
+    let sun_up = smoothstep(-0.05, 0.1, sun.y);
+    let keep_b = 1.0 - smoothstep(0.08, 0.2, frame.foot);
     let e = 0.05;
     let s0 = mud_swell(xz, t);
     var b0 = vec2<f32>(0.0);
@@ -249,22 +253,29 @@ fn mud_look(rgb: vec3<f32>, soft: vec3<f32>, xz: vec2<f32>, slope: vec2<f32>, su
     let base = srgb_to_linear(mix(rgb, soft, 0.3));
     let lum = dot(base, vec3<f32>(0.2126, 0.7152, 0.0722));
     let patches = wnoise(xz * 0.07 + vec2<f32>(2.3, 0.0)) + 0.5 * wnoise(xz * 0.19 - vec2<f32>(1.7, 0.6));
-    let wet = clamp(0.62 + 0.55 * patches - 0.9 * frame.shore + 0.5 * b0.y * keep_b, 0.0, 1.0);
-    let dry_c = mix(base, vec3<f32>(lum), 0.35) * 1.1;
-    let wet_c = max(mix(vec3<f32>(lum), base, 1.2), vec3<f32>(0.0)) * 0.86;
+    let wet = clamp(0.78 + 0.7 * patches - 1.3 * frame.shore + 0.8 * b0.y * keep_b, 0.0, 1.0);
+    let dry_c = mix(base, vec3<f32>(lum), 0.3) * 1.3;
+    let wet_c = max(mix(vec3<f32>(lum), base, 1.3), vec3<f32>(0.0)) * 0.62;
+    // The crust's cracks along the banks: the zero lines of a warped noise of under a unit, on the dry part only.
+    let keep_c = 1.0 - smoothstep(0.03, 0.07, frame.foot);
+    let warp = vec2<f32>(wnoise(xz * 0.4), wnoise(xz * 0.4 + vec2<f32>(5.1, 2.7)));
+    let crack = smoothstep(0.95, 0.99, 1.0 - abs(wnoise(xz * 1.4 + warp))) * (1.0 - wet) * smoothstep(0.15, 0.5, frame.shore) * keep_c;
     let keep_g = 1.0 - smoothstep(0.15, 0.35, frame.foot * 2.7);
-    let grain = 1.0 + (1.0 - wet) * 0.14 * wnoise(xz * 2.7 + vec2<f32>(0.0, 9.1)) * keep_g;
+    let grain = (1.0 + (1.0 - wet) * 0.14 * wnoise(xz * 2.7 + vec2<f32>(0.0, 9.1)) * keep_g) * (1.0 - 0.45 * crack);
     // The key light on the slope against its light on the flat surface.
-    let lit = clamp(1.0 + 2.5 * (dot(n, sun) - sun.y) * sun_up, 0.75, 1.3);
+    let lit = clamp(1.0 + 1.8 * (dot(n, sun) - sun.y) * sun_up, 0.75, 1.3);
     let body = mix(dry_c, wet_c, wet) * grain * lit;
-    // A soft, low-roughness sheen where wet, scaled by the texture's brightness (the light the game baked into it: an
-    // absolute highlight would grey the dark mud over); the sky, dimmed as sludge's, dully at grazing angles.
-    let nh = max(dot(n, normalize(sun + to_eye)), 0.0);
-    let spec = (pow(nh, 80.0) * 2.0 + pow(nh, 16.0) * 0.12) * wet * sun_up * max(lum, 0.004);
+    // The sheen, wet only (squared: the crust stays matte).
+    let gloss = wet * wet;
     let cos_v = max(dot(n, to_eye), 0.0);
     let fres = 0.02 + 0.98 * pow(1.0 - cos_v, 5.0);
-    let refl = clamp(fres * 0.3 * (0.3 + 0.7 * wet), 0.0, 0.15);
-    return mix(body, sky * 0.3, refl) + vec3<f32>(0.88, 0.92, 1.0) * spec;
+    let r = reflect(-to_eye, n);
+    let env = sky * 0.8 * (0.1 + 0.9 * pow(1.0 - clamp(r.y, 0.0, 1.0), 5.0));
+    let refl = clamp(fres * 0.8 * gloss, 0.0, 0.5);
+    let nh = max(dot(n, normalize(sun + to_eye)), 0.0);
+    let light = vec3<f32>(0.8, 0.85, 1.0) * max(dot(sky, vec3<f32>(1.0 / 3.0)), 0.02) * 3.0;
+    let spec = (pow(nh, 400.0) + pow(nh, 60.0) * 0.06) * gloss * sun_up;
+    return mix(body, env, refl) + light * spec;
 }
 
 // The look of `kind` in linear light: `rgb` the draw's MODULATE colour (display bytes / 255), `soft` the same at low
