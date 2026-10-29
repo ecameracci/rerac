@@ -56,7 +56,8 @@
 //! [`grid_tint`]; the log names each verdict), seen from above, go to crate::sea_water (drawn after the scene copy by
 //! `water.wgsl`'s Enhanced path, Z written) instead of the opaque or display-blend pass; those whose colour is lava,
 //! mud or sludge (crate::liquid_render::verdict) go to crate::liquid_render, from either side, with the later passes of
-//! their mesh set (Gaspar's two-pass lava flows); the Hoven liquid's opaque groups go there as ice and its additive pass
+//! their mesh set (Gaspar's two-pass lava flows); 854's grids (Aridia's quicksand, too dark for the colour rules) go
+//! there as mud by their port (crate::liquid_render `quicksand_kind`); the Hoven liquid's opaque groups go there as ice and its additive pass
 //! (the white streaks) stays its own draw, every scroll slowed (crate::liquid_render `hoven_scroll`); a translucent
 //! grid (Oltanis's 1260) is a fog layer and stays Original (crate::liquid_render `layer_verdict`); seen from above, the
 //! ocean's band and layers give way to crate::ocean_water's surface (its wall stays); the other effect groups, the
@@ -443,7 +444,9 @@ pub fn judged_rgb(avg: [f32; 3], tint: [f32; 3]) -> [u8; 3] { [0, 1, 2].map(|k| 
 /// animated image by its first frame as the module reads it), found once per texture, tint and FIX and logged with
 /// the group's box (game space).
 #[allow(clippy::too_many_arguments)]
-fn tex_kind(st: &mut SeaDraw, sea: &LevelSea, fx: Option<&[Option<rc_formats::texture::Texture>]>, tex: Tex, tint: [f32; 3], fix: u8, grid: bool, prims: &PrimBuf) -> LiquidKind {
+/// `port`: the kind the group's port gives it whatever its colour (854's quicksand,
+/// crate::liquid_render::quicksand_kind), logged with the colour.
+fn tex_kind(st: &mut SeaDraw, sea: &LevelSea, fx: Option<&[Option<rc_formats::texture::Texture>]>, tex: Tex, tint: [f32; 3], fix: u8, grid: bool, prims: &PrimBuf, port: Option<LiquidKind>) -> LiquidKind {
     let key = (tex, tint.map(f32::to_bits), fix);
     if let Some(&c) = st.kinds.get(&key) { return c; }
     let mut px = Vec::new();
@@ -460,13 +463,18 @@ fn tex_kind(st: &mut SeaDraw, sea: &LevelSea, fx: Option<&[Option<rc_formats::te
     let n = (px.len() / 4).max(1) as f32;
     let avg = px.as_chunks::<4>().0.iter().fold([0.0f32; 3], |a, p| [a[0] + p[0] as f32, a[1] + p[1] as f32, a[2] + p[2] as f32]).map(|s| s / n);
     let rgb = judged_rgb(avg, tint);
-    let kind = if px.is_empty() { LiquidKind::Original } else { crate::liquid_render::verdict(rgb, crate::liquid_render::enabled(), crate::liquid_render::forced()) };
+    let kind = match port {
+        Some(k) => k,
+        None if px.is_empty() => LiquidKind::Original,
+        None => crate::liquid_render::verdict(rgb, crate::liquid_render::enabled(), crate::liquid_render::forced()),
+    };
     let kind = crate::liquid_render::layer_verdict(kind, grid, fix);
     // Bevy (x, y, z) = game (x, z, −y).
     let (lo, hi) = prims.parts().0.iter().fold(([f32::MAX; 3], [f32::MIN; 3]), |(lo, hi), p| ([lo[0].min(p[0]), lo[1].min(-p[2]), lo[2].min(p[1])], [hi[0].max(p[0]), hi[1].max(-p[2]), hi[2].max(p[1])]));
     let how = match kind {
         LiquidKind::Water => "clear water (Water Enhanced applies)",
         LiquidKind::Original if grid && fix < 0x80 => "kept Original: a translucent grid is a fog or cloud layer",
+        LiquidKind::Mud if port.is_some() => "Water Enhanced's liquid look: the quicksand, mud by its port",
         k if k.drawn_here() => "Water Enhanced's liquid look",
         _ => "kept Original",
     };
@@ -555,6 +563,8 @@ fn draw(
     let mut passes: Vec<(usize, usize, gs::MeshSt)> = Vec::new();
     // The grids' own draws (not their meshes'): the group, the record's FIX (crate::sea_water::surface_fix), the port.
     let mut grid_own: Vec<(usize, u8, usize)> = Vec::new();
+    // 854's group, the quicksand (crate::liquid_render::quicksand_kind).
+    let mut quicksand: Option<usize> = None;
     // Hoven's opaque groups drawn as ice (crate::liquid_render).
     let mut ice_groups: Vec<usize> = Vec::new();
     // The animated images of this tick, made once each.
@@ -646,6 +656,7 @@ fn draw(
                 let lf = LevelFog { color: g.fog_rgb, near_dist: g.fog[0], far_dist: g.fog[1], near_intensity: g.fog[2], far_intensity: g.fog[3] };
                 // (`0x2a4818` has no Visibomb-view branch: the record's fog always.)
                 grid_own.push((groups.len(), g.fix, port));
+                quicksand = Some(groups.len());
                 groups.push(Group { tex: Tex::Anim(g.anim), effect: (!opaque).then_some(Blend::Mix), fog: TfragFog::new(&lf), bias, prims });
             }
             (SeaKind::Pool(pm), SeaData::Pool(d)) => {
@@ -704,7 +715,8 @@ fn draw(
                 continue;
             };
             let ice = ice_groups.contains(&i);
-            let kind = if ice { LiquidKind::Ice } else { tex_kind(st, &level.0.sea, fx, g.tex, tint, fix, own.is_some(), &g.prims) };
+            let port_kind = (quicksand == Some(i)).then(crate::liquid_render::quicksand_kind);
+            let kind = if ice { LiquidKind::Ice } else { tex_kind(st, &level.0.sea, fx, g.tex, tint, fix, own.is_some(), &g.prims, port_kind) };
             let water_here = kind == LiquidKind::Water && crate::sea_water::from_above(&g.prims, cam[2]);
             if water_here || kind.drawn_here() {
                 let img = match g.tex {
