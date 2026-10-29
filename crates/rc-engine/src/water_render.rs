@@ -73,10 +73,7 @@ use bevy::camera::CameraProjection;
 use bevy::mesh::{Indices, MeshVertexAttribute, MeshVertexBufferLayoutRef, PrimitiveTopology, VertexAttributeValues, VertexFormat};
 use bevy::pbr::{MaterialPipeline, MaterialPipelineKey};
 use bevy::prelude::*;
-use bevy::image::ImageSampler;
-use bevy::render::render_resource::{
-    AsBindGroup, Extent3d, RenderPipelineDescriptor, ShaderType, SpecializedMeshPipelineError, TextureDimension, TextureFormat,
-};
+use bevy::render::render_resource::{AsBindGroup, RenderPipelineDescriptor, ShaderType, SpecializedMeshPipelineError};
 use bevy::render::storage::ShaderBuffer;
 use bevy::shader::ShaderRef;
 use rc_formats::level_overlay::{LevelOverlay, Relocation};
@@ -95,11 +92,9 @@ const WATER_BIAS: f32 = 5.0e5;
 /// The ripple patches' place in [`LevelWater::order`] (a manager class stands for it).
 const RIPPLE_SLOT: u16 = u16::MAX;
 /// The chute sheets' FX texture when the level's own water has no clear one ([`clear_water`]): Rilgar's ripple
-/// water, then its env pass. Without either (Quartu) the sheets get a one-texel water colour, [`CHUTE_TINT_RGBA`].
+/// water, then its env pass. Without either the level has no water to carry (Quartu: its one chute, from the
+/// factory door at (311, 281, 49) down to the cave floor, is a dry metal slide) and its chutes get no sheet.
 const CHUTE_FX: [i32; 2] = [42, 41];
-/// The `fx` of a material with the [`CHUTE_TINT_RGBA`] texel (clear water by definition).
-const CHUTE_TINT: i32 = -2;
-const CHUTE_TINT_RGBA: [u8; 4] = [60, 110, 130, 0x80];
 /// **Port-only (Water Enhanced): drawn surface lifts.** (level, game box min, max, lift): a ripple patch whose
 /// load-time centre lies in the box draws its water this much higher on Enhanced (`params.misc.w`, added in the
 /// vertex shader to the height the game moves; the game's water height, the ripple module and Original are
@@ -313,7 +308,7 @@ fn follow_look(
     for h in &st.materials {
         let Some(m) = materials.get(h) else { continue };
         let clear = *st.clear_fx.entry(m.fx).or_insert_with(|| {
-            let clear = m.fx == CHUTE_TINT || usize::try_from(m.fx).ok().and_then(|i| tex?.fx_textures.get(i)?.as_ref()).is_some_and(clear_water);
+            let clear = usize::try_from(m.fx).ok().and_then(|i| tex?.fx_textures.get(i)?.as_ref()).is_some_and(clear_water);
             if m.fx >= 0 { println!("water: fx texture {} is {}", m.fx, if clear { "clear water (Enhanced applies)" } else { "not clear water (kept Original)" }); }
             clear
         });
@@ -686,15 +681,13 @@ fn setup(
                 || coll_line(coll, [p[0], p[1], p[2] + 6.0], [p[0], p[1], p[2] - 4.0], QueryFlags(2)).is_some_and(|o| o.surface_id() == 0)
         };
         let floor = |a: [f32; 3], b: [f32; 3]| coll_line(coll, a, b, QueryFlags(0x24)).map(|o| o.point[2]);
-        let (img, fx) = match fx.and_then(|i| Some((fx_image(&mut fx_images, &mut images, tex, i)?, i))) {
-            Some(found) => found,
-            None => {
-                let mut t = Image::new_fill(Extent3d::default(), TextureDimension::D2, &CHUTE_TINT_RGBA, TextureFormat::Rgba8Unorm, RenderAssetUsages::RENDER_WORLD);
-                t.sampler = ImageSampler::linear();
-                (images.add(t), CHUTE_TINT)
-            }
-        };
+        // No clear water of the level's own (Quartu): its chute is a dry metal slide, drawn bare.
+        let found = fx.and_then(|i| Some((fx_image(&mut fx_images, &mut images, tex, i)?, i)));
         for (k, c) in lw.chutes.iter().enumerate() {
+            let Some((img, fx)) = found.clone() else {
+                chute_rows.push(0);
+                continue;
+            };
             let s = crate::chute_water::sheet(c, floor, covered);
             chute_rows.push(s.idx.len() / 6);
             if s.idx.is_empty() { continue; }
@@ -707,12 +700,12 @@ fn setup(
                 .with_inserted_indices(Indices::U32(s.idx));
             let mut p = params(0x80, 4, slot, 0);
             p.misc.z = c.speed;
-            let m = new_mat(&mut materials, img.clone(), p, slot, fx);
+            let m = new_mat(&mut materials, img, p, slot, fx);
             spawn(&mut commands, meshes.add(mesh), m, Visibility::Inherited, format!("chute {k} water sheet"));
             slot += 1;
         }
         let starts: Vec<[i32; 3]> = lw.chutes.iter().map(|c| c.points[0].map(|x| x.round() as i32)).collect();
-        println!("water: chute sheets (Water Enhanced) {} chutes from {starts:?}, quads {chute_rows:?}, fx {fx:?}", lw.chutes.len());
+        println!("water: chute sheets (Water Enhanced) {} chutes from {starts:?}, quads {chute_rows:?}, fx {}", lw.chutes.len(), fx.map_or("none (no sheets)".to_string(), |i| i.to_string()));
     }
     let data = lw.data.as_ref();
     println!(
