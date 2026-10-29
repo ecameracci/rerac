@@ -372,8 +372,8 @@ fn biter_pack_run_is_deterministic() {
 
 /// A weaker hit (damage 0.5, the resolver's record) knocks a biter back (state 6, flash 0xfa, its cooldown 60) and
 /// calls its pack (+0xbc = 1); it lands (9) and charges again (3). The wrench (damage 1) kills it: the death flight
-/// (99, untargetable, no collision, flash 0x78), `SetDeathBits`' bolts and save bit, then the death explosion (class
-/// sound 6, three spark pairs) and the delete.
+/// (99, untargetable, no collision, flash 0x78), `SetDeathBits`' bolts (dropped, or counted when the table is full)
+/// and save bit, then the death explosion (class sound 6, three spark pairs) and the delete.
 #[test]
 fn weapons_knock_back_and_kill_a_biter() {
     let Some((mut lv, hero, ids)) = biters(9, [284.6, 170.0, 36.3]) else { eprintln!("skipped: no extracted/"); return };
@@ -402,6 +402,7 @@ fn weapons_knock_back_and_kill_a_biter() {
     assert!(states.starts_with(&[pb::st::KNOCKED, pb::st::RECOVER, pb::st::CHARGE]) || states.starts_with(&[pb::st::RECOVER, pb::st::CHARGE]));
     // The wrench kills b.
     let bolts0: usize = (13..=16).map(|c| lv.of_class(c).len()).sum();
+    let count0 = lv.svc.counters.bolts;
     lv.hit(&hero, b, &wrench(h, [0.0, 1.0]));
     lv.tick(&hero);
     {
@@ -411,8 +412,11 @@ fn weapons_knock_back_and_kill_a_biter() {
     }
     assert!(lv.svc.save.death.contains(&(9, lv.table.mobys[b].spawn_id)), "the death bit");
     let bolts: usize = (13..=16).map(|c| lv.of_class(c).len()).sum();
-    eprintln!("b4 {}: bolts {bolts0} -> {bolts}", lv.table.mobys[b].b4);
-    if lv.table.mobys[b].b4 > 0 { assert!(bolts > bolts0, "SetDeathBits' bolts"); }
+    let count = lv.svc.counters.bolts;
+    eprintln!("b4 {}: bolts {bolts0} -> {bolts}, count {count0} -> {count}, free slots {}", lv.table.mobys[b].b4, lv.table.free_slots);
+    // Gaspar's meteor shower (`gaspar_meteors`) keeps the dynamic slots full: a bolt `CreateMoby` cannot place goes
+    // straight to the count (`BoltSpawn` 0x2bcdb8, `bolt::spawn`).
+    if lv.table.mobys[b].b4 > 0 { assert!(bolts > bolts0 || count > count0, "SetDeathBits' bolts"); }
     let mut gone = false;
     for _ in 0..200 {
         lv.tick(&hero);

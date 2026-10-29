@@ -11,7 +11,7 @@ use rc_formats::{collision, gadget, gameplay, moby_spawn};
 use rc_game::hero::Hero;
 use rc_game::moby_runtime::{mode, MobyId, MobyTable};
 use rc_game::moby_update::classes::draw_callbacks::Callback;
-use rc_game::moby_update::classes::units::{self, empty, lamp, loose_piece};
+use rc_game::moby_update::classes::units::{self, lamp, loose_piece};
 use rc_game::moby_update::classes::{ClassUpdate, LevelPorts};
 use rc_game::moby_update::scheduler::{class_info, load_level_mobys, Scheduler};
 use rc_game::moby_update::services::{pvar as p, HitTemplate, World};
@@ -101,6 +101,8 @@ struct Lv {
     rng: Rng,
     mesh: collision::Collision,
     counter: u64,
+    /// The level's mission bytes (None: `NoMissions`, every mission done).
+    missions: Option<rc_game::moby_update::services::LevelMissions>,
 }
 
 fn load(level: u32) -> Option<Lv> {
@@ -144,7 +146,7 @@ fn load(level: u32) -> Option<Lv> {
     svc.set_volumes(rc_formats::volumes::parse_volumes(&gp).unwrap());
     svc.joint_lists = joints;
     svc.build_grid(&mut table);
-    Some(Lv { table, classes, svc, sched: Scheduler::new(), rng: Rng::new(), mesh, counter: 0 })
+    Some(Lv { table, classes, svc, sched: Scheduler::new(), rng: Rng::new(), mesh, counter: 0, missions: None })
 }
 
 impl Lv {
@@ -152,6 +154,7 @@ impl Lv {
         let mut w = World::new(&mut self.table, hero, &mut self.rng, &self.classes, &mut self.svc, self.counter);
         w.coll = Some(&self.mesh);
         w.camera = hero.pos;
+        if let Some(m) = &self.missions { w.missions = m; }
         w
     }
     fn load_pass(&mut self, hero: &Hero) {
@@ -205,7 +208,9 @@ fn lamps_rilgar_pulse_and_register_one_glow_per_group() {
         assert_eq!(rgba >> 24, 0x38, "Rilgar's alpha");
         assert_eq!(m.ambient[..3], [rgba as u8, (rgba >> 16) as u8, 0], "ambient = (red, blue, 0) of the tween");
     }
-    let regs: Vec<_> = lv.svc.draw_callbacks.list1.iter().filter(|(c, _)| matches!(c, Callback::UnitGlow(_))).collect();
+    // The lamp's own row: Rilgar's trail riders 79 register glows of their own (`U184 79 glows`).
+    let row = units::row(lamp::REFERENCE_LEVEL, lamp::UPDATE_FN).unwrap();
+    let regs: Vec<_> = lv.svc.draw_callbacks.list1.iter().filter(|(c, _)| *c == Callback::UnitGlow(row)).collect();
     assert_eq!(regs.len(), groups.len(), "one glow callback per group and tick");
     // The group's shared word holds the tick.
     let word = p::i32(&lv.table.mobys[lamps[0]].pvars, 8);
@@ -231,7 +236,7 @@ fn empty_update_classes_are_updated_not_parked() {
     assert_eq!(ids.len(), 15);
     for &i in &ids {
         let m = &lv.table.mobys[i];
-        assert_eq!(m.update_fn, Some(empty::UPDATE_FN));
+        assert_eq!(m.update_fn, Some(unit("U99").key()), "the update slot holds the port's key (level 02's, `ClassUpdate::key`)");
         assert_eq!(m.mode & mode::NO_UPDATE, 0, "an update function: not parked with mode 2");
     }
     let h = hero_at(pos3(&lv, ids[0]));
@@ -435,6 +440,9 @@ fn bobbing_blocks_kalebo_bob_in_step() {
     let blocks: Vec<MobyId> = units::bob_block::CLASSES.iter().flat_map(|&c| lv.of_class(c)).collect();
     assert_eq!(blocks.len(), 21);
     let far = hero_at([0.0, 0.0, -100.0]);
+    // Blarg's shuttle 1109 deletes its group of blocks at its init once its mission is done (`blarg_shuttle`, state 0):
+    // a fresh game, nothing done.
+    lv.missions = Some(rc_game::moby_update::services::LevelMissions::fresh_load(6, [0; 16]));
     lv.load_pass(&far);
     let z0: Vec<f32> = blocks.iter().map(|&b| lv.table.mobys[b].position[2]).collect();
     lv.counter = 150;
