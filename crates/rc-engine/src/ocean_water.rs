@@ -3,7 +3,8 @@
 //! crate::sea_water to take, so with the option on and the camera above the sea this module draws a surface in place of
 //! the band and the layers (the wall, drawn while the camera is high, stays Original), through `water.wgsl`'s Enhanced
 //! path (kind 0, crate::sea_water::SeaWaterMaterial: refraction of the bed, absorption, caustics, the screen-space
-//! reflection and its Fresnel term, the glint, the shore foam):
+//! reflection and its Fresnel term, the glint, the shore foam; the planar reflection, crate::water_mirror, through
+//! [`OceanWater`]`::plane`, so the islands and the tower reflect at grazing views):
 //! * a flat mesh at the ocean's resting z (`base_z`) in [`TILE`]-unit world tiles, each made once and kept: those
 //!   within the swell's reach of the camera split to [`FINE`] units, the others to [`COARSE`] out to the band's reach.
 //!   The mesh is re-joined only when that set changes; the vertex shader displaces it by the swell (crate::water_waves,
@@ -133,6 +134,9 @@ type Slot = (Entity, Handle<Mesh>, Handle<SeaWaterMaterial>, Handle<ShaderBuffer
 pub struct OceanWater {
     /// This tick's ocean (crate::sea_render, once per tick): `Some(None)` when Enhanced draws none.
     pub pending: Option<Option<OceanFrame>>,
+    /// The drawn surface as a flat region for the planar reflection (crate::water_mirror's plane choice): this tick's
+    /// sea z (the bob in it; the swell stays within the mirror's 0.5) over the band's reach around the camera.
+    pub plane: Option<crate::water_mirror::FlatWater>,
     draw: Option<Slot>,
     shown: bool,
     tiles: HashMap<(i32, i32, bool), Tile>,
@@ -187,6 +191,7 @@ pub fn draw(
         }
     }
     let Some(pending) = st.pending.take() else { return };
+    st.plane = pending.map(|o| crate::water_mirror::FlatWater { z: o.sea_z, min: Vec2::new(o.cam[0] - o.reach, o.cam[1] - o.reach), max: Vec2::new(o.cam[0] + o.reach, o.cam[1] + o.reach) });
     let Some(o) = pending else {
         if st.shown {
             st.shown = false;

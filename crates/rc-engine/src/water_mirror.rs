@@ -5,7 +5,8 @@
 //! **The plane** ([`choose_plane`]). Every frame with the option on, the flat regions of the Enhanced water
 //! ([`flat_region`]: the clear strips at their z blend and the drawn clear ripple patches, crate::water_render
 //! `WaterState::flat_surfaces`; the Enhanced seas and translucent pools block by block, [`flat_blocks`],
-//! crate::sea_water `SeaWaterDraw::planes`) that the camera is above ([`MIN_ABOVE`]) and whose rectangle is partly in
+//! crate::sea_water `SeaWaterDraw::planes`; Pokitaru's ocean, crate::ocean_water `OceanWater::plane`, at its sea z
+//! over the band's reach, so its islands and tower reflect at grazing views) that the camera is above ([`MIN_ABOVE`]) and whose rectangle is partly in
 //! the view frustum ([`visible_part`]: clipped by the near side and the four side planes, so a rectangle behind the eye
 //! or beside the view does not count); each scores the screen area of its part in view ([`screen_area`]) times the
 //! share of that part seen ([`seen_share`]: of a few points of it, [`sight_points`], those with a clear line to the eye
@@ -330,6 +331,7 @@ impl Plugin for WaterMirrorPlugin {
                 place
                     .after(crate::water_render::draw)
                     .after(crate::sea_water::draw)
+                    .after(crate::ocean_water::draw)
                     .after(crate::sky_render::follow_main_camera)
                     .before(CameraUpdateSystems)
                     .before(TransformSystems::Propagate),
@@ -401,6 +403,7 @@ fn place(
     mut mirror: ResMut<WaterMirror>,
     water: Option<Res<crate::water_render::WaterState>>,
     sea: Option<Res<crate::sea_water::SeaWaterDraw>>,
+    ocean: Option<Res<crate::ocean_water::OceanWater>>,
     play: Option<Res<crate::gameplay::Play>>,
     level: Option<Res<crate::Level>>,
     time: Res<Time<Real>>,
@@ -424,6 +427,7 @@ fn place(
     if want {
         if let Some(w) = water.as_deref() { w.flat_surfaces(play.as_deref().and_then(|p| p.svc.water.sim.as_ref()), &mut m.regions); }
         if let Some(s) = sea.as_deref() { m.regions.extend_from_slice(&s.planes); }
+        m.regions.extend(ocean.as_deref().and_then(|o| o.plane));
     }
     let g_main = GlobalTransform::from(*t).affine();
     let clip_from_world = base.get_clip_from_view() * Mat4::from(g_main.inverse());
@@ -482,8 +486,12 @@ fn place(
         // crate::sky_render `main_camera_loads` sets every non-sky camera to load: the mirror sky clears again.
         let (clear, load) = if world { (ClearColorConfig::None, Camera3dDepthLoadOp::Load) } else { (ClearColorConfig::Default, Camera3dDepthLoadOp::Clear(0.0)) };
         if !matches!((&cc.clear_color, &clear), (ClearColorConfig::None, ClearColorConfig::None) | (ClearColorConfig::Default, ClearColorConfig::Default)) { cc.clear_color = clear; }
+        // The world camera's output replaces the target: a Write without a blend state is alpha-blended (bevy_core_pipeline
+        // upscaling: a target's second camera), and the world draws leave alpha 0 (crate::gs_state `WORLD_ALPHA`), so the
+        // tfrags, ties and sky would not reach the image.
         let output = if world { CameraOutputMode::Write { blend_state: Some(BlendState::REPLACE), clear_color: ClearColorConfig::None } } else { CameraOutputMode::Skip };
-        if matches!(cc.output_mode, CameraOutputMode::Skip) != matches!(output, CameraOutputMode::Skip) { cc.output_mode = output; }
+        let ok = match &cc.output_mode { CameraOutputMode::Skip => !world, CameraOutputMode::Write { blend_state, .. } => world && *blend_state == Some(BlendState::REPLACE) };
+        if !ok { cc.output_mode = output; }
         if matches!(c3.depth_load_op, Camera3dDepthLoadOp::Load) != world { c3.depth_load_op = load; }
     }
 

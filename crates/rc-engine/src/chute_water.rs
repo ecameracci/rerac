@@ -1,8 +1,9 @@
 //! **Port-only (Water Enhanced): the water sheet of the flow chutes.** The game's chutes (class 679,
 //! `rc_game::moby_update::classes::flow`) carry Ratchet down their splines but draw nothing of their own: on Rilgar
 //! and the other levels without strip water the chute floor shows bare. With Water: Enhanced, crate::water_render
-//! draws a shallow sheet along every chute spline (kind 4 in `water.wgsl`), flowing at the chute's speed. Drawing
-//! only: nothing here reaches the game state.
+//! draws a shallow sheet along every chute spline (kind 4 in `water.wgsl`), flowing at the chute's speed, on the
+//! levels with clear water of their own (Rilgar, Batalia; Quartu has none: its chute is a dry metal slide, left
+//! bare, `water_render::CHUTE_FX`). Drawing only: nothing here reaches the game state.
 //!
 //! **Shape.** The spline is resampled every [`ROW_STEP`]; each row probes the world collision straight down at
 //! [`COL_STEP`] across the flow (up to [`HALF_WIDTH`] each side, stopping at a wall or a [`STEP`] up: a row never
