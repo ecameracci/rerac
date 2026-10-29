@@ -14,8 +14,14 @@
 //!   grid's blocks each restart the ST (crate::sea_render::grid_prims_into): its layers lie on the world plane at the
 //!   grid's ST scale instead ([`LiquidGroup::grid`], [`st_per_unit`]), so they neither repeat block by block nor
 //!   break at the block edges (Umbris 460, Gaspar 317);
-//! * **mud**: thick and dark, opaque, low-frequency bulges rising and settling in world space, lit by the key light
-//!   (crate::sun_shadow::KeyLight) with a sharp highlight and a Fresnel sky (the fog colour, brightened);
+//! * **mud** (Aridia's quicksand 854, by its port: [`quicksand_kind`]): thick and slow, the game's texture and colour
+//!   kept: a slow swell in the normals only (no waves; slopes of about a tenth over 3 to 22 units, so it shows 20 to 60
+//!   units away), bubbles in a little under half of the 5-unit cells, 0.45 to 0.9 units, that swell glossy for six to
+//!   ten seconds, pop and leave a settling ring; dark, glossy wet patches and a lighter, matte dry crust along the banks
+//!   ([`shore_map`]: the collision's faces that are not the quicksand at its height), finely cracked there; shaded by
+//!   the key light (crate::sun_shadow::KeyLight) relative to the flat surface; a wet sheen of the sky (brightest at its
+//!   horizon, so the swell shows as glossy bands) by Fresnel and the key light's highlight, the wet patches' darkening
+//!   paying for most of it (Aridia's marker 2: the mud's mean about a fifth up, the frame's about 5 %);
 //! * **sludge**: murky, a weak emissive tint of its colour, slow ripples and bubbles that swell and pop;
 //! * **ice** (Hoven's slush): flat and still. The game scrolls its two layers (FX 0x2f opaque, FX 0x30 added over it
 //!   at `fix2`) against each other, which reads as rolling waves; here every layer drifts at [`ICE_DRIFT`] of its
@@ -26,7 +32,9 @@
 //! 0x40, is the haze at the bottom of the world), so it stays Original whatever its colour.
 //!
 //! Drawn as opaque world surfaces (the main pass, Z written), with the level's or the grid's fog, seen from either
-//! side. Not in
+//! side: so they keep the ambient occlusion and the shadows (the game's and the sun's, both applied between the opaque
+//! and the transparent passes) that Ratchet and the mobys cast on the quicksand, which a draw after the scene copy
+//! (a screen-space reflection, crate::sea_water) would lose. Not in
 //! the planar reflection (crate::water_mirror): none of them mirrors. Drawing only: collision, damage and the game
 //! state are untouched, no random numbers are drawn.
 //!
@@ -43,6 +51,7 @@ use bevy::pbr::{MaterialPipeline, MaterialPipelineKey};
 use bevy::prelude::*;
 use bevy::render::render_resource::{AsBindGroup, RenderPipelineDescriptor, ShaderType, SpecializedMeshPipelineError};
 use bevy::shader::ShaderRef;
+use std::collections::HashMap;
 
 const SHADER_PATH: &str = "shaders/liquid.wgsl";
 const LOOK_PATH: &str = "shaders/liquid_look.wgsl";
@@ -93,8 +102,9 @@ impl LiquidKind {
 /// crate::sea_water::clear_liquid's verdict, unchanged; then lava (red over a little green, no blue: Gaspar 132, 23, 0
 /// and Umbris 100, 17, 0), mud (a mid brown: Oltanis 101, 79, 58), sludge (green or purple over the rest, and a dark
 /// olive with almost no blue: Umbris's swamp 1018, 16, 14, 7); grey (Kerwan's 994, 140), the other dark liquids
-/// (Aridia's quicksand 854, 25, 23, 15: below 40 on every channel) and anything else stay Original. Ice is never judged
-/// by colour (a pale ice reads as water or grey): Hoven's liquid is ice by its port (crate::sea_render).
+/// (Aridia's quicksand 854, 25, 23, 15: below 40 on every channel, mud by its port instead, [`quicksand_kind`]) and
+/// anything else stay Original. Ice is never judged by colour (a pale ice reads as water or grey): Hoven's liquid is
+/// ice by its port (crate::sea_render).
 pub fn classify(rgb: [u8; 3]) -> LiquidKind {
     if crate::sea_water::clear_liquid(rgb) { return LiquidKind::Water; }
     let [r, g, b] = rgb.map(f32::from);
@@ -128,6 +138,123 @@ pub fn forced() -> Option<LiquidKind> { std::env::var("RC_LIQUID_FX_KIND").ok().
 pub fn verdict(rgb: [u8; 3], enabled: bool, forced: Option<LiquidKind>) -> LiquidKind {
     let k = forced.unwrap_or_else(|| classify(rgb));
     if !enabled && k.drawn_here() { LiquidKind::Original } else { k }
+}
+
+/// The kind of 854's grids (rc_game::water::sea `aridia_ref`), Aridia's quicksand: mud by its port, its judged colour
+/// (25, 23, 15) being too dark for [`classify`]'s rules (they keep the dark liquids Original). Under its grids at z 25
+/// lie 3,681 of the level's 3,779 faces of [`QUICKSAND_SURFACE`], the only level that has any. The switches as in
+/// [`verdict`].
+pub fn quicksand_kind() -> LiquidKind { verdict_of(LiquidKind::Mud, enabled(), forced()) }
+
+fn verdict_of(k: LiquidKind, enabled: bool, forced: Option<LiquidKind>) -> LiquidKind {
+    let k = forced.unwrap_or(k);
+    if !enabled && k.drawn_here() { LiquidKind::Original } else { k }
+}
+
+/// The collision's sinking liquid (rc_game::hero::surface: Ratchet sinks into it, state 0x68).
+pub const QUICKSAND_SURFACE: u8 = 3;
+/// The banks' reach ([`shore_map`]): a face counts as bank where it lies from `x` below to `y` above the quicksand's
+/// height (the grass sloping out of it; deeper ground is under the quicksand, higher ground a cliff behind the bank);
+/// `z` = the drier rim's width (game units) from the bank, `w` = texels per game unit.
+pub const SHORE: Vec4 = Vec4::new(0.3, 4.0, 3.0, 1.0);
+
+/// The banks around a level's quicksand ([`shore_map`]): `texels` (row-major from `origin`, game x then y, one per
+/// [`SHORE`]`.w` units) 255 on a bank, falling to 0 at [`SHORE`]`.z` from it; `z` the quicksand's height.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ShoreMap {
+    pub origin: [f32; 2],
+    pub size: [u32; 2],
+    pub texels: Vec<u8>,
+    pub z: f32,
+}
+
+impl ShoreMap {
+    /// `liquid.wgsl`'s `params.shore`: the origin (game x, y) and the texel scale over the size.
+    pub fn params(&self) -> Vec4 {
+        Vec4::new(self.origin[0], self.origin[1], SHORE.w / self.size[0] as f32, SHORE.w / self.size[1] as f32)
+    }
+}
+
+/// The level collision's triangles (game space) with their surface ids (a quad as two triangles, `v0 v1 v2` and
+/// `v0 v2 v3`).
+pub fn collision_tris(c: &rc_formats::collision::Collision) -> Vec<([[f32; 3]; 3], u8)> {
+    let mut out = Vec::new();
+    for cell in &c.cells {
+        for k in 0..cell.faces.len() {
+            let i = cell.face_indices(k).map(|v| cell.vertices.get(v as usize).copied());
+            let s = cell.faces[k].surface & 0x1f;
+            let (Some(a), Some(b), Some(d), Some(e)) = (i[0], i[1], i[2], i[3]) else { continue };
+            out.push(([a, b, d], s));
+            if cell.is_quad(k) { out.push(([a, d, e], s)); }
+        }
+    }
+    out
+}
+
+/// Where the quicksand meets its banks, from the collision (`tris`, [`collision_tris`]): its height is the commonest
+/// of its faces' (Aridia 25); over their box (grown by the rim) each texel takes the highest face within [`SHORE`]'s
+/// reach of that height, a bank when it is not quicksand, and keeps `1 − d / rim` of the nearest bank texel `d` away.
+/// None without quicksand faces.
+pub fn shore_map(tris: &[([[f32; 3]; 3], u8)]) -> Option<ShoreMap> {
+    let cz = |t: &[[f32; 3]; 3]| (t[0][2] + t[1][2] + t[2][2]) / 3.0;
+    let mut heights: HashMap<i32, usize> = HashMap::new();
+    for (t, s) in tris {
+        if *s == QUICKSAND_SURFACE { *heights.entry((cz(t) * 16.0).round() as i32).or_default() += 1; }
+    }
+    let z = heights.into_iter().max_by_key(|&(h, n)| (n, h))?.0 as f32 / 16.0;
+    let (lo_z, hi_z) = (z - SHORE.x, z + SHORE.y);
+    let (mut lo, mut hi) = ([f32::MAX; 2], [f32::MIN; 2]);
+    for (t, _) in tris.iter().filter(|(t, s)| *s == QUICKSAND_SURFACE && (cz(t) - z).abs() < 1.0) {
+        for p in t {
+            for k in 0..2 { (lo[k], hi[k]) = (lo[k].min(p[k]), hi[k].max(p[k])); }
+        }
+    }
+    let rim = SHORE.z;
+    let step = 1.0 / SHORE.w;
+    let origin = [(lo[0] - rim - 1.0).floor(), (lo[1] - rim - 1.0).floor()];
+    let size = [0, 1].map(|k| ((hi[k] + rim + 1.0 - origin[k]) / step).ceil().max(1.0) as u32);
+    let (w, h) = (size[0] as usize, size[1] as usize);
+    // The highest face's z over each texel centre and whether it is a bank.
+    let mut top: Vec<(f32, bool)> = vec![(f32::MIN, false); w * h];
+    for (t, s) in tris {
+        let (zmin, zmax) = (t[0][2].min(t[1][2]).min(t[2][2]), t[0][2].max(t[1][2]).max(t[2][2]));
+        if zmax < lo_z || zmin > hi_z { continue; }
+        let [a, b, c] = *t;
+        let det = (b[0] - a[0]) * (c[1] - a[1]) - (c[0] - a[0]) * (b[1] - a[1]);
+        if det.abs() < 1e-6 { continue; }
+        let tx = |x: f32, k: usize| ((x - origin[k]) / step - 0.5).floor();
+        let (x0, x1) = (tx(a[0].min(b[0]).min(c[0]), 0).max(0.0) as usize, (tx(a[0].max(b[0]).max(c[0]), 0) + 1.0).clamp(0.0, w as f32 - 1.0) as usize);
+        let (y0, y1) = (tx(a[1].min(b[1]).min(c[1]), 1).max(0.0) as usize, (tx(a[1].max(b[1]).max(c[1]), 1) + 1.0).clamp(0.0, h as f32 - 1.0) as usize);
+        if x0 > x1 || y0 > y1 { continue; }
+        for j in y0..=y1 {
+            for i in x0..=x1 {
+                let p = [origin[0] + (i as f32 + 0.5) * step, origin[1] + (j as f32 + 0.5) * step];
+                let u = ((p[0] - a[0]) * (c[1] - a[1]) - (c[0] - a[0]) * (p[1] - a[1])) / det;
+                let v = ((b[0] - a[0]) * (p[1] - a[1]) - (p[0] - a[0]) * (b[1] - a[1])) / det;
+                if u < -1e-4 || v < -1e-4 || u + v > 1.0 + 1e-4 { continue; }
+                let pz = a[2] + u * (b[2] - a[2]) + v * (c[2] - a[2]);
+                let e = &mut top[j * w + i];
+                if (lo_z..=hi_z).contains(&pz) && pz > e.0 { *e = (pz, *s != QUICKSAND_SURFACE); }
+            }
+        }
+    }
+    let r = (rim / step).ceil() as i32;
+    let mut texels = vec![0u8; w * h];
+    for j in 0..h as i32 {
+        for i in 0..w as i32 {
+            let mut d2 = f32::MAX;
+            for dj in -r..=r {
+                for di in -r..=r {
+                    let (x, y) = (i + di, j + dj);
+                    if x < 0 || y < 0 || x >= w as i32 || y >= h as i32 || !top[y as usize * w + x as usize].1 { continue; }
+                    d2 = d2.min((di * di + dj * dj) as f32);
+                }
+            }
+            let v = (1.0 - d2.sqrt() * step / rim).clamp(0.0, 1.0);
+            texels[j as usize * w + i as usize] = (v * 255.0).round() as u8;
+        }
+    }
+    Some(ShoreMap { origin, size, texels, z })
 }
 
 /// The lava flows' ST speed of a scroll rule, per second (rc_game::water::sea::MeshSt::Flow: t + k·f with f = 1 −
@@ -218,6 +345,8 @@ pub struct LiquidParams {
     pub flow: Vec4,
     /// xyz = toward the key light (world).
     pub sun: Vec4,
+    /// Mud's banks ([`ShoreMap::params`]; 0: none).
+    pub shore: Vec4,
 }
 
 #[derive(Asset, TypePath, AsBindGroup, Debug, Clone)]
@@ -229,6 +358,10 @@ pub struct LiquidMaterial {
     pub fog: TfragFog,
     #[uniform(3)]
     pub params: LiquidParams,
+    /// [`ShoreMap`]'s texels (R8), a blank texel without one.
+    #[texture(4)]
+    #[sampler(5)]
+    pub shore: Handle<Image>,
 }
 
 impl Material for LiquidMaterial {
@@ -262,6 +395,24 @@ type Slot = (Entity, Handle<Mesh>, Handle<LiquidMaterial>, bool);
 pub struct LiquidDraw {
     pub pending: Option<Vec<LiquidGroup>>,
     slots: Vec<Option<Slot>>,
+    /// The level's [`ShoreMap`] as an image and its params, made with its first mud draw (None inside: no quicksand).
+    shore: Option<Option<(Handle<Image>, Vec4)>>,
+    blank: Option<Handle<Image>>,
+}
+
+/// An R8 image of `texels` (`w` × `h`), filtered, clamped at its edges.
+fn r8_image(w: u32, h: u32, texels: Vec<u8>) -> Image {
+    use bevy::image::{ImageAddressMode, ImageFilterMode, ImageSampler, ImageSamplerDescriptor};
+    use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
+    let mut img = Image::new(Extent3d { width: w, height: h, depth_or_array_layers: 1 }, TextureDimension::D2, texels, TextureFormat::R8Unorm, RenderAssetUsages::RENDER_WORLD);
+    img.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
+        address_mode_u: ImageAddressMode::ClampToEdge,
+        address_mode_v: ImageAddressMode::ClampToEdge,
+        mag_filter: ImageFilterMode::Linear,
+        min_filter: ImageFilterMode::Linear,
+        ..default()
+    });
+    img
 }
 
 /// Keeps the `rerac::liquid_look` WGSL module loaded (`liquid.wgsl` and `water.wgsl` import it by its path).
@@ -304,12 +455,15 @@ pub fn build(app: &mut App) {
 }
 
 /// This tick's surfaces into the slots; every frame, the key light into the materials.
+#[allow(clippy::too_many_arguments)]
 pub fn draw(
     mut commands: Commands,
     state: ResMut<LiquidDraw>,
     key: Option<Res<crate::sun_shadow::KeyLight>>,
+    level: Res<crate::Level>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<LiquidMaterial>>,
+    mut images: ResMut<Assets<Image>>,
     mut vis: Query<&mut Visibility>,
 ) {
     let st = state.into_inner();
@@ -320,6 +474,16 @@ pub fn draw(
         }
     }
     let Some(groups) = st.pending.take() else { return };
+    let blank = st.blank.get_or_insert_with(|| images.add(r8_image(1, 1, vec![0]))).clone();
+    if st.shore.is_none() && groups.iter().any(|g| g.kind == LiquidKind::Mud) {
+        let t = std::time::Instant::now();
+        let map = level.0.collision.as_ref().and_then(|c| shore_map(&collision_tris(c)));
+        if let Some(m) = &map {
+            let banks = m.texels.iter().filter(|&&v| v == 255).count();
+            println!("liquid: mud banks {}×{} texels from game ({}, {}) at z {}: {banks} on a bank ({:.1} ms)", m.size[0], m.size[1], m.origin[0], m.origin[1], m.z, t.elapsed().as_secs_f32() * 1e3);
+        }
+        st.shore = Some(map.map(|m| (images.add(r8_image(m.size[0], m.size[1], m.texels.clone())), m.params())));
+    }
     let n = groups.len();
     for (k, g) in groups.into_iter().enumerate() {
         if st.slots.len() <= k { st.slots.push(None); }
@@ -327,14 +491,19 @@ pub fn draw(
             hide(&mut vis, &mut st.slots[k]);
             continue;
         }
-        let params = LiquidParams { misc: Vec4::new(g.kind.shader_id(), g.grid, 0.0, 0.0), flow: g.flow, sun };
+        let (shore_img, shore) = match (&st.shore, g.kind) {
+            (Some(Some((img, p))), LiquidKind::Mud) => (img.clone(), *p),
+            _ => (blank.clone(), Vec4::ZERO),
+        };
+        let params = LiquidParams { misc: Vec4::new(g.kind.shader_id(), g.grid, 0.0, 0.0), flow: g.flow, sun, shore };
         if let Some((e, mesh, mat, shown)) = &mut st.slots[k] {
             g.prims.update(&mut meshes, mesh);
-            if materials.get(&*mat).is_none_or(|m| m.texture != g.image || m.fog != g.fog || m.params != params) {
+            if materials.get(&*mat).is_none_or(|m| m.texture != g.image || m.fog != g.fog || m.params != params || m.shore != shore_img) {
                 if let Some(mut m) = materials.get_mut(&*mat) {
                     m.texture = g.image;
                     m.fog = g.fog;
                     m.params = params;
+                    m.shore = shore_img;
                 }
             }
             if !*shown {
@@ -346,7 +515,7 @@ pub fn draw(
         let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
         g.prims.write(&mut mesh);
         let mesh = meshes.add(mesh);
-        let mat = materials.add(LiquidMaterial { texture: g.image, fog: g.fog, params });
+        let mat = materials.add(LiquidMaterial { texture: g.image, fog: g.fog, params, shore: shore_img });
         let e = commands.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(mat.clone()), Transform::IDENTITY, NoFrustumCulling, Visibility::Inherited, Name::new(format!("liquid {k}")))).id();
         st.slots[k] = Some((e, mesh, mat, true));
     }
@@ -386,6 +555,48 @@ mod tests {
         for c in [[0u8, 0, 0], [10, 10, 12], [30, 60, 90], [200, 210, 255], [255, 0, 0]] {
             assert_eq!(classify(c) == LiquidKind::Water, crate::sea_water::clear_liquid(c), "{c:?}");
         }
+    }
+
+    #[test]
+    fn the_quicksand_is_mud_by_its_port() {
+        // Too dark for the colour rules, mud by 854's port; the switches as for any kind.
+        assert_eq!(classify([25, 23, 15]), LiquidKind::Original);
+        assert_eq!(verdict_of(LiquidKind::Mud, true, None), LiquidKind::Mud);
+        assert_eq!(verdict_of(LiquidKind::Mud, false, None), LiquidKind::Original);
+        assert_eq!(verdict_of(LiquidKind::Mud, true, Some(LiquidKind::Lava)), LiquidKind::Lava);
+        assert_eq!(verdict_of(LiquidKind::Mud, true, Some(LiquidKind::Water)), LiquidKind::Water);
+        assert_eq!(layer_verdict(LiquidKind::Mud, true, 0x80), LiquidKind::Mud);
+    }
+
+    /// A flat square of triangles over x, y in [x0, x1] × [y0, y1] at height z.
+    fn square(x0: f32, y0: f32, x1: f32, y1: f32, z: f32, s: u8) -> [([[f32; 3]; 3], u8); 2] {
+        [([[x0, y0, z], [x1, y0, z], [x1, y1, z]], s), ([[x0, y0, z], [x1, y1, z], [x0, y1, z]], s)]
+    }
+
+    #[test]
+    fn the_shore_map_marks_the_banks_and_fades_over_the_rim() {
+        assert_eq!(shore_map(&square(0.0, 0.0, 10.0, 10.0, 25.0, 0x8)), None);
+        // Quicksand over x 100..140 at z 25; a bank rising out of it over x 130..140 (at 25.5); a deep floor under
+        // the whole (z 20) and a cliff top far above (z 40) at x 100..110 count as neither.
+        let mut tris = Vec::new();
+        tris.extend(square(100.0, 100.0, 140.0, 120.0, 25.0, QUICKSAND_SURFACE));
+        tris.extend(square(130.0, 100.0, 140.0, 120.0, 25.5, 0x8));
+        tris.extend(square(90.0, 90.0, 150.0, 130.0, 20.0, 0x8));
+        tris.extend(square(100.0, 100.0, 110.0, 120.0, 40.0, 0x8));
+        let m = shore_map(&tris).expect("a quicksand");
+        assert_eq!(m.z, 25.0);
+        let at = |x: f32, y: f32| {
+            let (i, j) = (((x - m.origin[0]) * SHORE.w) as usize, ((y - m.origin[1]) * SHORE.w) as usize);
+            m.texels[j * m.size[0] as usize + i] as f32 / 255.0
+        };
+        assert_eq!(at(135.5, 110.5), 1.0, "on the bank");
+        assert!((at(128.5, 110.5) - (1.0 - 2.0 / SHORE.z)).abs() < 0.01, "two units out: {}", at(128.5, 110.5));
+        assert_eq!(at(120.5, 110.5), 0.0, "open quicksand");
+        assert_eq!(at(104.5, 110.5), 0.0, "under the cliff: no bank");
+        // The params map game (x, y) to the image.
+        let p = m.params();
+        assert!(((135.5 - p.x) * p.z * m.size[0] as f32 - (135.5 - m.origin[0])).abs() < 1e-3);
+        assert!(m.origin[0] <= 100.0 - SHORE.z && m.origin[0] + m.size[0] as f32 >= 140.0 + SHORE.z);
     }
 
     #[test]

@@ -67,18 +67,20 @@ fn lfbm(p: vec2<f32>, world: bool) -> f32 {
 
 // What lava's fine detail needs of the surface (`liquid_frame`): the world normal, the world velocity of the draw's
 // scroll, a pixel's footprint in world units and in ST; set by the caller: `grid` a liquid grid's ST per world unit
-// (crate::liquid_render::LiquidGroup::grid; 0: the noise in the draw's ST).
+// (crate::liquid_render::LiquidGroup::grid; 0: the noise in the draw's ST), `shore` mud's nearness to a bank
+// (crate::liquid_render::ShoreMap: 1 on it, 0 from the rim's width out; 0 without a map).
 struct LiquidFrame {
     n: vec3<f32>,
     vel: vec3<f32>,
     foot: f32,
     st_foot: f32,
     grid: f32,
+    shore: f32,
 }
 
 // A flat, still frame without footprints (water.wgsl's patches: never lava).
 fn still_frame() -> LiquidFrame {
-    return LiquidFrame(vec3<f32>(0.0, 1.0, 0.0), vec3<f32>(0.0), 0.0, 0.0, 0.0);
+    return LiquidFrame(vec3<f32>(0.0, 1.0, 0.0), vec3<f32>(0.0), 0.0, 0.0, 0.0, 0.0);
 }
 
 // The frame from the screen derivatives of the world position and the ST (call in uniform control flow); `scroll` the
@@ -98,7 +100,7 @@ fn liquid_frame(world: vec3<f32>, uv: vec2<f32>, scroll: vec2<f32>) -> LiquidFra
         vel = -(tu * scroll.x + tv * scroll.y);
         vel *= min(1.0, LAVA_FINE.w / max(length(vel), 1e-6));
     }
-    return LiquidFrame(n, vel, max(length(wx), length(wy)), max(length(ux), length(uy)), 0.0);
+    return LiquidFrame(n, vel, max(length(wx), length(wy)), max(length(ux), length(uy)), 0.0, 0.0);
 }
 
 // Lava's fine detail (crate::liquid_render::LAVA_FINE): x = cells per world unit of its cracks, y = the period (s) of
@@ -147,12 +149,55 @@ fn lava_fine(world: vec3<f32>, f: LiquidFrame, t: f32) -> vec3<f32> {
 // strength.
 const ICE: vec2<f32> = vec2<f32>(0.35, 0.3);
 
-// Mud: slow bulges over world xz (height in world units) that rise and settle.
-fn mud_height(xz: vec2<f32>, t: f32) -> f32 {
-    let a = gnoise(xz * 0.11 + vec2<f32>(t * 0.013, -t * 0.009));
-    let b = gnoise(xz * 0.29 + vec2<f32>(-t * 0.021, t * 0.017) + 4.7);
-    let breathe = 0.7 + 0.3 * sin(t * 0.35 + gnoise(xz * 0.05) * 6.0);
-    return (a * 1.4 + b * 0.5) * breathe;
+// Mud (crate::liquid_render, Aridia's quicksand): a slow, gentle swell over world xz, only for the normals (slopes of
+// about a tenth, so it still shows 20 to 60 units away): three layers of about 22, 9 and 3 units drifting apart at a
+// few centimetres a second, no waves.
+fn mud_swell(xz: vec2<f32>, t: f32) -> f32 {
+    let a = wnoise(xz * 0.045 + vec2<f32>(t * 0.004, -t * 0.003));
+    let b = wnoise(xz * 0.11 + vec2<f32>(-t * 0.008, t * 0.006) + vec2<f32>(4.7, 1.9));
+    let c = wnoise(xz * 0.31 + vec2<f32>(t * 0.012, t * 0.01) + vec2<f32>(1.3, 8.2));
+    return a * 2.2 + b * 0.7 + c * 0.12;
+}
+
+// Mud's bubbles, in cells of MUD_CELL units, a little under half of them: a dome swells slowly over most of its
+// period, pops and leaves a ring that spreads and settles. x = the height (world units), y = the wet shine it leaves
+// (0..1).
+const MUD_CELL: f32 = 5.0;
+fn mud_bubbles(xz: vec2<f32>, t: f32) -> vec2<f32> {
+    let c = floor(xz / MUD_CELL);
+    var h = 0.0;
+    var wet = 0.0;
+    for (var j = -1; j <= 1; j += 1) {
+        for (var i = -1; i <= 1; i += 1) {
+            let id = c + vec2<f32>(f32(i), f32(j));
+            let r = whash2(id);
+            let u = whash2(id + vec2<f32>(17.0, 31.0)) * 0.5 + 0.5;
+            if (u.x > 0.45) { continue; }
+            let centre = (id + 0.5 + r * 0.3) * MUD_CELL;
+            let period = 6.0 + 4.0 * u.y;
+            let age = fract(t / period + r.x * 0.5 + 0.5);
+            let size = 0.45 + 0.45 * fract(r.y * 7.3 + 0.5);
+            let d = length(xz - centre);
+            if (age < 0.82) {
+                // The dome: from a quarter of its size to all of it, rising.
+                let grow = smoothstep(0.0, 0.82, age);
+                let rad = size * (0.25 + 0.75 * grow);
+                let dome = max(1.0 - d * d / (rad * rad), 0.0);
+                h += dome * size * 0.4 * grow;
+                wet = max(wet, sqrt(dome) * grow);
+            } else {
+                // The pop: a small crater and a ring running out to three times the dome, flattening.
+                let a = (age - 0.82) / 0.18;
+                let ring_r = size * (0.6 + 2.4 * a);
+                let w = 0.08 + 0.15 * a;
+                let ring = exp(-(d - ring_r) * (d - ring_r) / (w * w)) * (1.0 - a);
+                let crater = max(1.0 - d * d / (size * size * 0.5), 0.0) * (1.0 - a);
+                h += ring * 0.06 - crater * 0.08;
+                wet = max(wet, max(ring, crater));
+            }
+        }
+    }
+    return vec2<f32>(h, wet);
 }
 
 // Sludge: slow ripples and bubbles in cells of 2.5 units, about one cell in three (a bubble swells, pops into a ring
@@ -180,6 +225,57 @@ fn sludge_height(xz: vec2<f32>, t: f32) -> f32 {
         }
     }
     return h;
+}
+
+// Mud's look (liquid_look's kind 2; the arguments as there). The game's texture (a little smoothed: thick) keeps its
+// colour: wet patches darker, richer and glossy, the dry crust lighter, greyer and matte, drier toward the banks
+// (`frame.shore`) and finely cracked along them. The swell and the bubbles shade it by the key light against the flat
+// surface's light (so the level's light is not changed), and bend a wet sheen: the sky (`sky` dimmed, brightest at its
+// horizon, so the swell shows as glossy bands) reflected by Fresnel, and the key light's highlight, sharp with a soft
+// skirt. The wet patches' darkening pays for most of the sheen. Bubbles and cracks fade out before they would alias
+// (`frame.foot`, a pixel's world size; 0 on water.wgsl's patches).
+fn mud_look(rgb: vec3<f32>, soft: vec3<f32>, xz: vec2<f32>, slope: vec2<f32>, sun: vec3<f32>, sky: vec3<f32>, to_eye: vec3<f32>, t: f32, frame: LiquidFrame) -> vec3<f32> {
+    let sun_up = smoothstep(-0.05, 0.1, sun.y);
+    let keep_b = 1.0 - smoothstep(0.08, 0.2, frame.foot);
+    let e = 0.05;
+    let s0 = mud_swell(xz, t);
+    var b0 = vec2<f32>(0.0);
+    var bx = 0.0;
+    var bz = 0.0;
+    if (keep_b > 0.0) {
+        b0 = mud_bubbles(xz, t);
+        bx = mud_bubbles(xz + vec2<f32>(e, 0.0), t).x;
+        bz = mud_bubbles(xz + vec2<f32>(0.0, e), t).x;
+    }
+    let g = vec2<f32>(mud_swell(xz + vec2<f32>(e, 0.0), t) - s0 + (bx - b0.x) * keep_b, mud_swell(xz + vec2<f32>(0.0, e), t) - s0 + (bz - b0.x) * keep_b) / e + slope;
+    let n = normalize(vec3<f32>(-g.x, 1.0, -g.y));
+    // The colour: wet and dry patches, drier toward the banks; bubbles leave wet shine.
+    let base = srgb_to_linear(mix(rgb, soft, 0.3));
+    let lum = dot(base, vec3<f32>(0.2126, 0.7152, 0.0722));
+    let patches = wnoise(xz * 0.07 + vec2<f32>(2.3, 0.0)) + 0.5 * wnoise(xz * 0.19 - vec2<f32>(1.7, 0.6));
+    let wet = clamp(0.78 + 0.7 * patches - 1.3 * frame.shore + 0.8 * b0.y * keep_b, 0.0, 1.0);
+    let dry_c = mix(base, vec3<f32>(lum), 0.3) * 1.3;
+    let wet_c = max(mix(vec3<f32>(lum), base, 1.3), vec3<f32>(0.0)) * 0.62;
+    // The crust's cracks along the banks: the zero lines of a warped noise of under a unit, on the dry part only.
+    let keep_c = 1.0 - smoothstep(0.03, 0.07, frame.foot);
+    let warp = vec2<f32>(wnoise(xz * 0.4), wnoise(xz * 0.4 + vec2<f32>(5.1, 2.7)));
+    let crack = smoothstep(0.95, 0.99, 1.0 - abs(wnoise(xz * 1.4 + warp))) * (1.0 - wet) * smoothstep(0.15, 0.5, frame.shore) * keep_c;
+    let keep_g = 1.0 - smoothstep(0.15, 0.35, frame.foot * 2.7);
+    let grain = (1.0 + (1.0 - wet) * 0.14 * wnoise(xz * 2.7 + vec2<f32>(0.0, 9.1)) * keep_g) * (1.0 - 0.45 * crack);
+    // The key light on the slope against its light on the flat surface.
+    let lit = clamp(1.0 + 1.8 * (dot(n, sun) - sun.y) * sun_up, 0.75, 1.3);
+    let body = mix(dry_c, wet_c, wet) * grain * lit;
+    // The sheen, wet only (squared: the crust stays matte).
+    let gloss = wet * wet;
+    let cos_v = max(dot(n, to_eye), 0.0);
+    let fres = 0.02 + 0.98 * pow(1.0 - cos_v, 5.0);
+    let r = reflect(-to_eye, n);
+    let env = sky * 0.8 * (0.1 + 0.9 * pow(1.0 - clamp(r.y, 0.0, 1.0), 5.0));
+    let refl = clamp(fres * 0.8 * gloss, 0.0, 0.5);
+    let nh = max(dot(n, normalize(sun + to_eye)), 0.0);
+    let light = vec3<f32>(0.8, 0.85, 1.0) * max(dot(sky, vec3<f32>(1.0 / 3.0)), 0.02) * 3.0;
+    let spec = (pow(nh, 400.0) + pow(nh, 60.0) * 0.06) * gloss * sun_up;
+    return mix(body, env, refl) + light * spec;
 }
 
 // The look of `kind` in linear light: `rgb` the draw's MODULATE colour (display bytes / 255), `soft` the same at low
@@ -233,33 +329,20 @@ fn liquid_look(kind: u32, rgb: vec3<f32>, soft: vec3<f32>, uv: vec2<f32>, world:
         let spec = pow(max(dot(vec3<f32>(0.0, 1.0, 0.0), normalize(sun + to_eye)), 0.0), 120.0) * ICE.y * sun_up;
         return mix(base, sky, clamp(fres * ICE.x, 0.0, 0.25)) + vec3<f32>(spec);
     }
-    // Mud and sludge: a height field over world xz, its normal, the key light, a sharp highlight and a sky Fresnel.
-    let e = 0.06;
-    var h0 = 0.0;
-    var hx = 0.0;
-    var hz = 0.0;
     if (kind == 2u) {
-        h0 = mud_height(xz, t);
-        hx = mud_height(xz + vec2<f32>(e, 0.0), t);
-        hz = mud_height(xz + vec2<f32>(0.0, e), t);
-    } else {
-        h0 = sludge_height(xz, t);
-        hx = sludge_height(xz + vec2<f32>(e, 0.0), t);
-        hz = sludge_height(xz + vec2<f32>(0.0, e), t);
+        return mud_look(rgb, soft, xz, slope, sun, sky, to_eye, t, frame);
     }
+    // Sludge: a height field over world xz, its normal, the key light, a soft highlight and a sky Fresnel.
+    let e = 0.06;
+    let h0 = sludge_height(xz, t);
+    let hx = sludge_height(xz + vec2<f32>(e, 0.0), t);
+    let hz = sludge_height(xz + vec2<f32>(0.0, e), t);
     let g = vec2<f32>((hx - h0) / e, (hz - h0) / e) + slope;
     let n = normalize(vec3<f32>(-g.x, 1.0, -g.y));
     let diff = max(dot(n, sun), 0.0);
     let half_v = normalize(sun + to_eye);
     let cos_v = max(dot(n, to_eye), 0.0);
     let fres = 0.04 + 0.96 * pow(1.0 - cos_v, 5.0);
-    if (kind == 2u) {
-        // Thick and dark: the low-contrast colour, shaded by the bulges, glossy.
-        let body = srgb_to_linear(soft) * (0.3 + 0.2 * diff * sun_up + 0.06 * h0);
-        let spec = pow(max(dot(n, half_v), 0.0), 220.0) * 2.0 * sun_up;
-        let sheen = pow(max(dot(n, half_v), 0.0), 18.0) * 0.08 * sun_up;
-        return mix(body, sky * 0.35, clamp(fres * 0.6, 0.0, 0.4)) + vec3<f32>(1.0, 0.95, 0.85) * (spec + sheen);
-    }
     // Sludge: murky (about its Original brightness), a weak glow of its own colour, a soft highlight.
     let murk = base * (0.6 + 0.3 * diff * sun_up);
     let glow = base * (0.25 + 0.1 * sin(t * 0.8 + h0 * 4.0));

@@ -19,12 +19,17 @@ struct LiquidParams {
     flow: vec4<f32>,
     // xyz = toward the key light (world).
     sun: vec4<f32>,
+    // Mud's banks (crate::liquid_render::ShoreMap::params): xy = the map's origin (game x, y), zw = its texel scale
+    // over its size (0: no map).
+    shore: vec4<f32>,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(0) var tex: texture_2d<f32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(1) var tex_sampler: sampler;
 @group(#{MATERIAL_BIND_GROUP}) @binding(2) var<uniform> fog: LiquidFog;
 @group(#{MATERIAL_BIND_GROUP}) @binding(3) var<uniform> params: LiquidParams;
+@group(#{MATERIAL_BIND_GROUP}) @binding(4) var shore_tex: texture_2d<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(5) var shore_sampler: sampler;
 
 struct LiquidVertex {
     @location(0) position: vec3<f32>,
@@ -62,6 +67,11 @@ fn modulate(t: vec4<f32>, c: vec3<f32>) -> vec3<f32> {
 fn fragment(in: LiquidVertexOutput) -> @location(0) vec4<f32> {
     var frame = liquid_frame(in.world, in.uv, vec2<f32>(0.0, params.flow.w));
     frame.grid = params.misc.y;
+    if (params.shore.z > 0.0) {
+        // Bevy (x, z) = game (x, −y).
+        let q = (vec2<f32>(in.world.x, -in.world.z) - params.shore.xy) * params.shore.zw;
+        frame.shore = textureSampleLevel(shore_tex, shore_sampler, q, 0.0).r;
+    }
     let kind = u32(params.misc.x + 0.5);
     let rgb = modulate(textureSample(tex, tex_sampler, in.uv), in.color.rgb);
     // Four taps around for the mud's low-contrast colour.
