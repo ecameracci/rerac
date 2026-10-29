@@ -14,9 +14,11 @@
 //! [`SEEN_REACH`] untested), the regions of one height adding up, and the plane covering the most of the screen wins
 //! ([`choose_plane`], every [`CHOOSE_EVERY`] frames, about 0.5 ms; the drawn one stays until another covers [`STICK`]
 //! times as much): on Rilgar's start beach the bay at 59.5 keeps it over the ripple pools at 61.2, which
-//! keep the screen-space reflection (G-REN-111). A change of plane fades ([`fade`]): the drawn one goes out over
-//! [`FADE_SECS`] to the screen-space reflection, then the new one comes in. None: the mirror cameras are inactive
-//! (nothing drawn, no cost).
+//! keep the screen-space reflection (G-REN-111). Regions within [`SAME_PLANE`] are one plane; while it is kept, it stays
+//! at the drawn region's height ([`nearest_plane`]), so Novalis's overlapping river strips (38.73..39.35) trading the
+//! best place as the camera moves never move it. A change of plane, any step over [`FOLLOW`], fades ([`fade`]): the
+//! drawn one goes out over [`FADE_SECS`] to the screen-space reflection, then the new one comes in. None: the mirror
+//! cameras are inactive (nothing drawn, no cost).
 //!
 //! **The mirror view.** Two cameras draw into [`WaterMirror::image`] at half the main view's size, without
 //! multisampling: the sky layer (crate::sky_render's [`SKY_LAYER`], cleared to the level background, depth cleared)
@@ -46,7 +48,10 @@
 //! by that weight (the same Fresnel weight); every other water pixel keeps the screen-space one.
 //!
 //! `RC_WATER_MIRROR=0`: no mirror view (the screen-space reflection everywhere); `debug`: also shows the mirror
-//! picture in the frame's top-right corner (flipped back, as it reads in the water). Original: no camera is spawned
+//! picture in the frame's top-right corner (flipped back, as it reads in the water). `RC_WATER_MIRROR_LOG=1`: the
+//! drawn plane every frame, a [`PlaneFault`] flagged ([`PlaneTrace`]); `RC_WATER_MIRROR_SWEEP=<frames>`: the camera
+//! flies over the level's largest flat regions ([`sweep_passes`]), logging so, then the faults per pass and the
+//! level's verdict, and quits (docs/workflows/dev-switches.md). Original: no camera is spawned
 //! and the shader's Original branch reads none of it.
 
 use crate::fly_cam::FlyCam;
@@ -234,8 +239,10 @@ pub fn choose_plane(eye: Vec3, clip_from_world: &Mat4, regions: &[FlatWater], dr
     let scores: Vec<(f32, f32)> = planes.iter().map(|p| (p.3, if by_seen { p.2 } else { p.1 })).collect();
     let best = scores.iter().copied().max_by(|a, b| a.1.total_cmp(&b.1));
     let kept = drawn.and_then(|d| scores.iter().copied().find(|p| (p.0 - d).abs() <= SAME_PLANE));
+    // The drawn plane kept stays at its own height (the strip nearest it), not its group's best: the river's
+    // overlapping strips trade the best place as the camera moves.
     let choice = match (best, kept) {
-        (Some(b), Some(k)) if b.1 <= k.1 * STICK => Some(k.0),
+        (Some(b), Some(k)) if b.1 <= k.1 * STICK => drawn.and_then(|d| nearest_plane(regions, d)).or(Some(k.0)),
         (b, _) => b.map(|b| b.0),
     };
     (choice, scores)
@@ -248,20 +255,68 @@ pub fn nearest_plane(regions: &[FlatWater], z: f32) -> Option<f32> {
     regions.iter().map(|f| f.z).filter(|h| (h - z).abs() <= SAME_PLANE).min_by(|a, b| (a - z).abs().total_cmp(&(b - z).abs()))
 }
 
-/// Two choices this close (game units) are the same plane ([`fade`]: a sea's height moves with its swell; the shader
-/// reads the mirror within 0.5 of its plane at full weight).
+/// Regions this close (game units) are one plane ([`choose_plane`]; the shader reads the mirror within 0.5 of its
+/// plane at full weight).
 pub const SAME_PLANE: f32 = 0.5;
+/// How far the drawn plane may move in one frame while it shows ([`fade`]: a sea's swell, Pokitaru's bob); a larger
+/// step is another plane, faded out and in.
+pub const FOLLOW: f32 = 0.1;
+
+/// The drawn plane frame by frame ([`PlaneTrace::step`], `RC_WATER_MIRROR_LOG` / `RC_WATER_MIRROR_SWEEP`): what a
+/// stable mirror never does.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum PlaneFault {
+    /// The height moved more than [`FOLLOW`] in one frame while the mirror showed, other than from a fading-out plane
+    /// to one fading in ([`fade`]'s change of plane).
+    Jump { from: f32, to: f32 },
+    /// The height stepped back within [`ALTERNATE_FRAMES`] of a step the other way (both over [`ALTERNATE_STEP`]).
+    Alternate { from: f32, to: f32 },
+}
+/// A step back within this many frames is an alternation ([`PlaneTrace`]).
+pub const ALTERNATE_FRAMES: u32 = 8;
+/// Smaller steps are a swell's or a bob's (game units per frame; [`PlaneTrace`]).
+pub const ALTERNATE_STEP: f32 = 0.02;
+
+/// The checker of [`PlaneFault`]s over the frames.
+#[derive(Default)]
+pub struct PlaneTrace {
+    /// The last frame's height and weight, and whether that weight fell.
+    prev: Option<(f32, f32, bool)>,
+    /// The last step over [`ALTERNATE_STEP`] and the frames since.
+    last_step: Option<(f32, u32)>,
+}
+
+impl PlaneTrace {
+    /// This frame's drawn plane and weight ([`fade`]); the fault it shows, if any.
+    pub fn step(&mut self, drawn: Option<f32>, weight: f32) -> Option<PlaneFault> {
+        let falling = self.prev.is_some_and(|(pz, pw, _)| drawn == Some(pz) && weight < pw);
+        let prev = std::mem::replace(&mut self.prev, drawn.map(|z| (z, weight, falling)));
+        if let Some((_, n)) = self.last_step.as_mut() { *n += 1; }
+        let (Some((pz, pw, fell)), Some(z)) = (prev, drawn) else { self.last_step = None; return None };
+        if pw <= 0.0 || weight <= 0.0 { return None; }
+        let dz = z - pz;
+        if dz.abs() > FOLLOW {
+            self.last_step = None;
+            let crossover = fell && weight < 0.5;
+            return (!crossover).then_some(PlaneFault::Jump { from: pz, to: z });
+        }
+        if dz.abs() <= ALTERNATE_STEP { return None; }
+        let back = self.last_step.is_some_and(|(s, n)| n <= ALTERNATE_FRAMES && s.signum() != dz.signum());
+        self.last_step = Some((dz, 0));
+        back.then_some(PlaneFault::Alternate { from: pz, to: z })
+    }
+}
 /// The mirror's fade in and out (seconds; [`fade`]).
 pub const FADE_SECS: f32 = 0.2;
 
 /// The plane drawn and its weight after a frame of `dt` seconds (`water.wgsl` `mirror.x`), given the drawn one and this
-/// frame's choice ([`choose_plane`]): the same plane ([`SAME_PLANE`]) follows the choice and fades in; another choice
+/// frame's choice ([`choose_plane`]): the same plane (within [`FOLLOW`]) follows the choice and fades in; another choice
 /// (or none) fades the drawn one out over [`FADE_SECS`] (the water's screen-space reflection takes over) and then
 /// takes its place, so a change of plane is never a hard cut.
 pub fn fade(drawn: Option<f32>, weight: f32, want: Option<f32>, dt: f32) -> (Option<f32>, f32) {
     let step = dt.max(0.0) / FADE_SECS;
     match (drawn, want) {
-        (Some(d), Some(w)) if (d - w).abs() <= SAME_PLANE => (Some(w), (weight + step).min(1.0)),
+        (Some(d), Some(w)) if (d - w).abs() <= FOLLOW => (Some(w), (weight + step).min(1.0)),
         (Some(d), _) if weight - step > 0.0 => (Some(d), weight - step),
         (Some(_), None) | (None, None) => (None, 0.0),
         (_, Some(w)) => (Some(w), step.min(1.0)),
@@ -309,6 +364,10 @@ pub struct WaterMirror {
     chosen: (Option<f32>, usize),
     /// `debug`: the region count and plane last printed.
     logged: (usize, Option<f32>),
+    /// `RC_WATER_MIRROR_LOG=1`: every frame's plane printed; the faults found ([`PlaneTrace`]) counted for the sweep.
+    log: bool,
+    trace: PlaneTrace,
+    faults: u32,
 }
 
 impl WaterMirror {
@@ -335,7 +394,12 @@ impl Plugin for WaterMirrorPlugin {
         };
         let image = app.world_mut().resource_mut::<Assets<Image>>().add(target_image(UVec2::ONE));
         let params = app.world_mut().resource_mut::<Assets<ShaderBuffer>>().add(ShaderBuffer::new(&[0u8; 16], RenderAssetUsages::default()));
-        app.insert_resource(WaterMirror { image, params, size: UVec2::ONE, mode, cams: None, inset: None, view: None, regions: Vec::new(), drawn: None, weight: 0.0, age: 0, chosen: (None, 0), logged: (0, None) }).add_systems(
+        let log = std::env::var("RC_WATER_MIRROR_LOG").is_ok_and(|v| v.trim() == "1") || std::env::var("RC_WATER_MIRROR_SWEEP").is_ok();
+        let m = WaterMirror { image, params, size: UVec2::ONE, mode, cams: None, inset: None, view: None, regions: Vec::new(), drawn: None, weight: 0.0, age: 0, chosen: (None, 0), logged: (0, None), log, trace: PlaneTrace::default(), faults: 0 };
+        if let Some(frames) = std::env::var("RC_WATER_MIRROR_SWEEP").ok().and_then(|v| v.trim().parse::<u32>().ok()) {
+            app.insert_resource(Sweep { frames: frames.max(10), ..default() }).add_systems(Update, sweep);
+        }
+        app.insert_resource(m).add_systems(
             PostUpdate,
             (
                 place
@@ -454,10 +518,17 @@ fn place(
         _ if due => choose_plane(game_eye(t), &clip_from_world, &m.regions, m.drawn, blocked),
         _ => (m.chosen.0.and_then(now), Vec::new()),
     };
-    if due { m.chosen = (choice, m.regions.len()); }
+    m.chosen.0 = choice;
+    if due { m.chosen.1 = m.regions.len(); }
     let cost = t0.elapsed().as_secs_f64() * 1e3;
     (m.drawn, m.weight) = fade(m.drawn, m.weight, choice, time.delta_secs());
     let plane = m.drawn;
+    if m.log {
+        let fault = m.trace.step(m.drawn, m.weight);
+        if fault.is_some() { m.faults += 1; }
+        let eye = game_eye(t);
+        println!("water mirror trace: frame {} eye {:.1},{:.1},{:.1} choice {:?} drawn {:?} weight {:.3} regions {}{}", m.age, eye.x, eye.y, eye.z, choice, m.drawn, m.weight, m.regions.len(), fault.map_or(String::new(), |f| format!(" FAULT {f:?}")));
+    }
     if m.mode == Mode::Debug && (m.regions.len() != m.logged.0 || choice.map(|z| z.round()) != m.logged.1.map(|z| z.round())) {
         m.logged = (m.regions.len(), choice);
         let list: Vec<String> = m.regions.iter().take(8).map(|f| format!("z {:.2} x {:.1}..{:.1} y {:.1}..{:.1}", f.z, f.min.x, f.max.x, f.min.y, f.max.y)).collect();
@@ -538,6 +609,75 @@ type WorldDraw = Or<(
     With<MeshMaterial3d<crate::moby_render::MobyMaterial>>,
     With<MeshMaterial3d<crate::moby_render::MobyMetalMaterial>>,
 )>;
+
+/// `RC_WATER_MIRROR_SWEEP=<frames>` (dev): the fly camera flies [`sweep_passes`] over the level's flat water, `frames`
+/// frames each, with the plane checked every frame ([`PlaneTrace`]); prints the faults per pass and exits.
+#[derive(Resource, Default)]
+struct Sweep {
+    frames: u32,
+    passes: Vec<(Vec3, Vec3, f32)>,
+    frame: u32,
+    warm: u32,
+    faults: Vec<u32>,
+}
+
+/// The passes over `regions` (game units): the largest distinct ones first, at most [`SWEEP_REGIONS`] of them; over each
+/// along its long axis, grazing (1.5 over it) and moderate (6), from 0.1 to 0.9 of its length, plus one crossing its
+/// short axis grazing. Each is (eye from, eye to, the water's z).
+pub fn sweep_passes(regions: &[FlatWater]) -> Vec<(Vec3, Vec3, f32)> {
+    let mut rs: Vec<FlatWater> = Vec::new();
+    for f in regions {
+        if !rs.iter().any(|r| (r.z - f.z).abs() < 0.05 && r.min.distance(f.min) < 1.0 && r.max.distance(f.max) < 1.0) { rs.push(*f); }
+    }
+    rs.sort_by(|a, b| { let s = |f: &FlatWater| (f.max - f.min).element_product(); s(b).total_cmp(&s(a)) });
+    let mut out = Vec::new();
+    for f in rs.iter().take(SWEEP_REGIONS) {
+        let (c, size) = ((f.min + f.max) * 0.5, f.max - f.min);
+        let (long, short) = if size.x >= size.y { (Vec2::new(size.x, 0.0), Vec2::new(0.0, size.y)) } else { (Vec2::new(0.0, size.y), Vec2::new(size.x, 0.0)) };
+        for (axis, h) in [(long, 1.5), (long, 6.0), (short, 1.5)] {
+            let (a, b) = (c - axis * 0.4, c + axis * 0.4);
+            out.push((a.extend(f.z + h), b.extend(f.z + h), f.z));
+        }
+    }
+    out
+}
+/// Regions swept ([`sweep_passes`]: three passes each).
+pub const SWEEP_REGIONS: usize = 8;
+
+fn sweep(mut s: ResMut<Sweep>, m: Res<WaterMirror>, mut cams: Query<&mut Transform, With<FlyCam>>, mut exit: MessageWriter<AppExit>) {
+    if s.passes.is_empty() {
+        s.warm += 1;
+        if s.warm < 60 { return; }
+        if m.regions.is_empty() {
+            if s.warm >= 600 { println!("water mirror sweep: level {:02}: no flat water", crate::level_load::level_index()); exit.write(AppExit::Success); }
+            return;
+        }
+        s.passes = sweep_passes(&m.regions);
+        let mut hs: Vec<f32> = m.regions.iter().map(|f| (f.z * 100.0).round() / 100.0).collect();
+        hs.sort_by(f32::total_cmp);
+        hs.dedup();
+        println!("water mirror sweep: level {:02}: {} regions at {:?}; {} passes of {} frames", crate::level_load::level_index(), m.regions.len(), hs, s.passes.len(), s.frames);
+        s.faults = vec![m.faults];
+    }
+    let (k, i) = ((s.frame / s.frames) as usize, s.frame % s.frames);
+    if i == 0 && k > 0 { let f = m.faults; s.faults.push(f); }
+    if k >= s.passes.len() {
+        let per: Vec<u32> = s.faults.windows(2).map(|w| w[1] - w[0]).collect();
+        let total: u32 = per.iter().sum();
+        for (j, (p, n)) in s.passes.iter().zip(&per).enumerate().filter(|(_, (_, n))| **n > 0) {
+            println!("water mirror sweep: pass {j} from {:.1},{:.1},{:.1} to {:.1},{:.1},{:.1} over z {:.2}: {n} faults", p.0.x, p.0.y, p.0.z, p.1.x, p.1.y, p.1.z, p.2);
+        }
+        println!("water mirror sweep: level {:02}: {} passes, {total} faults: {}", crate::level_load::level_index(), s.passes.len(), if total == 0 { "stable" } else { "UNSTABLE" });
+        exit.write(AppExit::Success);
+        return;
+    }
+    let (a, b, z) = s.passes[k];
+    let eye = a.lerp(b, i as f32 / s.frames as f32);
+    let dir = (b - a).truncate().normalize_or(Vec2::X);
+    let target = (eye.truncate() + dir * 25.0).extend(z);
+    for mut t in &mut cams { *t = Transform::from_translation(game_to_bevy(eye.to_array())).looking_at(game_to_bevy(target.to_array()), Vec3::Y); }
+    s.frame += 1;
+}
 
 /// What the mirror cameras draw (module doc): the world camera keeps the tfrag, tie and moby draws but the effects,
 /// the sky camera the sky shells.
@@ -634,6 +774,43 @@ mod tests {
         assert_eq!(nearest_plane(&[strip, pool], 39.0), Some(39.0));
         assert_eq!(nearest_plane(&[strip, flat(39.04, [0.0, 0.0], [1.0, 1.0])], 39.0), Some(39.04));
         assert_eq!(nearest_plane(&[strip], 38.0), None);
+        // The main channel: strips at 38.99, 39.13 and 39.35 over one another. Once one is drawn it stays, whichever
+        // covers most as the camera moves; the fade follows only FOLLOW, so a group's best never cuts in.
+        let layers = [flat(39.35, [-10.0, 4.0], [10.0, 20.0]), flat(39.13, [-10.0, 4.0], [10.0, 30.0]), flat(38.99, [-10.0, 6.0], [10.0, 28.0])];
+        assert_eq!(choose_plane(eye, &clip, &layers, None, clear).0, Some(39.13));
+        for d in [39.35, 39.13, 38.99] { assert_eq!(choose_plane(eye, &clip, &layers, Some(d), clear).0, Some(d)); }
+        assert_eq!(fade(Some(39.35), 1.0, Some(39.13), 0.05), (Some(39.35), 0.75), "another height fades out first");
+    }
+
+    #[test]
+    fn the_trace_flags_jumps_and_alternations_only() {
+        let mut t = PlaneTrace::default();
+        // A swell's slow drift, a fade-in, then the plane gone: no fault.
+        assert!([(Some(2.0), 0.1), (Some(2.005), 0.4), (Some(2.01), 1.0), (Some(2.004), 1.0), (None, 0.0)].iter().all(|&(z, w)| t.step(z, w).is_none()));
+        // A plane changed at weight 0 (after a fade-out): no fault.
+        assert_eq!(t.step(Some(5.0), 0.2), None);
+        // Faded out to a remainder, the next one fading in: no fault; a cut while one fades in, or to a strong one: faults.
+        let mut t = PlaneTrace::default();
+        let faults: Vec<_> = [(5.0, 0.5), (5.0, 0.1), (6.0, 0.3), (7.0, 0.4), (7.0, 0.3), (8.0, 0.9)].iter().map(|&(z, w)| t.step(Some(z), w)).collect();
+        assert_eq!(faults, vec![None, None, None, Some(PlaneFault::Jump { from: 6.0, to: 7.0 }), None, Some(PlaneFault::Jump { from: 7.0, to: 8.0 })]);
+        // 39.0 / 39.5 three frames in four (Novalis before 0431a97e).
+        let mut t = PlaneTrace::default();
+        let faults: Vec<_> = [39.0, 39.5, 39.5, 39.5, 39.0].iter().map(|&z| t.step(Some(z), 1.0)).collect();
+        assert_eq!(faults[1], Some(PlaneFault::Jump { from: 39.0, to: 39.5 }));
+        assert_eq!(faults[4], Some(PlaneFault::Jump { from: 39.5, to: 39.0 }));
+        // Small steps back and forth (two strips 0.05 apart) alternate.
+        let mut t = PlaneTrace::default();
+        let faults: Vec<_> = [39.0, 39.05, 39.05, 39.0].iter().map(|&z| t.step(Some(z), 1.0)).collect();
+        assert_eq!(faults, vec![None, None, None, Some(PlaneFault::Alternate { from: 39.05, to: 39.0 })]);
+    }
+
+    #[test]
+    fn the_sweep_flies_over_the_largest_regions() {
+        let rs = [flat(39.0, [0.0, 0.0], [100.0, 20.0]), flat(39.0, [0.2, 0.0], [100.0, 20.3]), flat(61.2, [0.0, 0.0], [16.0, 16.0])];
+        let p = sweep_passes(&rs);
+        assert_eq!(p.len(), 6, "the near-duplicate is one region");
+        assert_eq!((p[0].0, p[0].1, p[0].2), (Vec3::new(10.0, 10.0, 40.5), Vec3::new(90.0, 10.0, 40.5), 39.0));
+        assert_eq!(p[3].2, 61.2);
     }
 
     #[test]
@@ -660,6 +837,13 @@ mod tests {
         // Back to the drawn plane mid-fade: it comes back in without a switch.
         let (d2, w2) = fade(Some(1.0), 0.5, Some(3.0), dt);
         assert!(near(fade(d2, w2, Some(1.0), dt), Some(1.0), 0.5));
+        // At 60 fps the steps leave a rounding remainder: it is out, not a frame of the old plane at no weight.
+        let (mut d, mut w, mut trace) = (Some(39.35), 1.0, PlaneTrace::default());
+        for _ in 0..30 {
+            (d, w) = fade(d, w, Some(38.73), 1.0 / 60.0);
+            assert_eq!(trace.step(d, w), None, "{d:?} {w}");
+        }
+        assert_eq!((d, w), (Some(38.73), 1.0));
     }
 
     /// A camera at game `eye` looking at game `target` (Bevy world-from-view).
