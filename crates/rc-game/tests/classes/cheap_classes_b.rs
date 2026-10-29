@@ -202,6 +202,13 @@ fn asteroids_idle_then_split_on_a_hit() {
     assert_eq!(rocks.len(), 130);
     let far = hero_at([1.0, 1.0, 1.0]);
     lv.load_pass(&far);
+    // The ship 69's init turns the rocks' group off until Ratchet mounts it (`gemlik_ship`, states 0 / 2): on, as the
+    // mount does.
+    let groups: std::collections::BTreeSet<i8> = rocks.iter().map(|&r| lv.table.mobys[r].group).collect();
+    {
+        let mut w = lv.world(&far);
+        for &g in &groups { rc_game::moby_update::story::group_set(&mut w, g as i32, 1, 1, 1); }
+    }
     for _ in 0..4 { lv.tick(&far); }
     let mut spinning = 0;
     for &r in &rocks {
@@ -551,7 +558,8 @@ fn small_units_on_their_levels() {
     // A piece set going slides out to its distance along row 0.
     let pc = lv.of_class(647)[0];
     lv.run(&hero, pc, unit("U499"));
-    let home = lv.table.mobys[pc].position;
+    // Its home (+0x00): the arena trigger 654 has already set its barriers out by 1.5 (`kalebo_arena`, state 0).
+    let home = p::v4f(&lv.table.mobys[pc].pvars, 0);
     // The distance is written by the moby that starts it (0 in the data): 2 here.
     p::set_ff(&mut lv.table.mobys[pc].pvars, 0x14, 2.0);
     let dist = 2.0f32;
