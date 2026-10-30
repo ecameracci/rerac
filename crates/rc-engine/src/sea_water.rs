@@ -19,6 +19,8 @@
 //! * with the far fade ([`FAR_FADE`], `look.misc.yz`): the depth behind distant water is thin and the bent bed seen
 //!   through it flickered from frame to frame, so from the fade's start to its end the bed, the shore and the foam give
 //!   way to the water's own colour (the original's opaque sea) under the reflection and the glint;
+//! * the draw's fog over the finished colour, reflection and glint included (`water.wgsl`'s last step; 2026-10-29: the
+//!   unfogged reflection of the lit sky ended in a hard line where Batalia's grid stops drawing its blocks, 400 out);
 //! * the contact rings of crate::water_render (its buffer while the level has strip or ripple water, else none);
 //! * the planar reflection (crate::water_mirror): each group's flat blocks ([`SeaWaterDraw`]`::planes`, one region per
 //!   grid block, crate::water_mirror::flat_blocks; Rilgar's 879 grid at one height) are candidates for the mirror view,
