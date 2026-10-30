@@ -3,8 +3,8 @@
 //! entity, no buffer, no planning). Written from the standard GPU grass / scatter technique.
 //!
 //! * **Placement** ([`plan`], once per level and value, on a worker thread; frame-exact runs wait for it): grass
-//!   points over the LOD-0 tfrag triangles where the ground is a turf texture that reads as grass both on its own and
-//!   as drawn and the collision mesh agrees (walkable, nothing overhead), none on the space stations
+//!   points over the LOD-0 tfrag and tie triangles where the ground is a turf texture that reads as grass both on its
+//!   own and as drawn and the collision mesh agrees (walkable, nothing overhead), none on the space stations
 //!   (`plan::NO_FOLIAGE`), each a short blade clump, a little often a flower cluster or a fern
 //!   (`plan::Kind`), and copies of the level's small plant shrub classes ([`plant_classes`]: a world
 //!   radius of at most [`MAX_PLANT_RADIUS`], swaying or green) around their placed instances. Its inputs are copied out
@@ -290,12 +290,36 @@ fn build_input(level: &LoadedLevel) -> PlanInput {
             });
         }
     }
-    let textures = level
+    let mut textures: Vec<Option<Tex>> = level
         .tfrag_lod
         .mips
         .iter()
         .map(|m| m.as_ref().and_then(|l| l.first()).map(|t| Tex { width: t.width, height: t.height, rgba: t.rgba.clone() }))
         .collect();
+    // The ties' LOD-0 triangles in world space (a tie can be ground: Batalia's turf-topped pads), their textures after
+    // the tfrags' and their colours the instance's `LightTies` slots (crate::tie_render, as drawn at full detail).
+    let ties = &level.ties;
+    let mut tie_tex: HashMap<usize, u32> = HashMap::new();
+    for (ii, inst) in ties.instances.iter().enumerate() {
+        let Some(c) = ties.class_of[ii].and_then(|ci| ties.classes.get(ci)) else { continue };
+        if inst.draw_distance <= 0 { continue; }
+        let scale = c.class.header.scale;
+        for pk in &c.class.lods[0] {
+            for tri in rc_formats::tie::tie_triangles(pk) {
+                let Some(ti) = c.texture_table_index(tri.ad_gif) else { continue };
+                let vs = [tri.a, tri.b, tri.c].map(|v| &pk.vertices[v as usize]);
+                // Only the ground-like faces: the ties' walls are most of their area and would only be sampled to be
+                // dropped as steep (Batalia: placement 0.2 s → 1.4 s with them).
+                let t = Tri { p: vs.map(|v| inst.transform_point(v.class_position(scale))), uv: vs.map(|v| v.uv()), col: vs.map(|v| ties.colors[ii][v.color as usize & 63]), tex: 0 };
+                if !plan::faces_up(t.normal()) { continue; }
+                let tex = *tie_tex.entry(ti).or_insert_with(|| {
+                    textures.push(ties.mips.get(&ti).and_then(|l| l.first()).map(|t| Tex { width: t.width, height: t.height, rgba: t.rgba.clone() }));
+                    (textures.len() - 1) as u32
+                });
+                tris.push(Tri { tex, ..t });
+            }
+        }
+    }
     let plant = plant_classes(level);
     let s = &level.shrubs;
     let plants = s

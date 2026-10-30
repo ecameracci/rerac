@@ -2,7 +2,8 @@
 //! (Z up), world units. Nothing here touches the game state or its RNG stream: every random draw comes from a
 //! splitmix64 hash of the level's own seed and the triangle / plant index.
 //!
-//! * **Grass**: candidate points over every LOD-0 tfrag triangle (`rc_formats::tfrag::tfrag_triangles(t, 0)`),
+//! * **Grass**: candidate points over every LOD-0 tfrag triangle (`rc_formats::tfrag::tfrag_triangles(t, 0)`) and
+//!   tie triangle (`rc_formats::tie::tie_triangles`, crate::foliage `build_input`: turf-topped tie pads),
 //!   area-weighted at [`Density::clumps`] per square unit, on every level but the stations ([`NO_FOLIAGE`]). A point
 //!   is kept when its triangle faces up ([`faces_up`]), the ground there is grass ground ([`grass_ground`]: a turf
 //!   texture, [`is_turf`]: enough grass texels and an even grain, whose level-0 texel average under the point reads as
