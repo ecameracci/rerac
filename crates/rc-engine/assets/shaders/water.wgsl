@@ -549,8 +549,10 @@ fn fragment(in: WaterVertexOutput) -> @location(0) vec4<f32> {
         if (ocean) { c *= 1.0 - smoothstep(OCEAN_CAUSTIC_FADE.x, OCEAN_CAUSTIC_FADE.y, dist); }
         bed = bed * (1.0 + c * 1.6);
     }
-    // Absorption toward the water's own colour (the texture as the game drew it, darkened with depth).
-    let tint = srgb_to_linear(rgb);
+    // Absorption toward the water's own colour (the texture as the game drew it, darkened with depth). Unfogged: the
+    // fog goes over the finished colour at the end, reflection and glint included (the ocean keeps its fogged tint and
+    // its own sky).
+    let tint = srgb_to_linear(select(rgb, raw, !ocean));
     // look.misc.w: the deep water's share of the colour (crate::sea_water's seas; 0: 0.55).
     let deep = tint * select(0.55, look.misc.w, look.misc.w > 0.0);
     // params.misc.z: an even absorption per unit (crate::sea_water's translucent grids; 0: this coloured one), the
@@ -592,5 +594,8 @@ fn fragment(in: WaterVertexOutput) -> @location(0) vec4<f32> {
     let foam_n = smoothstep(0.1, 0.5, gnoise(wp.xz * 3.0 + vec2<f32>(t_now * 0.2, -t_now * 0.15)) + 0.35);
     let foam = (1.0 - smoothstep(0.05, 0.45, thickness)) * smoothstep(0.02, 0.1, thickness) * smoothstep(0.02, 0.1, rise) * foam_n;
     col = mix(col, vec3<f32>(0.92, 0.96, 1.0), foam * select(0.55, OCEAN_FOAM, ocean) * (1.0 - far));
+    // The fog over all of it, as on the game's fogged strip: unfogged, a far sea's reflection of the lit sky ends in a
+    // hard line where the grid stops drawing its blocks (Batalia: 400 units out, past the grid fog's far end).
+    if (fog.color.w > 0.5 && !ocean) { col = mix(srgb_to_linear(fog.color.rgb), col, in.fog); }
     return vec4<f32>(col, 1.0);
 }

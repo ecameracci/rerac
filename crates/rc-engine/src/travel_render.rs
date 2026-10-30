@@ -856,7 +856,6 @@ fn hud_layer(
     hook.freeze = true;
     if !t.blank && t.card.is_none() { return; }
     let mut h = Hud2d::default();
-    h.sharp_icons = true;
     // The black frame the transition draws on (the flight shows through: its actors are on the travel layer).
     if t.card.is_some() || (t.blank && t.lump.is_none()) { h.rect(0, crate::hud_render::H, 0, crate::hud_render::W, 0x8000_0000); }
     // Port-only, Quit Game □ Main Menu: the front end's still over the reload's black (crate::saves::front_end_at_still).
@@ -902,8 +901,6 @@ fn hud_layer(
         let side = crate::saves::shown_side(display.as_deref(), &frame, cutscene.is_some_and(|c| c.0));
         crate::flight_render::hud_prims(&mut flight, &mut h, img, &mut assets, crate::hud_render::language(), crate::saves::card_icon_shown(), side);
     }
-    let base = hook.prims.len();
-    hook.icons.extend(h.icons.into_iter().map(|m| crate::hud_render::IconMark { at: m.at + base, ..m }));
     hook.prims.extend(h.prims);
 }
 

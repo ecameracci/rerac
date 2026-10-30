@@ -598,18 +598,16 @@ sub-pages (`crates/rc-game/src/menus/pause/port.rs`, `PageMenu::install_port_pag
   list. Between two pages of the same frames (Port Options ↔ its Controller page) the frames hold
   (`frame::FrameMobys::hold`): △ would play them back to the frames' parent layout. The Controller page's list panel is
   stretched as Port Options' is (`port::panel_stretch`).
-* **Button icons** (Controller page, port-only): Original / PS5 / Xbox One / Auto → `haptics::ControllerSettings::icons`
+* **Button icons** (Controller page, port-only): Original / PS5 / Xbox One / Steam / Auto → `haptics::ControllerSettings::icons`
   (key `button_icons`). The pad icons in text are the three fonts' glyph cells 0x10..0x19 (✕ ○ △ □, L1 R1 L2 R2, the
   left / right stick; 24×16 at the glyph's (u, v) of FX 1..3); `hud_render::apply_button_icons` rewrites them in the HUD
   atlas with `button_icons::cell` (drawn in code on the disc cells' footprints) when the style changes and in every new
   atlas, so menus, vendor, help box and prompts all follow. Xbox One maps by position: ✕ A, ○ B, △ Y, □ X; LB RB LT RT.
-  Auto: PS5 for a Sony pad, Xbox One for any other, as the controller last used (`gms::Gms::active`).
-  **Sharp icons**: with PS5 / Xbox One the HUD's and page menus' text leaves those cells out (`Hud2d::sharp_icons`,
-  `Hud2d::icons`) and `button_icons::place` draws each icon as a UI image over the 512×416 layer at the window's
-  resolution, fitted to the cell's footprint, dimmed by the fades drawn over it (`button_icons::shown`). The art is
-  Zacksly's "PS5 Button Icons and Controls" and "Xbox Series Button Icons and Controls" (CC BY 3.0,
-  https://zacksly.itch.io; crates/rc-engine/art/button_icons/CREDITS.md). The monitors' canvases and scene
-  subtitles keep the rewritten cells.
+  Steam: the Xbox letters in white (the Steam Deck's monochrome face buttons), L1 R1 L2 R2 as the Deck labels them.
+  Auto: PS5 for a Sony pad, Steam for a Valve device (Steam Deck, Steam Controller, Steam Input's virtual pad:
+  `gms::VALVE`), Xbox One for any other, as the controller last used (`gms::Gms::active`). The drawn cells are the only
+  art: a sharp overlay of Zacksly's CC BY 3.0 packs (0.5.0) was removed 2026-10-29, as it stood out against the
+  game's pixels.
 * **Gadgetron Movement System** (GMS, idea by roxas997 on the ReRAC Discord): the Controller row does not
   cycle; ✕ opens its own page (`port::GMS_PAGE`, from the main menu `port::GMS_PAGE_FRONT`; Port Options' frames, parent
   Port Options) titled "Gadgetron Movement System" (regular font: in the large one the title wraps and the label turns
