@@ -65,7 +65,8 @@ pub fn load(root: &Path, index: u32, core_index: &[u8], core: &LevelCore, core_d
         let header = read("level_header.bin")?;
         let table = rc_formats::sound_bank::music_table(&header)?;
         let music: [Option<Vec<u8>>; 15] = std::array::from_fn(|k| (table[k] != 0).then(|| read(&format!("music/{k:03}.bin")).ok()).flatten());
-        Ok(LevelAudio::from_parts(&bank, core_index, core, core_data, gameplay, &header, &music, collision)?)
+        let gadgets = rc_data::level_gadgets(root, index)?;
+        Ok(LevelAudio::from_parts_with_gadgets(&bank, core_index, core, core_data, &gadgets, gameplay, &header, &music, collision)?)
     };
     match run() {
         Ok(a) => {

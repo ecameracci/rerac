@@ -472,11 +472,27 @@ impl LevelAudio {
         music_files: &[Option<Vec<u8>>; 15],
         collision: Option<Collision>,
     ) -> rc_formats::buf::Result<Self> {
+        let gadgets = rc_formats::gadget::parse_gadget_classes(core, core_data)?;
+        Self::from_parts_with_gadgets(sound_bank, core_index, core, core_data, &gadgets, gameplay, level_header, music_files, collision)
+    }
+
+    /// [`Self::from_parts`] with the level's gadget classes already parsed (the engine's `rc_data::level_gadgets`).
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_parts_with_gadgets(
+        sound_bank: &[u8],
+        core_index: &[u8],
+        core: &rc_formats::level::LevelCore,
+        core_data: &[u8],
+        gadgets: &[rc_formats::gadget::GadgetClass],
+        gameplay: &[u8],
+        level_header: &[u8],
+        music_files: &[Option<Vec<u8>>; 15],
+        collision: Option<Collision>,
+    ) -> rc_formats::buf::Result<Self> {
         use rc_formats::sound_bank as sb;
         let bank = Arc::new(sb::parse_bank(sound_bank)?);
         let mut sounds = sb::parse_level_sounds(core_index, core, core_data)?;
         // The hand items' (gadget classes') defs from their own blobs, as the game applies them when one is loaded.
-        let gadgets = rc_formats::gadget::parse_gadget_classes(core, core_data)?;
         let blobs: Vec<(i32, &[u8])> = gadgets.iter().map(|g| (g.moby.o_class, g.blob.as_slice())).collect();
         sb::apply_gadget_defs(&mut sounds, &blobs)?;
         let instances = sb::parse_sound_instances(gameplay)?;

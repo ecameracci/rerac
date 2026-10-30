@@ -1439,6 +1439,7 @@ The tables below are the audit as taken, minus these four rows.
 | `lifecycle::unwritable_cache_falls_back_to_memory` | data/format: unwritable cache falls back to memory (disc data) | fast | data | keep |
 | `lifecycle::ensure_keeps_good_lumps_and_rebuilds_the_rest` | data/format: ensure keeps good lumps and rebuilds the rest (disc data) | fast | data | keep |
 | `roundtrip::every_cached_lump_equals_fresh_decompression_for_all_19_levels` | data/format: every cached lump equals fresh decompression for all 19 levels (all levels) | medium | data | keep |
+| `roundtrip::gadget_classes_are_parsed_once_and_equal_a_fresh_parse_for_all_19_levels` | data/format: gadget classes are parsed once and equal a fresh parse for all 19 levels (all levels) | medium | data | keep |
 
 ### rc-data: unit tests (5)
 

@@ -337,7 +337,8 @@ the raw layout the retired C++ `rc_extract unpack` wrote to `extracted/`:
   `hud_bank_0..4` (133 lumps, 438 MiB of decompressed data, 439 MiB on disk for the full disc). The bytes are exactly
   `rc_formats::wad::decompress` of the Tier 0 file: nothing is converted, so no PS2 detail can be lost; the
   golden-tested parsers still run on them. Not in v1: WAD streams decompressed inside parsers (63 gadget classes per
-  load, about 5 ms; scene chunks when a scene starts) and `gameplay_pal` (the NTSC game never reads it).
+  load, about 5 ms, parsed once per level in memory by `rc_data::level_gadgets` since G-EXT-002; scene chunks once
+  when a scene starts) and `gameplay_pal` (the NTSC game never reads it).
 - **Layout** (a kind's files mirror their Tier 0 path under `<kind>/`; E2 exports can mirror the same way):
   ```
   <data>/cache/v1/stamp.toml

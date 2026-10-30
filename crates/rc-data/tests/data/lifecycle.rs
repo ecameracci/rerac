@@ -45,7 +45,7 @@ type StampEdit = (&'static str, Box<dyn Fn(&str) -> String>);
 type Damage = (&'static str, Box<dyn Fn(&mut Vec<u8>)>);
 
 fn stats(requests: u64, memory_hits: u64, cache_reads: u64, decompressions: u64, cache_writes: u64, rebuilds: u64) -> Stats {
-    Stats { requests, memory_hits, cache_reads, decompressions, cache_writes, rebuilds }
+    Stats { requests, memory_hits, cache_reads, decompressions, cache_writes, rebuilds, ..Stats::default() }
 }
 
 #[test]

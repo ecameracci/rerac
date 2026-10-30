@@ -13,6 +13,9 @@
 //!
 //! `RC_PERF_LOG=1` prints one line per request (where it came from, bytes, ms); [`stats`] counts them.
 //!
+//! Above the lumps, [`level_gadgets`] keeps each level's parsed gadget classes (their WAD streams live inside
+//! `core_data`, so the disk cache does not hold them), once per process like the lumps.
+//!
 //! Why a crate and not an engine module: `rerac-extract prepare` builds the same cache with the same code (layout,
 //! stamp, lump checks), and a crate without Bevy keeps the extractor free of the engine and its tests fast.
 
@@ -21,6 +24,7 @@ pub mod xxh64;
 
 pub use cache::{Cache, Error};
 
+use rc_formats::gadget::GadgetClass;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -41,6 +45,8 @@ pub struct Stats {
     pub cache_writes: u64,
     /// Cached lumps found corrupt or stale and replaced.
     pub rebuilds: u64,
+    /// Levels whose gadget classes were parsed ([`Lumps::gadgets`]; requests served from memory are not counted).
+    pub gadget_parses: u64,
 }
 
 /// How lumps of one data folder are produced.
@@ -55,6 +61,8 @@ enum Backing {
 struct Inner {
     roots: HashMap<PathBuf, Backing>,
     lumps: HashMap<(PathBuf, String), Arc<[u8]>>,
+    /// Parsed gadget classes by `(root, level)` ([`Lumps::gadgets`]).
+    gadgets: HashMap<(PathBuf, u32), Arc<[GadgetClass]>>,
     stats: Stats,
 }
 
@@ -133,7 +141,7 @@ impl Lumps {
     pub fn get(&self, root: &Path, rel: &str) -> Result<Arc<[u8]>, Error> {
         let t0 = Instant::now();
         let mut g = self.lock();
-        let Inner { roots, lumps, stats } = &mut *g;
+        let Inner { roots, lumps, stats, .. } = &mut *g;
         stats.requests += 1;
         let key = (root.to_path_buf(), rel.to_string());
         if let Some(a) = lumps.get(&key) {
@@ -183,15 +191,43 @@ impl Lumps {
         Ok(a)
     }
 
+    /// The gadget classes of level `index` (`rc_formats::gadget::parse_gadget_classes` of its core index and core data),
+    /// parsed once and then shared: the engine wants them from several systems per load (hand items, menus, vendor,
+    /// travel, after-images, audio defs), and each parse WAD-decompresses all 63 class streams.
+    pub fn gadgets(&self, root: &Path, index: u32) -> Result<Arc<[GadgetClass]>, Error> {
+        let t0 = Instant::now();
+        let key = (root.to_path_buf(), index);
+        if let Some(a) = self.lock().gadgets.get(&key) { return Ok(a.clone()); }
+        // Not under the lock: `get` takes it.
+        let data = self.get(root, &cache::core_data_rel(index))?;
+        let path = root.join(format!("levels/{index:02}/core_index.bin"));
+        let raw = std::fs::read(&path).map_err(|err| Error::Source { path: path.clone(), err })?;
+        let parsed = rc_formats::level::parse_level_core(&raw, data.len())
+            .and_then(|core| rc_formats::gadget::parse_gadget_classes(&core, &data))
+            .map_err(|err| Error::Parse { path, err })?;
+        let a: Arc<[GadgetClass]> = Arc::from(parsed);
+        if self.log_requests { println!("rc-data: level {index:02} gadget classes: parsed ({}, {:.1} ms)", a.len(), t0.elapsed().as_secs_f64() * 1e3); }
+        let mut g = self.lock();
+        g.stats.gadget_parses += 1;
+        // A racing request may have parsed them too: keep the first.
+        Ok(g.gadgets.entry(key).or_insert(a).clone())
+    }
+
     /// Drops the lumps this store holds for `root` (they stay alive where still referenced). For a future level
     /// change; the engine loads one level per process today.
-    pub fn forget(&self, root: &Path) { self.lock().lumps.retain(|(r, _), _| r != root); }
+    pub fn forget(&self, root: &Path) {
+        let mut g = self.lock();
+        g.lumps.retain(|(r, _), _| r != root);
+        g.gadgets.retain(|(r, _), _| r != root);
+    }
 
     /// Drops the lumps of level `index` (`levels/NN/…`) this store holds for `root` (still alive where referenced): the
     /// engine's runtime level change frees the level it left, as the game reuses the level's memory.
     pub fn forget_level(&self, root: &Path, index: u32) {
         let prefix = format!("levels/{index:02}/");
-        self.lock().lumps.retain(|(r, rel), _| r != root || !rel.starts_with(&prefix));
+        let mut g = self.lock();
+        g.lumps.retain(|(r, rel), _| r != root || !rel.starts_with(&prefix));
+        g.gadgets.retain(|(r, l), _| r != root || *l != index);
     }
 }
 
@@ -211,6 +247,9 @@ pub fn level_core_data(root: &Path, index: u32) -> Result<Arc<[u8]>, Error> { wa
 
 /// `levels/NN/gameplay_ntsc.bin`, decompressed.
 pub fn level_gameplay(root: &Path, index: u32) -> Result<Arc<[u8]>, Error> { wad_lump(root, &cache::gameplay_rel(index)) }
+
+/// The gadget classes of level `index`, parsed once ([`Lumps::gadgets`]).
+pub fn level_gadgets(root: &Path, index: u32) -> Result<Arc<[GadgetClass]>, Error> { global().gadgets(root, index) }
 
 /// `levels/NN/hud_bank_B.bin`, decompressed.
 pub fn hud_bank(root: &Path, index: u32, bank: usize) -> Result<Arc<[u8]>, Error> { wad_lump(root, &cache::hud_bank_rel(index, bank)) }

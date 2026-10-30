@@ -281,15 +281,16 @@ fn keep_absent_hidden(attach: Option<Res<MobyAttach>>, mut q: Query<&mut Visibil
     }
 }
 
-/// Ratchet's class blob (joint lists) and the gadget classes, re-read from the level's core data.
-pub(crate) fn load_blobs() -> Result<(Vec<u8>, Vec<gadget::GadgetClass>)> {
+/// Ratchet's class blob (joint lists), re-read from the level's core data, and the gadget classes (parsed once per
+/// level, `rc_data::level_gadgets`).
+pub(crate) fn load_blobs() -> Result<(Vec<u8>, std::sync::Arc<[gadget::GadgetClass]>)> {
     let (root, index) = (crate::level_load::extracted_root(), crate::level_load::level_index());
     let read = |name: &str| crate::disc_source::level_file(&root, index, name);
     let data = rc_data::level_core_data(&root, index).context("decompressing core_data")?;
     let core = rc_formats::level::parse_level_core(&read("core_index.bin")?, data.len()).context("parsing core index")?;
     let blk = core.blocks.iter().find(|b| b.name == "moby_class/0000").ok_or_else(|| anyhow!("no moby_class/0000 block"))?;
     let ratchet = data.get(blk.offset..blk.offset + blk.size).ok_or_else(|| anyhow!("moby_class/0000 out of range"))?.to_vec();
-    let gadgets = gadget::parse_gadget_classes(&core, &data).context("parsing gadget classes")?;
+    let gadgets = rc_data::level_gadgets(&root, index).context("parsing gadget classes")?;
     Ok((ratchet, gadgets))
 }
 
@@ -407,7 +408,7 @@ fn build(
     }
     // Every other gadget class of the level can be the hand item when the game ticks (the Pyrocitor, …): drawn where
     // the game's item update places it (the attach list below only matters without the game tick, where they hide).
-    for g in &gadgets {
+    for g in gadgets.iter() {
         if specs.iter().any(|s| s.1.o_class == g.moby.o_class) { continue; }
         let Ok(seqs) = moby_anim::parse_sequences(&g.blob, &g.moby.class) else { continue };
         specs.push(("hand item", g.moby.clone(), MobyAnimClass::new(&g.moby.class, seqs), host(Slot::Hand, WRENCH_ATTACH)));

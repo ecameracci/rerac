@@ -388,7 +388,7 @@ fn item_data(lv: &crate::level_load::LoadedLevel) -> anyhow::Result<ItemTablesOu
     // The gadget classes' joint-list targets (the hand records and the Metal Detector's head node act on them:
     // rc_game::hero::gadgets::hand_modifiers).
     let mut item_targets = Vec::new();
-    for g in &gadgets {
+    for g in gadgets.iter() {
         let c = &g.moby.class;
         let seqs = rc_formats::moby_anim::parse_sequences(&g.blob, c).with_context(|| format!("gadget {} sequences", g.moby.o_class))?;
         let chains = (0..16).map_while(|l| gadget::joint_list(&g.blob, &c.header, l).ok().map(|(a, _)| a)).collect();
