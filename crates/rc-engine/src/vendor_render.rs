@@ -285,7 +285,6 @@ fn draw(
             }
         }
         if !prims.is_empty() {
-            for m in &mut hook.icons { m.at += prims.len(); }
             prims.extend(std::mem::take(&mut hook.prims));
             hook.prims = prims;
         }

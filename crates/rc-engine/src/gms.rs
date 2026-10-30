@@ -105,7 +105,7 @@ impl Gms {
 }
 
 /// Valve's USB vendor id.
-const VALVE: u16 = 0x28de;
+pub(crate) const VALVE: u16 = 0x28de;
 
 /// A Valve device's name by its product id, over the OS's (which is often generic): the Steam Deck's controls
 /// (0x1205), the Steam Controller wired or through its dongle (0x1102, 0x1142), Steam Input's virtual pad (0x11ff).

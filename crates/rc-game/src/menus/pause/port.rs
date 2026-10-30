@@ -209,6 +209,7 @@ pub mod text {
     pub const PS5: i32 = -0x331;
     pub const XBOX_ONE: i32 = -0x332;
     pub const AUTO: i32 = -0x333;
+    pub const STEAM: i32 = -0x334;
     pub const LIGHTBAR: i32 = -0x340;
     pub const LIGHTBAR_DEFAULT: i32 = -0x341;
     pub const ORANGE: i32 = -0x342;
@@ -311,6 +312,7 @@ If you like, you may change your options on the Port Options screen, under Contr
             PS5 => b"PS5",
             XBOX_ONE => b"Xbox One",
             AUTO => b"Auto",
+            STEAM => b"Steam",
             LIGHTBAR => b"Lightbar",
             LIGHTBAR_DEFAULT => b"Default",
             ORANGE => b"Orange",
@@ -393,7 +395,7 @@ pub enum Setting {
     TriggerEffects,
     /// Not a value: ✕ opens the Gadgetron Movement System page (module docs).
     Controller,
-    /// The button icons in text (the engine's): value 0 Original (the disc's), 1 PS5, 2 Xbox One, 3 Auto (the
+    /// The button icons in text (the engine's): value 0 Original (the disc's), 1 PS5, 2 Xbox One, 3 Steam, 4 Auto (the
     /// controller last used).
     ButtonIcons,
     /// The DualSense lightbar (the engine's): value 0 Default (the pad's own), 1 off, 2 Orange, 3 Green, 4 Blue, 5
@@ -439,7 +441,7 @@ pub const ENTRIES: &[Entry] = &[
     Entry { setting: Setting::VibrationStrength, label: text::VIBRATION_STRENGTH, values: &[text::LOW, text::MEDIUM, text::HIGH] },
     Entry { setting: Setting::FireButton, label: text::FIRE_BUTTON, values: &[text::CIRCLE, text::R2] },
     Entry { setting: Setting::TriggerEffects, label: text::TRIGGER_EFFECTS, values: &[text::ON, text::OFF] },
-    Entry { setting: Setting::ButtonIcons, label: text::BUTTON_ICONS, values: &[text::ORIGINAL, text::PS5, text::XBOX_ONE, text::AUTO] },
+    Entry { setting: Setting::ButtonIcons, label: text::BUTTON_ICONS, values: &[text::ORIGINAL, text::PS5, text::XBOX_ONE, text::STEAM, text::AUTO] },
     Entry { setting: Setting::Lightbar, label: text::LIGHTBAR, values: &[text::LIGHTBAR_DEFAULT, text::OFF, text::ORANGE, text::GREEN, text::BLUE, text::HEALTH] },
 ];
 
