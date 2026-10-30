@@ -20,8 +20,8 @@
 //!   lock +0x0c; the look stance 1 becomes 0x1e; in first person (not 0x1413fc) a ray 50 along the view marks the
 //!   targetable moby it hits (+0x10 for `ticks(20)`, +0x18 its hit height) and the crosshair (FX 0x21: red, green
 //!   with a target); ○ held (not in the groups 3 / 7 / 0x11 / 0x12, ready for more than `ticks(22)`, the lock clear,
-//!   something held, the timer out) → the arm out, the firing sequence 5 (2 ticks), the swap lock 2, timer
-//!   `ticks(25)` → 5.
+//!   something held, the timer out) → the arm out, the firing sequence 5 (2 ticks; restarted when still playing [L],
+//!   so every shot plays its trigger, class sound 1), the swap lock 2, timer `ticks(25)` → 5.
 //! * 5 (firing): at the firing key (`MobyAnimKeyTime ≥ 0`) the first held moby leaves its slot at the muzzle (joint
 //!   list 0; in first person 0.15 right, 0.3 down, 1 ahead of the eye) with `0.4462·dt`-per-tick… (0.4462 a tick)
 //!   along the aim (Ratchet's aim row 0x13f990, or the view), plus Ratchet's velocity 0x13f450; outside first person
@@ -110,6 +110,13 @@ fn blend(hero: &mut Hero, env: &ItemEnv, seq: u8, n: i32) {
     let Some(it) = hero.items.slot.item.as_mut() else { return };
     let Some(class) = env.data.class(it.o_class) else { return };
     if it.anim.seq_b != seq { moby_anim::set_sequence(&mut it.anim, &class.anim, seq, 0, ticks(n), &mut it.snapshot); }
+}
+
+/// The firing sequence 5 (2 ticks), restarted when it is still playing (state 4's fire).
+fn fire_blend(hero: &mut Hero, env: &ItemEnv) {
+    let Some(it) = hero.items.slot.item.as_mut() else { return };
+    let Some(class) = env.data.class(it.o_class) else { return };
+    moby_anim::set_sequence(&mut it.anim, &class.anim, 5, 0, ticks(2), &mut it.snapshot);
 }
 
 fn wrapped(hero: &Hero) -> bool { hero.items.slot.item.as_ref().is_some_and(|it| it.anim.flags & 2 != 0) }
@@ -310,7 +317,9 @@ pub fn update(hero: &mut Hero, table: &mut MobyTable, _anim: &dyn super::anim::A
             let s = &hero.weapons.reactive.suck;
             if s.lock == 0 && 0 < held && s.timer == 0 && held_btn && !matches!(hero.group, 7 | 3 | 0x12) && hero.group != 0x11 && !busy && ticks(0x16) < hero.items.slot.ticks_ready {
                 hero.weapons.pending_draw = true;
-                blend(hero, env, 5, 2);
+                // Restarted even when still in sequence 5 [L]: a shot 26 ticks after the last one lands before the
+                // sequence wraps, and only a restart re-arms its trigger (class sound 1, the shot's sound).
+                fire_blend(hero, env);
                 hero.items.slot.swap = 2;
                 hero.weapons.reactive.suck.timer = ticks(0x19);
                 set_st(hero, 5);
