@@ -64,10 +64,10 @@ fn owners(lv: &crate::level_load::LoadedLevel) -> [Option<Owner>; 2] {
         Some(Owner { class: m.classes[p.class].clone(), anim: m.anim[p.class].clone(), scale: p.scale })
     });
     let wrench = crate::moby_attach::load_blobs().ok().and_then(|(_, gadgets)| {
-        let g = gadgets.into_iter().find(|g| g.moby.o_class == rc_formats::gadget::WRENCH_O_CLASS)?;
+        let g = gadgets.iter().find(|g| g.moby.o_class == rc_formats::gadget::WRENCH_O_CLASS)?;
         let seqs = moby_anim::parse_sequences(&g.blob, &g.moby.class).ok()?;
         let scale = g.moby.class.header.scale;
-        Some(Owner { anim: MobyAnimClass::new(&g.moby.class, seqs), class: g.moby, scale })
+        Some(Owner { anim: MobyAnimClass::new(&g.moby.class, seqs), class: g.moby.clone(), scale })
     });
     [ratchet, wrench]
 }

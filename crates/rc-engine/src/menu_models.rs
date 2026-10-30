@@ -257,7 +257,7 @@ fn setup(
     for o in [601, 607, 608, 609, 433, 1289, 1290, 173, 195, 0x1df] {
         if let Some(c) = level_class(o) { classes.push(c); }
     }
-    for g in &gadgets {
+    for g in gadgets.iter() {
         let Ok(seqs) = moby_anim::parse_sequences(&g.blob, &g.moby.class) else { continue };
         classes.push((g.moby.clone(), MobyAnimClass::new(&g.moby.class, seqs)));
     }

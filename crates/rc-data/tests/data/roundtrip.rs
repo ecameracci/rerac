@@ -7,6 +7,7 @@
 use rc_data::cache::{self, Cache, Ensured};
 use rc_data::Lumps;
 use rc_formats::wad;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 #[test]
@@ -55,4 +56,33 @@ fn every_cached_lump_equals_fresh_decompression_for_all_19_levels() {
          decompress {:.0} ms total vs cached read + check {:.0} ms total",
         bytes as f64 / (1u64 << 20) as f64, t_decompress.as_secs_f64() * 1e3, t_cached.as_secs_f64() * 1e3
     );
+}
+
+/// `Lumps::gadgets` on all 19 levels: the same classes as a fresh `parse_gadget_classes`, parsed once per level until
+/// `forget_level`. Memory only (no cache folder).
+#[test]
+fn gadget_classes_are_parsed_once_and_equal_a_fresh_parse_for_all_19_levels() {
+    let root = rc_formats::test_data::root();
+    if !root.join("levels/01/core_data.bin").is_file() {
+        eprintln!("skipping: no development data tree at {}", root.display());
+        return;
+    }
+    let s = Lumps::with_cache_dir(None);
+    for level in 0..19u32 {
+        let data = wad::decompress(&std::fs::read(root.join(cache::core_data_rel(level))).unwrap()).unwrap();
+        let index = std::fs::read(root.join(format!("levels/{level:02}/core_index.bin"))).unwrap();
+        let core = rc_formats::level::parse_level_core(&index, data.len()).unwrap();
+        let fresh = rc_formats::gadget::parse_gadget_classes(&core, &data).unwrap();
+        let a = s.gadgets(&root, level).unwrap();
+        let b = s.gadgets(&root, level).unwrap();
+        assert!(Arc::ptr_eq(&a, &b), "level {level:02}: the second request shares the first parse");
+        assert_eq!(a.len(), fresh.len(), "level {level:02}");
+        for (g, f) in a.iter().zip(&fresh) {
+            assert_eq!((g.moby.o_class, &g.blob, g.entry.offset_in_asset_wad), (f.moby.o_class, &f.blob, f.entry.offset_in_asset_wad), "level {level:02}");
+        }
+        assert_eq!(s.stats().gadget_parses, level as u64 * 2 + 1, "level {level:02}: parsed once");
+        // A level change frees them; the next request parses again.
+        s.forget_level(&root, level);
+        assert!(!Arc::ptr_eq(&a, &s.gadgets(&root, level).unwrap()), "level {level:02}: parsed again after forget_level");
+    }
 }

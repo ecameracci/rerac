@@ -1095,10 +1095,10 @@ pub(crate) fn hide_gfx(g: &ActorGfx, q: &mut Query<(&mut Transform, &mut Visibil
 /// Class `o_class` of the level's gadget table (`crate::moby_attach::load_blobs`) with its sequences.
 fn gadget_class(o_class: i32) -> Option<(LevelMobyClass, MobyAnimClass)> {
     let (_, gadgets) = crate::moby_attach::load_blobs().map_err(|e| eprintln!("travel: gadget classes: {e:#}")).ok()?;
-    let g = gadgets.into_iter().find(|g| g.moby.o_class == o_class)?;
+    let g = gadgets.iter().find(|g| g.moby.o_class == o_class)?;
     let seqs = moby_anim::parse_sequences(&g.blob, &g.moby.class).map_err(|e| eprintln!("travel: gadget {o_class} sequences: {e}")).ok()?;
     let anim = MobyAnimClass::new(&g.moby.class, seqs);
-    Some((g.moby, anim))
+    Some((g.moby.clone(), anim))
 }
 
 /// The actors' classes (the level's, the spaceships file's 530..537, or the level's gadget table) as extra mobys, each with its streamed sequence in

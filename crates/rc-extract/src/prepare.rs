@@ -35,12 +35,12 @@ pub struct Prepared {
 }
 
 /// Maps a cache error to the contract's codes: unreadable Tier 0 = 10, a Tier 0 lump that does not decompress = 40
-/// (the archive is damaged), a failed write = 30 (31 when the disk is full).
+/// (the archive is damaged, as is a lump that does not parse), a failed write = 30 (31 when the disk is full).
 fn cache_error(e: rc_data::Error) -> Error {
     match e {
         rc_data::Error::Write { path, err } => workers::write_error(&path, err),
         e @ rc_data::Error::Source { .. } => Error::new(Code::CannotRead, e.to_string()),
-        e @ rc_data::Error::Wad { .. } => Error::new(Code::VerifyFailed, format!("{e}; run `rerac-extract verify` and re-extract")),
+        e @ (rc_data::Error::Wad { .. } | rc_data::Error::Parse { .. }) => Error::new(Code::VerifyFailed, format!("{e}; run `rerac-extract verify` and re-extract")),
     }
 }
 

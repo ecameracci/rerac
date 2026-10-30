@@ -424,7 +424,7 @@ orchestrator's log record for it.
 | ID | Gap | Source | Seen | Depends on | Batch |
 |---|---|---|---|---|---|
 | G-EXT-001 | Pending user decisions: strip debug info and LTO in release builds; `MACOSX_DEPLOYMENT_TARGET` | agent report 2026-09-26 ("Pending user decisions") | no | user | Launcher release |
-| G-EXT-002 | Uncached parser decompressions (gadgets, scenes) | agent report 2026-09-26 (queue item 7) | no | — | Extractor |
+| ~~G-EXT-002~~ | ~~Uncached parser decompressions (gadgets, scenes)~~ **closed 2026-10-29** (`rc_data::level_gadgets`): the gadget classes are parsed once per level (they were parsed 7 times per load: `moby_attach::load_blobs` ×6 and the audio defs) and dropped with `forget_level`. Scenes stay uncached on purpose: a scene start decompresses its chunks once and nothing re-reads them, so a cache would only help a replay while holding every played scene in memory | agent report 2026-09-26 (queue item 7) | no | — | Extractor |
 | G-EXT-003 | Tier 1 v2+ baked products (only when profiling shows a load or parse cost); ELF / overlay tables lifted into typed data | launcher_extractor.md §5 | no | G-TOOL-001 | Extractor |
 | G-EXT-004 | Lumps kept only as archive until understood: `bindata` (level 06, 5.4 MB), `stuff2`, `anim_looking_thing_2`, `wad_14e0`, `things` (caller `FUN_002594e0`), `wad_things` (some are space scenes) | launcher_extractor.md §3 table; cutscenes_transitions.md §8 | no | G-LVL-001 | Extractor |
 | G-EXT-005 | Stage-1 leftovers: the 19-level smoke run and the before / after deterministic capture; `rc_formats::disc` still public in `rc-formats` | launcher_extractor.md §8 "Not done from the plan" | no | — | Extractor |

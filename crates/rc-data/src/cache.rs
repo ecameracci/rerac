@@ -92,6 +92,8 @@ pub enum Error {
     Wad { path: PathBuf, err: rc_formats::buf::FormatError },
     /// Creating, writing, renaming or deleting a cache file failed.
     Write { path: PathBuf, err: io::Error },
+    /// A Tier 0 file or decompressed lump does not parse (`crate::level_gadgets`).
+    Parse { path: PathBuf, err: rc_formats::buf::FormatError },
 }
 
 impl fmt::Display for Error {
@@ -100,6 +102,7 @@ impl fmt::Display for Error {
             Error::Source { path, err } => write!(f, "cannot read {}: {err}", path.display()),
             Error::Wad { path, err } => write!(f, "{} is not a valid WAD stream ({err}); the game data is damaged", path.display()),
             Error::Write { path, err } => write!(f, "cannot write {}: {err}", path.display()),
+            Error::Parse { path, err } => write!(f, "cannot parse {}: {err}", path.display()),
         }
     }
 }
@@ -108,7 +111,7 @@ impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Error::Source { err, .. } | Error::Write { err, .. } => Some(err),
-            Error::Wad { err, .. } => Some(err),
+            Error::Wad { err, .. } | Error::Parse { err, .. } => Some(err),
         }
     }
 }
