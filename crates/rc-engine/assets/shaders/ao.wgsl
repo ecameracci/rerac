@@ -4,7 +4,7 @@
 // `occlusion`: for a pixel at view position C with normal N, taps S_i on a per-pixel rotated spiral of the radius's
 // screen size; each occludes by max(0, (S_i − C)·N − ε) / (|S_i − C|² + δ), faded by its distance over the radius.
 // ao = 1 − 2·Σ/taps (clamped), written to an R8 target. `apply`: a 4×4 depth-aware blur of that target, returned as
-// the factor mix(1, ao, strength) that the pass multiplies into the frame, except on the mobys (`moby_mask`).
+// the factor mix(1, ao, strength) that the pass multiplies into the frame, except on the mobys (`on_moby`).
 
 #import bevy_core_pipeline::fullscreen_vertex_shader::FullscreenVertexOutput
 #import rerac::fx_view::{view, fx_view_pos, fx_normal, fx_noise}
@@ -16,29 +16,17 @@
 #endif
 @group(0) @binding(2) var ao_tex: texture_2d<f32>;
 
-// crate::ao_render::AoMobys.
-struct AoMobys {
-    boxes: array<mat4x4<f32>, 32>,
-    fade: array<vec4<f32>, 32>,
-    count: u32,
-}
-@group(0) @binding(3) var<uniform> mobys: AoMobys;
+// crate::ao_render `MASK`: per pixel of the view, the bits of the nearest moby fragment's depth (moby.wgsl), 0 for none.
+@group(0) @binding(3) var<storage, read> mobys: array<u32>;
 
-// 1 on a moby: inside one of the boxes (world → [-1, 1]³), fading to 0 over the fade's share of each half extent
-// outside each face (a box face is the moby's own surface), so a wall it hangs against keeps its occlusion beyond
-// that; at the bottom face (box z −1: its feet) the fade is inside, so the floor it stands on keeps its occlusion under
-// an overhanging edge too. `c` is the pixel's view position.
-fn moby_mask(c: vec3<f32>) -> f32 {
-    let w = view.world_from_view * vec4<f32>(c, 1.0);
-    var k = 0.0;
-    for (var i = 0u; i < mobys.count; i += 1u) {
-        let s = (mobys.boxes[i] * w).xyz;
-        let f = mobys.fade[i].xyz;
-        var e = vec3<f32>(1.0) - smoothstep(vec3<f32>(1.0), vec3<f32>(1.0) + f, abs(s));
-        if (s.z < 0.0) { e.z = smoothstep(-1.0, -1.0 + f.z, s.z); }
-        k = max(k, e.x * e.y * e.z);
-    }
-    return k;
+// A moby's own pixel: its depth there (reverse Z) is the pixel's `d`, within 1 % (the moby's fragment depth is taken
+// at the pixel centre, `d` at depth sample 0).
+fn on_moby(p: vec2<i32>, d: f32) -> bool {
+    let q = vec2<u32>(p - vec2<i32>(view.viewport.xy));
+    let i = q.y * u32(view.viewport.z) + q.x;
+    if (i >= arrayLength(&mobys)) { return false; }
+    let m = bitcast<f32>(mobys[i]);
+    return m > 0.0 && m >= d * 0.99;
 }
 
 fn depth_at(p: vec2<i32>) -> f32 {
@@ -105,7 +93,7 @@ fn apply(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
         }
     }
     var ao = select(1.0, sum / weight, weight > 0.0);
-    ao = mix(ao, 1.0, moby_mask(c));
+    if (on_moby(p, d)) { ao = 1.0; }
     let k = mix(1.0, ao, view.params.z);
     return vec4<f32>(k, k, k, 1.0);
 }
