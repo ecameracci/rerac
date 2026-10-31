@@ -331,12 +331,18 @@ impl Game {
         carriers.wall = (wall != 0).then(|| hooks.world.as_deref().and_then(|w| w.spline(wall)).map(|p| (wall, p))).flatten();
         // The weapon's target (0x13fda0) where the moby loop left it (SetState 0x23 aims at it).
         crate::hero::weapons::refresh_aim(&mut self.hero, &self.mobys);
+        // Port-only: the hero sees a neutral pad in the ship mode (game mode 6, crate::travel::space). Ratchet sits in the
+        // scene state 100 there and reads none of it, but Orxon's Clank (no O2 Mask) is handed the hero in the level's
+        // load pass and stands in his idle state through the landing (crate::moby_update::classes::units::clank_section),
+        // so the ✕ that skips the landing made him jump (session 2026-10-31_10-37-31). Not checked against the decomp.
+        let neutral = PadState::default();
+        let hero_pad = if self.hero.gadgets.game_mode == 6 { &neutral } else { &self.pad };
         let hero_tick = {
             let mobys = scene.as_ref().map(OwnedScene::scene);
             let view = self.camera.out;
             let env = Env {
                 coll,
-                pad: &self.pad,
+                pad: hero_pad,
                 cam_yaw: view.yaw(),
                 cam_rows: view.rows,
                 mirror: self.options.mirror,
