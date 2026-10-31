@@ -260,6 +260,9 @@ pub struct MobyMaterial {
     /// `MobyLod` per instance (crate::moby_lod), indexed by `MeshTag`.
     #[storage(7, read_only, visibility(vertex))]
     pub lods: Handle<ShaderBuffer>,
+    /// The ambient occlusion's moby mask (crate::ao_render::mask_buffer), written by the fragments.
+    #[storage(8, visibility(fragment))]
+    pub ao_mask: Handle<ShaderBuffer>,
     /// This draw's GS state (crate::gs_state; same TEST_1 as tfrags, AREF 0x08 while fading).
     pub pass: GsPass,
     /// Drawn in moby order ([`ExtraMobys::set_ordered`]): the moby's place in `DrawMobys`' list.
@@ -618,6 +621,7 @@ impl MatCache {
                     normal_table: proto.normal_table.clone(),
                     cpu_colors: proto.cpu_colors.clone(),
                     lods: proto.lods.clone(),
+                    ao_mask: crate::ao_render::mask_buffer(),
                     pass,
                     order,
                 })
@@ -1478,7 +1482,9 @@ pub fn update_moby_occlusion(
                     (true, Some((sphere, eye, rows))) => moby_lod::shine_basis(sphere, eye, &rows, &inp.rows),
                     _ => [[0.0; 3]; 3],
                 };
-                (p.alpha, if s.tint && p.low_lod { moby_lod::FLAG_TINT } else { 0 }, if w.metal { p.shine } else { 0 }, e)
+                let big = sphere.is_some_and(|(s, _, _)| s[3] > crate::ao_render::MOBY_MAX_RADIUS * crate::game_camera::UNITS);
+                let flags = if s.tint && p.low_lod { moby_lod::FLAG_TINT } else { 0 } | if big { moby_lod::FLAG_AO_WORLD } else { 0 };
+                (p.alpha, flags, if w.metal { p.shine } else { 0 }, e)
             }
             (None, Some(_)) => (inp.alpha, 0, 0, [[0.0; 3]; 3]),
             _ => (0x80, 0, 0, [[0.0; 3]; 3]),

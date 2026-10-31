@@ -208,6 +208,8 @@ pub fn metal_enabled() -> bool { !std::env::var("RC_MOBY_METAL").is_ok_and(|v| v
 pub const LOD_RECORD_SIZE: usize = 64;
 /// `MobyLod.misc.y` bit: tint this instance (low LOD with `RC_MOBY_LOD_TINT=1`).
 pub const FLAG_TINT: u32 = 1;
+/// `MobyLod.misc.y` bit: occluded like the world (crate::ao_render: a bounding sphere over `MOBY_MAX_RADIUS`).
+pub const FLAG_AO_WORLD: u32 = 2;
 /// `MobyLod.misc.w` bit: the moby is on the glow list (mode 0x10); bits 0..23 are its glow RGB (moby+0x90).
 pub const GLOW_ON: u32 = 1 << 24;
 

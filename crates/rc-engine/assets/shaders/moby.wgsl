@@ -19,6 +19,7 @@
 
 #import bevy_pbr::{
     mesh_functions,
+    mesh_view_bindings::view,
     view_transformations::{position_world_to_clip, position_world_to_view},
 }
 #ifdef DISPLAY_BLEND_MIX
@@ -67,6 +68,8 @@ struct MobyLod {
     e: array<vec4<f32>, 3>,
 }
 @group(#{MATERIAL_BIND_GROUP}) @binding(7) var<storage, read> lods: array<MobyLod>;
+// crate::ao_render `MASK`: per pixel of the view (rows of its width), the bits of the nearest moby fragment's depth.
+@group(#{MATERIAL_BIND_GROUP}) @binding(8) var<storage, read_write> ao_mask: array<atomic<u32>>;
 
 struct MobyVertex {
     @builtin(instance_index) instance_index: u32,
@@ -87,6 +90,8 @@ struct MobyVertexOutput {
     @location(1) @interpolate(linear) color: vec4<f32>,
     // GS F / 255, screen-space linear like the GS.
     @location(2) @interpolate(linear) fog: f32,
+    // 1: the fragment goes into the ambient occlusion's moby mask (not `FLAG_AO_WORLD`).
+    @location(3) @interpolate(flat) ao_mask: u32,
 }
 
 fn s16(x: i32) -> i32 { return (x << 16u) >> 16u; }
@@ -227,6 +232,7 @@ fn vertex(v: MobyVertex) -> MobyVertexOutput {
     // VU: w = depth * slope (the w row of the matrix), += qw661.w, min qw656.z, max qw656.y, ftoi4.
     let fg = max(min(depth * fog.params.x + fog.params.y, fog.params.w), fog.params.z);
     out.fog = trunc(fg) / 255.0;
+    out.ao_mask = select(1u, 0u, ((*lod).misc.y & 2u) != 0u);
     return out;
 }
 
@@ -259,6 +265,13 @@ fn fragment(in: MobyVertexOutput) -> @location(0) vec4<f32> {
 #else ifdef DISPLAY_BLEND_ADD
     return gs_add(round(rgb * 255.0), a_s);
 #else
+#ifndef GS_ATEST_FAIL
+    // The Z-writing draws into the ambient occlusion's moby mask (crate::ao_render): reverse Z, so the largest bits
+    // are the nearest fragment.
+    let q = vec2<u32>(in.position.xy - view.viewport.xy);
+    let i = q.y * u32(view.viewport.z) + q.x;
+    if (in.ao_mask != 0u && i < arrayLength(&ao_mask)) { atomicMax(&ao_mask[i], bitcast<u32>(in.position.z)); }
+#endif
     return vec4<f32>(srgb_to_linear(rgb), a_s / 128.0);
 #endif
 }

@@ -33,3 +33,18 @@ file>" when it is fixed.
 - **Port:** `rc-game` `umbris_swamp` (states 1 and 2 of `update`, `swallow`), faithful to the port's reading of
   `0x30f5f0`; to recheck in the decomp that the 1 / 2 → 5 paths really leave +0x100 alone.
 - **Fix idea:** store the position in +0x100 and clear +0x14c on the 1 / 2 → 5 paths too, as the lunge does.
+
+### PPF-003: Gaspar's cannon flickers as Ratchet walks up to it
+
+- **Seen:** Gaspar, the cannon by (284, 344) (session 2026-10-30_15-54-38, marker 1). As Ratchet comes near, the
+  cannon sinks and turns toward him and its whole body flashes on and off for about two-thirds of a second, then
+  darkens again when he walks away.
+- **Why:** class 1201 (level09 `0x304c80`, idle state 4) allocates a white seat light (colour 4, radius 0.4, at the
+  seat + rows·(0, −0.3, −0.1)) once Ratchet is within 4 (xy) and blinks it for its first 40 ticks (radius 0 every
+  other 4 ticks); `MobyProc` (0x212150) merges every point light within its radius of a moby's sphere centre into
+  that moby's third directional light, so the seat light lights the whole cannon, not just the seat. Same under
+  Lighting Original and Enhanced (measured over a 180-frame dump: 4-frame steps until frame 42, a drop when the
+  light is freed).
+- **Port:** `rc-game` `gaspar_cannon` (`idle`) and `rc-engine` moby_render `point_light_merge`, faithful.
+- **Fix idea:** a port-only option to weaken the cannon's own merge of its seat light (or light only the vertices near
+  the seat), keeping the blink on the seat and the ground.
