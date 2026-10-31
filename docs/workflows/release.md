@@ -71,9 +71,10 @@ in a macOS `.app`; when neither exists (`cargo dev`, `target/*/rerac`) it uses t
 ## GitHub Actions (`.github/workflows/`)
 
 Only releases run on GitHub (no CI on pushes: checks and tests run locally, `docs/workflows/testing.md`). The release
-workflow builds on `macos-14` (Apple Silicon, the main tested platform), `windows-latest` and `ubuntu-22.04` (glibc 2.35;
-the job installs ALSA, udev, Wayland and xkbcommon headers and `zip`), installs stable Rust with
-rustup and caches with `Swatinem/rust-cache`.
+workflow builds on `macos-15` (Apple Silicon, the main tested platform; `macos-14` until its retirement on 2026-11-02,
+whose brownouts cancelled v0.5.1-alpha's first run), `windows-latest` and `ubuntu-22.04` (glibc 2.35; the job installs
+ALSA, udev, Wayland and xkbcommon headers and `zip`), installs stable Rust with rustup and caches with
+`Swatinem/rust-cache`.
 
 * **`release.yml`** (push of a `v*` tag; or by hand with `workflow_dispatch`, input `tag`: an existing tag to release
   again, or empty to only build the packages as workflow artifacts): one build job per platform runs
