@@ -11,7 +11,8 @@
 //!   step on their side (within 80°), their timers from their points'; it lasts `ticks(rand_range(56, 90))` (a thunder
 //!   sound, `0x294028(0)`: the level def 2 + 0, `World::play_level_def`); after the first `ticks(10)` the alpha cut is
 //!   `255·(1 − timer / (duration − ticks(10)))` (0x161cb4 the strike's timer: full brightness, fading to nothing as it
-//!   runs out) plus a flicker for the first `ticks(60)` (one sine over 20 ticks, ±128, wrapping as a byte) and, while
+//!   runs out) plus, on a strike lasting over `ticks(60)`, one flicker (a single sine sweep over about 20 ticks,
+//!   ±128, wrapping as a byte) and, while
 //!   the cut is under 50, sparks fly off the strike point (three pairs of type 53 a tick). The last five points ease straight.
 //! * **The draw** (`0x2edc18`): the bolt as camera-facing ribbons (FX 0x2d grey 0x7f7f7f, FX 0x2c red 0x7f4040 at
 //!   half the alpha and four times the width), 5 wide narrowing to 0.5 (`2t − t²`); the branches as ribbons sideways
