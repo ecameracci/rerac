@@ -43,7 +43,7 @@
 //! | state 0 | update distance 0xff; +0x34 = `ticks(1200)`; → 1 | [`help_update`] |
 //! | state 1 | the sentry +0x10 (class 0x4e, alive, not in state 3), Ratchet in cuboid +0x0c, group ok, the help idle: Hologuise (item 31) not owned → the reminder on record 0x7b → `Help_Request(15000, 0x7b)`; owned → record 0x7c armed, then its reminder → `(15001, 0x7c)` | [`help_update`] (`hints::remind` / `arm_or_remind`) |
 //! | | the level-15 death flag 0x15f5a4 set, the help idle, record 0x89 never closed → `(15007, 0x89)`, the flag cleared | [`help_update`] (the flag: `units.word(0x15f5a4)`; its writer, the death sequence on level 15, is not ported: `hero/damage.rs` module doc [L]) |
-//! | | cuboid +0x54, the disguise (body 3), 0x141630 = 0, the word 0x161ac0 = 0, record 0x88 never closed → `(15006, 0x88)` | [`help_update`] (body 3 never occurs in the port: G-WPN-006; 0x141630 read as 0 [L]) |
+//! | | cuboid +0x54, the disguise (body 3), 0x141630 = 0, the word 0x161ac0 = 0, record 0x88 never closed → `(15006, 0x88)` | [`help_update`] (0x141630: the guards' alert word, `HeroFields::disguise_alert`) |
 //! | | cuboid +0x00: counter +0x3c + 1, else 0 and +0x40 = −1; the sentry valid, +0x34 < +0x3c, the cuboid ≠ +0x40, group ok, idle, Hologuise owned → +0x34 = `ticks(1800)`, record 0x7d never shown → `(15002, 0x7d)`; +0x40 = the cuboid, +0x3c = 0 | [`help_update`] |
 //! | | the hero moby on sequence 0xc in Giant Clank (body 2) → flag 0x6f (0x13d3f7) | [`help_update`] |
 //! | | cuboid +0x1c, body 2, flag 0x6f clear, idle, record 0x80 never shown → `(15004, 0x80)` | [`help_update`] |
@@ -210,7 +210,7 @@ pub fn help_update(w: &mut World, id: MobyId) {
         request(w, 0x3a9f, 0x89);
         w.svc.units.set_word(DEATH_WORD, 0);
     }
-    if in_cuboid(w, id, 0x54) && w.body() == 3 && w.svc.units.word(HOLD_WORD) == 0 && w.svc.help.records.help[0x88].count == 0 {
+    if in_cuboid(w, id, 0x54) && w.body() == 3 && w.hero_fields().disguise_alert == 0 && w.svc.units.word(HOLD_WORD) == 0 && w.svc.help.records.help[0x88].count == 0 {
         request(w, 0x3a9e, 0x88);
     }
     let c0 = pvi(w, id, 0);

@@ -1470,7 +1470,8 @@ fn ship_fx(mode: &mut ShipMode, w: &mut World, id: MobyId, k: usize) {
 
 /// `FUN_0024a3d8`: the level-start landing puts Ratchet 0.75 behind himself on the ground (when the ground there is
 /// within 0.3 of his z) with the walk-to `0x249580(yaw, point, 1)` back to where he stood (`a0` = his position
-/// 0x13f3d0, stored over only after the call): he walks the 0.75 forward.
+/// 0x13f3d0, stored over only after the call): he walks the 0.75 forward. The ground line starts 1.0 above the point:
+/// its z + 0.5, and `$f12` still holds the 0.5 as `GroundHeight`'s up at the `jal 0x26e618` (0x24a430).
 fn walk_back(w: &mut World) {
     use crate::moby_update::services::HeroCall;
     let h = w.hero;
@@ -1479,7 +1480,7 @@ fn walk_back(w: &mut World) {
     let yaw = h.rot[2].to_f32();
     let mut p = [pos[0] - 0.75 * fwd[0], pos[1] - 0.75 * fwd[1], pos[2] - 0.75 * fwd[2] + 0.5];
     let v = [p[0], p[1], p[2], 0.0].map(crate::ps2v::Pf::f);
-    let g = w.ground_height(crate::ps2v::Pf::ZERO, v, 0).to_f32();
+    let g = w.ground_height(crate::ps2v::Pf::f(0.5), v, 0).to_f32();
     p[2] = g;
     if (pos[2] - g).abs() <= 0.3 {
         let f = w.hero_fields_mut();
