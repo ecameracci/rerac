@@ -400,8 +400,9 @@ pub fn update(w: &mut World, id: MobyId) {
     }
     if w.m(id).state == 6 { return; }
     // 0x2df510: `0x278720(gold Morph-o-Ray 0x13e535 ? 5.0 : 7.7, m, *gp−0x5380 = 0, P+0x20)`, the big-head cheat (0x15edb7);
-    // the gold byte is the one the morph copied into +0x74 [L: the game reads 0x13e535 each tick].
-    let s = if c::pi32(w, id, GOLD) != 0 { 5.0 } else { f32::from_bits(0x40f6_6666) };
+    // read each tick, not the copy in +0x74 (the placed chickens hold their own).
+    let gold = w.hero.weapons.gold.get(crate::hero::morph_ray::MORPH as usize).is_some_and(|&g| g != 0);
+    let s = if gold { 5.0 } else { f32::from_bits(0x40f6_6666) };
     crate::moby_update::manip::big_head(w, s, id, 0, id, 0x20);
     let mut here = pos0;
     // The displaced chicken (module doc).
