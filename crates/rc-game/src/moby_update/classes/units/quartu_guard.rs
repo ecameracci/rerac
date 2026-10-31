@@ -1096,8 +1096,10 @@ fn tail(w: &mut World, id: MobyId) {
     look(w, id);
     let told = c::pi16(w, id, o::TOLD) != 0;
     let calm = c::pi32(w, id, o::ALERT) == 2;
-    let (level, stamp) = if told { (2u16, w.counter as u32) } else if calm { ((c::pi16(w, id, o::WARY) != 0) as u16, w.counter as u32) } else { (2, 0) };
-    // 0x141630 is the hero block's (the disguise's colour reads it: crate::hero::hologuise); its tick stamp 0x1613e8.
+    let level: u16 = if told { 2 } else if calm { (c::pi16(w, id, o::WARY) != 0) as u16 } else { 2 };
+    // 0x141630 is the hero block's (the disguise's colour reads it: crate::hero::hologuise); its tick stamp 0x1613e8
+    // takes the frame counter 0x15f5cc whatever the level (L15 0x2979d8), so a calmer guard later in the tick keeps a 2.
+    let stamp = w.counter as u32;
     let sw = GUARD_STAMP;
     if stamp != w.svc.units.word(sw) || w.hero_fields().disguise_alert < level as i16 {
         w.hero_fields_mut().disguise_alert = level as i16;
