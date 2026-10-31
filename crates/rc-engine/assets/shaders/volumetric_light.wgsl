@@ -28,6 +28,8 @@ struct VolParams {
     shape: vec4<f32>,
     // crate::volumetric_light::SeaLevel: its y, 1 while known.
     sea: vec4<f32>,
+    // crate::volumetric_light::VolumetricLight::hero: Ratchet's bounding sphere (world; w 0: none).
+    hero: vec4<f32>,
     // crate::volumetric_light::flatten: the share taken out, the surroundings' radius (target pixels).
     flat: vec4<f32>,
     // The history's view and eye (w: 1 while valid).
@@ -86,7 +88,9 @@ fn shadow_weight(len: f32) -> f32 {
     return smoothstep(0.25 * vol.shape.z, vol.shape.z, len);
 }
 
-// 1 lit, 0 shadowed: one comparison tap (bilinear) in the cascade holding view depth `z`; lit outside the cascades.
+// 1 lit, 0 shadowed: one comparison tap (bilinear) in the cascade holding view depth `z`; lit outside the cascades,
+// and where the light reaches `world` through Ratchet's sphere and the map's occluder lies within it (his shadow, not
+// the shade he stands in: crate::volumetric_light::VolumetricLight::hero).
 fn sun_visibility(world: vec3<f32>, z: f32) -> f32 {
     var cascade = -1;
     let count = i32(vol.tint.w);
@@ -98,7 +102,29 @@ fn sun_visibility(world: vec3<f32>, z: f32) -> f32 {
     let ndc = c.xyz / c.w;
     let uv = ndc.xy * vec2<f32>(0.5, -0.5) + 0.5;
     if (any(uv < vec2<f32>(0.0)) || any(uv > vec2<f32>(1.0))) { return 1.0; }
-    return textureSampleCompareLevel(shadow_map, shadow_compare, uv, cascade, ndc.z);
+    let vis = textureSampleCompareLevel(shadow_map, shadow_compare, uv, cascade, ndc.z);
+    let r = vol.hero.w;
+    if (vis >= 1.0 || r <= 0.0) { return vis; }
+    let l = view.extra.xyz;
+    let v = vol.hero.xyz - world;
+    let along = dot(v, l);
+    if (along <= 0.0 || length(v - l * along) > r) { return vis; }
+    let h = sun.clip_from_world[cascade] * vec4<f32>(vol.hero.xyz, 1.0);
+    let e = sun.clip_from_world[cascade] * vec4<f32>(vol.hero.xyz + l * r, 1.0);
+    let hz = h.z / h.w;
+    // The compare's 2×2 footprint (textureGatherCompare order: (0,1), (1,1), (1,0), (0,0)), each texel lit or his.
+    let dz = abs(e.z / e.w - hz);
+    let size = vec2<i32>(textureDimensions(shadow_map));
+    let p = uv * vec2<f32>(size) - 0.5;
+    let base = vec2<i32>(floor(p));
+    let f = fract(p);
+    let offs = array<vec2<i32>, 4>(vec2<i32>(0, 1), vec2<i32>(1, 1), vec2<i32>(1, 0), vec2<i32>(0, 0));
+    var k = textureGatherCompare(shadow_map, shadow_compare, uv, cascade, ndc.z);
+    for (var i = 0; i < 4; i += 1) {
+        let occluder = textureLoad(shadow_map, clamp(base + offs[i], vec2<i32>(0), size - 1), cascade, 0);
+        if (abs(occluder - hz) <= dz) { k[i] = 1.0; }
+    }
+    return mix(mix(k.w, k.z, f.x), mix(k.x, k.y, f.x), f.y);
 }
 
 @fragment

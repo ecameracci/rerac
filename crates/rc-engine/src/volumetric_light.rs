@@ -9,8 +9,9 @@
 //!    [`LENGTH`] units ([`SKY_LENGTH`] toward the sky, so it does not wash out), in [`STEPS`] steps packed toward the
 //!    camera ([`step`]) from a per-pixel dithered start that moves every frame ([`jitter`]: interleaved gradient
 //!    noise plus the golden ratio per frame, so no fixed screen pattern survives step 2). Each step looks the sun's
-//!    cascades up (crate::sun_shadow `SunCascades`, one comparison tap): a lit step adds `σ·T·dt` of a uniform thin
-//!    medium ([`DENSITY`] σ, extinction `T = exp(−σt)`), weighted by the shadow around it ([`Shafts`]: in full
+//!    cascades up (crate::sun_shadow `SunCascades`, one comparison tap; lit where the occluder is Ratchet,
+//!    [`VolumetricLight::hero`]): a lit step adds `σ·T·dt` of a uniform thin medium ([`DENSITY`] σ, extinction
+//!    `T = exp(−σt)`), weighted by the shadow around it ([`Shafts`]: in full
 //!    within [`EDGE`] of a long shadow along the ray, [`OPEN`] in lit air far from one, so a shaded space with a lit
 //!    opening gets bold beams and open daylight stays clear), and the sum by the Henyey-Greenstein phase ([`phase`],
 //!    [`G`] blended [`ISO`] with an isotropic phase, [`phase_mix`]: forward scattering, strongest looking toward the
@@ -52,6 +53,7 @@ use crate::gameplay::Play;
 use crate::graphics::{GraphicsSettings, LightShafts};
 use crate::shadow_render::{ShadowCamera, ShadowGame};
 use crate::sun_shadow::{KeyLight, SunCascades};
+use crate::tfrag_render::game_to_bevy;
 use bevy::core_pipeline::{Core3d, Core3dSystems, FullscreenShader};
 use bevy::pbr::{ExtractedDirectionalLight, ViewShadowBindings};
 use bevy::prelude::*;
@@ -121,6 +123,10 @@ pub struct VolumetricLight {
     /// Linear RGB, brightest channel 1.
     pub tint: Vec3,
     pub strength: f32,
+    /// Ratchet's bounding sphere (world centre, radius; 0: none): his shadow does not shade the air, which looking
+    /// down along the sun read as a beam from his body (its long shadow column bounds the lit air beside it,
+    /// [`Shafts`]; Gaspar marker 3 of session 2026-10-30_15-54-38).
+    pub hero: Vec4,
 }
 
 /// The open sea's surface (Bevy y; crate::sea_render: the ocean 1111's sea z while its callback is registered). The
@@ -383,7 +389,9 @@ fn update(
     let color = game.filter(|_| play.is_some()).map_or(DEFAULT_COLOR, |g| g.sun_color());
     let fog = fog.map_or(Vec3::ONE, |f| Vec3::from_array(f.fog.color.map(|c| c as f32 / 255.0)));
     let on = gfx.lighting.enhanced() && key.sun_shadows && shafts.0;
-    let want = VolumetricLight { tint: tint(color, fog), strength: if on { INTENSITY * strength(color, key.to_light.y) * env_scale() } else { 0.0 } };
+    let hero = play.as_ref().and_then(|p| p.game.mobys.mobys.get(p.hero_id)).filter(|m| m.visible != 0 && m.bsphere[3] > 0.0);
+    let hero = hero.map_or(Vec4::ZERO, |m| game_to_bevy([m.bsphere[0], m.bsphere[1], m.bsphere[2]].map(|v| v / 1024.0)).extend(m.bsphere[3] / 1024.0));
+    let want = VolumetricLight { tint: tint(color, fog), strength: if on { INTENSITY * strength(color, key.to_light.y) * env_scale() } else { 0.0 }, hero };
     if on && *logged != Some(color) {
         *logged = Some(color);
         println!("volumetric light: key light colour {:.3?}, strength {:.3}, tint {:.3?} (RC_VOLUMETRIC=0 off)", color.to_array(), want.strength, want.tint.to_array());
@@ -404,6 +412,8 @@ struct VolParams {
     shape: Vec4,
     /// [`SeaLevel`]: its y, 1 while known.
     sea: Vec4,
+    /// [`VolumetricLight::hero`].
+    hero: Vec4,
     /// [`flatten`]'s share, the surroundings' radius in target pixels.
     flat: Vec4,
     /// The history's view (the temporal pass's reprojection).
@@ -554,6 +564,7 @@ fn volumetric_pass(
         extra: Vec4::new(sky, debug_gain(), size.x as f32, size.y as f32),
         shape: Vec4::new(open, edge.max(1.0), shade.max(1e-3), after_lit),
         sea: sea.and_then(|s| s.0).map_or(Vec4::ZERO, |y| Vec4::new(y, 1.0, 0.0, 0.0)),
+        hero: vol.hero,
         flat: Vec4::new(flat.clamp(0.0, 1.0), flat_radius.max(0.0) * size.y.div_ceil(2) as f32, 0.0, 0.0),
         prev_clip_from_world: prev.map_or(Mat4::IDENTITY, |p| p.clip_from_world),
         prev_eye: prev.map_or(Vec4::ZERO, |p| p.eye.extend(1.0)),
