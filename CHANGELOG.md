@@ -17,7 +17,7 @@ Fixes from playing v0.5.0.
 
 ## v0.5.0-alpha
 
-- Upstream ReRAC's fixes through its v0.3.8 (listed under v0.3.6 to v0.3.8 below).
+- Upstream ReRAC's fixes through its v0.3.8 (see its v0.3.6, v0.3.7 and v0.3.8 notes).
 - Cheats no longer switch on from ordinary moves on planets other than Novalis.
 - Keyboard and mouse: WASD and mouse look, the number keys pick quick-select items, and new mouse options in Port Options.
 - DualSense support over USB or Bluetooth, with rumble, trigger effects and the lightbar; Xbox pads and Steam Input pads rumble too.
