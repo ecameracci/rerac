@@ -143,7 +143,9 @@ fn collect_mobys(
             .mobys
             .mobys
             .iter()
-            .filter(|m| m.visible != 0)
+            // MobyProc's skips (deleted, mode bit 1): Ratchet's moby stays `visible` while hidden (in the Clank
+            // sections it stands at Clank's feet and its box lifted the grass around him, session 2026-10-30_23-50-16).
+            .filter(|m| m.visible != 0 && !m.is_deleted() && m.mode & rc_game::moby_runtime::mode::HIDDEN == 0)
             .filter_map(|m| {
                 let r = m.bsphere[3] / 1024.0;
                 if !(r > 0.0 && r <= MOBY_MAX_RADIUS) { return None; }
