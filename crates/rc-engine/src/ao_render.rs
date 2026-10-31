@@ -12,12 +12,15 @@
 //!
 //! **Mobys are not occluded** ([`AoMobys`]): the radius is about a character's head, so the occlusion would shade
 //! their bodies with their own heads and arms over the game's baked lighting. The apply pass leaves a pixel alone
-//! inside the bounding sphere of one of the [`MOBYS`] nearest drawn mobys (+0x31; spheres up to [`MOBY_MAX_RADIUS`],
-//! so props as large as a building keep the occlusion), above that moby's feet and in front of (view z) the sphere's
-//! centre, fading over the sphere's outer fifth, the first 0.15 units over the feet and the 0.1 units in front of the
-//! centre: the camera sees a moby's near half, so the wall or floor it stands or hangs against (behind the centre)
-//! keeps its occlusion instead of showing a bright disc around it (a fade behind the centre still lit the wall around
-//! Ratchet on Aridia's grab wall). Their depth still occludes the world around them.
+//! inside the box of one of the [`MOBYS`] nearest drawn mobys (+0x31; bounding spheres up to [`MOBY_MAX_RADIUS`], so
+//! props as large as a building keep the occlusion): its class's bind-pose bounds (the high LOD's packed vertex
+//! positions, [`ClassBoxes`]) placed as crate::moby_render draws it (rows +0xc0, scale +0x2c, position +0x10), padded
+//! by [`PAD`] on an animated class (limbs leave the bind pose; not under the feet), fading over the [`FADE`] units
+//! outside each face and inside the bottom one (its feet), so the wall it hangs against and the floor it stands on keep
+//! their occlusion up to its contact, under an overhanging edge too. The box does not depend on the view: the
+//! half-sphere in front of the bounding sphere's centre it replaces shaded the far faces and the corners of a crate,
+//! moving with the camera (Orxon marker 4 of session 2026-10-30_15-54-38). Their depth still occludes the world around
+//! them.
 
 use crate::fly_cam::FlyCam;
 use crate::fx_view::{self, depth_defs, depth_entry, Fullscreen, FxView, Pipelines};
@@ -57,15 +60,43 @@ pub const MAX_DISTANCE: f32 = 150.0;
 const MOBYS: usize = 32;
 /// Mobys with a larger bounding sphere (world units) are occluded like the world.
 const MOBY_MAX_RADIUS: f32 = 3.0;
+/// The mask's fade outside each face of a moby's box, inside its bottom face (world units).
+const FADE: f32 = 0.05;
+/// An animated class's box grows by this on every face but the bottom one (world units).
+const PAD: f32 = 0.15;
 
 /// `rerac::ao::AoMobys`: the mobys the apply pass leaves alone (module docs), this frame.
 #[derive(Resource, Clone, Copy, Default, ShaderType, ExtractResource)]
 struct AoMobys {
-    /// Bounding sphere (Bevy world centre, radius).
-    spheres: [Vec4; MOBYS],
-    /// The feet height (Bevy y: the moby's position z) of moby i at `feet[i / 4][i % 4]`.
-    feet: [Vec4; MOBYS / 4],
+    /// Bevy world → the moby's box as [-1, 1]³.
+    boxes: [Mat4; MOBYS],
+    /// The fade's width per box axis, as a share of the half extent (≤ 0.5).
+    fade: [Vec4; MOBYS],
     count: u32,
+}
+
+/// Per class (`o_class`): its bind-pose bounds in packed vertex units (min, max) and whether it animates. Rebuilt with
+/// the level.
+#[derive(Default)]
+struct ClassBoxes {
+    of: std::collections::HashMap<i32, (Vec3, Vec3, bool)>,
+}
+
+impl ClassBoxes {
+    fn new(level: &crate::level_load::LoadedLevel) -> Self {
+        let mut of = std::collections::HashMap::new();
+        for c in &level.mobys.classes {
+            let mut lo = Vec3::splat(f32::MAX);
+            let mut hi = Vec3::splat(f32::MIN);
+            for v in c.class.high_lod.iter().flat_map(|s| &s.vertices) {
+                let p = Vec3::from(v.packed_position().map(|x| x as f32));
+                lo = lo.min(p);
+                hi = hi.max(p);
+            }
+            if lo.x <= hi.x { of.insert(c.o_class, (lo, hi, c.class.header.joint_count > 1)); }
+        }
+        ClassBoxes { of }
+    }
 }
 
 /// The render-world set of the passes.
@@ -96,9 +127,18 @@ impl Plugin for AoPlugin {
 }
 
 /// The drawn mobys nearest the camera for [`AoMobys`].
-fn collect_mobys(play: Option<Res<Play>>, g: Option<Res<GraphicsSettings>>, cams: Query<&Transform, With<FlyCam>>, mut out: ResMut<AoMobys>) {
+fn collect_mobys(
+    play: Option<Res<Play>>,
+    level: Option<Res<crate::Level>>,
+    g: Option<Res<GraphicsSettings>>,
+    cams: Query<&Transform, With<FlyCam>>,
+    mut boxes: Local<ClassBoxes>,
+    mut out: ResMut<AoMobys>,
+) {
     let mut v = AoMobys::default();
-    if let (Some(p), Some(eye), true) = (play, cams.iter().next().map(|t| t.translation), g.is_some_and(|g| g.ao.on())) {        let mut near: Vec<(f32, Vec4, f32)> = p
+    if let Some(l) = level.as_ref().filter(|l| l.is_changed()) { *boxes = ClassBoxes::new(&l.0); }
+    if let (Some(p), Some(eye), true) = (play, cams.iter().next().map(|t| t.translation), g.is_some_and(|g| g.ao.on())) {
+        let mut near: Vec<(f32, Mat4, Vec4)> = p
             .game
             .mobys
             .mobys
@@ -109,13 +149,26 @@ fn collect_mobys(play: Option<Res<Play>>, g: Option<Res<GraphicsSettings>>, cams
                 if !(r > 0.0 && r <= MOBY_MAX_RADIUS) { return None; }
                 let c = game_to_bevy([m.bsphere[0] / 1024.0, m.bsphere[1] / 1024.0, m.bsphere[2] / 1024.0]);
                 let d = c.distance(eye) - r;
-                (d < MAX_DISTANCE).then_some((d, c.extend(r), m.position[2]))
+                if d >= MAX_DISTANCE { return None; }
+                let &(lo, hi, animated) = boxes.of.get(&(m.o_class as i32))?;
+                // The model matrix of the moby's draw (crate::moby_render `spawn_mobys`, `MobyOcclusion::drive`).
+                let rows = Mat3::from_cols(Vec3::from_slice(&m.rows[0]), Vec3::from_slice(&m.rows[1]), Vec3::from_slice(&m.rows[2]));
+                let model = Mat4::from_mat3_translation(crate::moby_render::axes() * rows * (m.scale / 1024.0), game_to_bevy([m.position[0], m.position[1], m.position[2]]));
+                // World units per packed unit on each box axis; the pad in packed units, none under the feet.
+                let k = Vec3::new(model.col(0).truncate().length(), model.col(1).truncate().length(), model.col(2).truncate().length());
+                if k.min_element() <= 1e-9 { return None; }
+                let pad = if animated { Vec3::splat(PAD) / k } else { Vec3::ZERO };
+                let (lo, hi) = (lo - pad.with_z(0.0), hi + pad);
+                let half_w = k * (hi - lo) * 0.5;
+                if half_w.min_element() <= 1e-4 { return None; }
+                let box_from_unit = model * Mat4::from_scale_rotation_translation((hi - lo) * 0.5, Quat::IDENTITY, (lo + hi) * 0.5);
+                Some((d, box_from_unit.inverse(), (Vec3::splat(FADE) / half_w).min(Vec3::splat(0.5)).extend(0.0)))
             })
             .collect();
         near.sort_by(|a, b| a.0.total_cmp(&b.0));
-        for (i, &(_, s, feet)) in near.iter().take(MOBYS).enumerate() {
-            v.spheres[i] = s;
-            v.feet[i / 4][i % 4] = feet;
+        for (i, &(_, b, f)) in near.iter().take(MOBYS).enumerate() {
+            v.boxes[i] = b;
+            v.fade[i] = f;
         }
         v.count = near.len().min(MOBYS) as u32;
     }

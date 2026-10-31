@@ -930,7 +930,7 @@ fn build_metal_parts(class: &LevelMobyClass, meshes: &mut Assets<Mesh>) -> (Vec<
 }
 
 /// `game_to_bevy` as a matrix (columns = images of game x, y, z).
-fn axes() -> Mat3 { Mat3::from_cols(Vec3::X, Vec3::NEG_Z, Vec3::Y) }
+pub(crate) fn axes() -> Mat3 { Mat3::from_cols(Vec3::X, Vec3::NEG_Z, Vec3::Y) }
 
 /// `MobyInst` (moby.wgsl): model (16 f32), light rows (3 vec4), light colours (3 vec4), −|K|, ambient,
 /// misc (u32: palette base, colour mode, CPU colour base, 0). 208 bytes.

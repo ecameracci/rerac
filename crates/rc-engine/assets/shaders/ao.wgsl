@@ -18,26 +18,25 @@
 
 // crate::ao_render::AoMobys.
 struct AoMobys {
-    spheres: array<vec4<f32>, 32>,
-    feet: array<vec4<f32>, 8>,
+    boxes: array<mat4x4<f32>, 32>,
+    fade: array<vec4<f32>, 32>,
     count: u32,
 }
 @group(0) @binding(3) var<uniform> mobys: AoMobys;
 
-// 1 on a moby: inside one of the spheres, above its feet and in front of its centre (0 over the sphere's outer
-// fifth, at the feet, and from the centre back, fading over the 0.1 units in front of it: the wall or floor a
-// character stands or hangs against is behind the body the camera sees, and keeps its occlusion). `c` is the pixel's
-// view position.
+// 1 on a moby: inside one of the boxes (world → [-1, 1]³), fading to 0 over the fade's share of each half extent
+// outside each face (a box face is the moby's own surface), so a wall it hangs against keeps its occlusion beyond
+// that; at the bottom face (box z −1: its feet) the fade is inside, so the floor it stands on keeps its occlusion under
+// an overhanging edge too. `c` is the pixel's view position.
 fn moby_mask(c: vec3<f32>) -> f32 {
-    let w = (view.world_from_view * vec4<f32>(c, 1.0)).xyz;
+    let w = view.world_from_view * vec4<f32>(c, 1.0);
     var k = 0.0;
     for (var i = 0u; i < mobys.count; i += 1u) {
-        let s = mobys.spheres[i];
-        let inside = 1.0 - smoothstep(0.8 * s.w, s.w, distance(w, s.xyz));
-        let above = smoothstep(0.0, 0.15, w.y - mobys.feet[i / 4u][i % 4u]);
-        let behind = (view.view_from_world * vec4<f32>(s.xyz, 1.0)).z - c.z;
-        let front = 1.0 - smoothstep(-0.1, 0.0, behind);
-        k = max(k, inside * above * front);
+        let s = (mobys.boxes[i] * w).xyz;
+        let f = mobys.fade[i].xyz;
+        var e = vec3<f32>(1.0) - smoothstep(vec3<f32>(1.0), vec3<f32>(1.0) + f, abs(s));
+        if (s.z < 0.0) { e.z = smoothstep(-1.0, -1.0 + f.z, s.z); }
+        k = max(k, e.x * e.y * e.z);
     }
     return k;
 }
