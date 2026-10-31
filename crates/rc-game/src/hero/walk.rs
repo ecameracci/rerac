@@ -192,8 +192,18 @@ impl Hero {
         }
     }
 
-    /// Walk / run anim selector 0x241a08 (state 2, stick ≥ 0.17).
+    /// Walk / run anim selector 0x241a08 (state 2, stick ≥ 0.17). In a body (L00's copy, the walk to a point 0x65)
+    /// only the playback: Clank |eff|·90 (≥ 0.5), the disguise |eff|·54 (≥ 0.7).
     pub(super) fn walk_run_anim(&mut self, c: &mut Ctx) {
+        let body = match self.mode {
+            1 => Some((Pf::f(90.0), Pf::f(0.5))),
+            3 => Some((Pf::f(54.0), Pf::f(0.7))),
+            _ => None,
+        };
+        if let Some((k, lo)) = body {
+            self.anim_speed = (self.eff_len * k).max(lo);
+            return;
+        }
         let old = self.substate;
         if ticks(4) < self.substate_timer && self.land_run_blend == 0 {
             let row = |s: i32| SPEED_TABLE[s.clamp(0, 1) as usize];

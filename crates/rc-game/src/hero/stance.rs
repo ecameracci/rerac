@@ -83,9 +83,17 @@ pub(super) fn entry(h: &mut Hero, c: &mut Ctx, id: i32, play: bool, _old_sub: i3
             h.f15d4 = 0;
             h.speed = len2(h.eff);
             h.items.f13fc = 1;
-            if play && h.mode == 0 {
-                let k = h.substate as usize & 3;
-                h.set_anim(c.anim, c.rng, blend(8), h.substate as u8 + 3, WALK_FRAME[k]);
+            // The bodies walk on their own sequences (L00 0x2223f8 case 0x65): the disguise 1, Clank 2.
+            if play {
+                match h.mode {
+                    0 => {
+                        let k = h.substate as usize & 3;
+                        h.set_anim(c.anim, c.rng, blend(8), h.substate as u8 + 3, WALK_FRAME[k]);
+                    }
+                    1 => h.set_anim(c.anim, c.rng, blend(8), 2, 0),
+                    3 => h.set_anim(c.anim, c.rng, blend(8), 1, 0),
+                    _ => {}
+                }
             }
         }
         0x66 => {
