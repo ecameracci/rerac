@@ -6,7 +6,8 @@
 //! reflection and its Fresnel term, the glint, the shore foam; the planar reflection, crate::water_mirror, through
 //! [`OceanWater`]`::plane`, so the islands and the tower reflect at grazing views):
 //! * a flat mesh at the ocean's resting z (`base_z`) in [`TILE`]-unit world tiles, each made once and kept: those
-//!   within the swell's reach of the camera split to [`FINE`] units, the others to [`COARSE`] out to the band's reach.
+//!   within the swell's reach of the camera split to [`FINE`] units, the others to [`COARSE`] out to the band's reach and
+//!   past it to the wall's far corners (one quad each, [`Split::Far`]; the wall stands [`WALL_HALF`] to each side).
 //!   The mesh is re-joined only when that set changes; the vertex shader displaces it by the swell (crate::water_waves,
 //!   times [`SWELL`]) and lifts it by the game's bob (`sea_z − base_z`: the `frame` record's z blend, z1 = z + 1);
 //! * per fine point, the swell's shore damping from the level collision (crate::water_waves::ShoreMap; the coarse tiles,
@@ -18,7 +19,12 @@
 //! * `water.wgsl`'s ocean look (`params.misc.w` = 1, its OCEAN_* constants): an absorption that keeps the sand plain
 //!   to a few units down ([`ABSORB`]), the sky in the scene copy (else [`SKY`]) for a reflection that meets nothing
 //!   (the grid seas take the fog colour, on Pokitaru a navy that darkened the whole sea), softer ripples and crests, a
-//!   lower Fresnel floor, a smaller and softer glint and a faint foam line; the bed kept farther out ([`FAR_FADE`]).
+//!   lower Fresnel floor, a smaller and softer glint and a faint foam line; the bed kept farther out ([`FAR_FADE`]);
+//! * the far end ([`EDGE`], shares of the wall's distance ahead, `params.misc.z`): the surface gives way to the scene
+//!   behind it while the game's band fades in over it (crate::sea_render `ocean_far_band`; the surface sunk 0.1 there
+//!   so the band in its plane wins the depth test), and nothing is drawn past the wall: the sea meets the wall's foot as
+//!   the game draws it (2026-10-31: the reflection of the lit sky ended in a line under the darker wall, and the sky
+//!   showed between the round tile set and the wall's corners).
 //!
 //! A camera under the sea keeps the Original layers. The game's sea z, its collision and swimming are untouched.
 
@@ -70,10 +76,19 @@ pub struct OceanFrame {
     /// The resting sea z and this tick's (with the bob).
     pub base_z: f32,
     pub sea_z: f32,
-    /// The band's reach (pvar `REACH`): the mesh's extent around the camera.
+    /// The band's reach (pvar `REACH`): the wall's distance ahead, the mesh's extent around the camera.
     pub reach: f32,
     pub fog: TfragFog,
 }
+
+/// The wall's half width (crate::sea_render `ocean_groups`: F0, F1 = cam + reach·F ∓ 750·L).
+pub const WALL_HALF: f32 = 750.0;
+/// The far end (shares of the wall's distance ahead; `water.wgsl` OCEAN_EDGE, kept equal by hand): from the first the
+/// game's band fades in over the surface, by the second it has the surface's place.
+pub const EDGE: [f32; 2] = [0.5, 0.8];
+
+/// The material's `params`: [`ABSORB`], the wall's distance ahead (the far end), [`SKY`].
+fn params(o: &OceanFrame) -> WaterParams { WaterParams { misc: Vec4::new(ABSORB, 0.0, o.reach, 1.0), ids: UVec4::new(0, 0, 0, rgba(SKY)) } }
 
 /// RGB bytes as the vertex colour / `params.ids.w` word (R low; the alpha 0x80, unread).
 pub fn rgba(c: [u8; 3]) -> u32 { (0..3).fold(0x8000_0000, |a, k| a | (c[k] as u32) << (8 * k)) }
@@ -86,16 +101,34 @@ struct Tile {
     idx: Vec<u32>,
 }
 
-/// Tile `(i, j)` at water `z`, split to [`FINE`] units with the shore damping from the lattice, else to [`COARSE`]
-/// undamped.
-fn tile(i: i32, j: i32, fine: bool, z: f32, shore: &mut ShoreMap, probe: &mut dyn FnMut([f32; 3], [f32; 3]) -> Option<f32>) -> Tile {
+/// A tile's split: [`FINE`] within [`FINE_REACH`], [`COARSE`] within the band's reach, one quad past it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Split {
+    Fine,
+    Coarse,
+    Far,
+}
+
+impl Split {
+    fn step(self) -> f32 {
+        match self {
+            Split::Fine => FINE,
+            Split::Coarse => COARSE,
+            Split::Far => TILE,
+        }
+    }
+}
+
+/// Tile `(i, j)` at water `z`, split to [`FINE`] units with the shore damping from the lattice, else to its coarser
+/// step undamped.
+fn tile(i: i32, j: i32, split: Split, z: f32, shore: &mut ShoreMap, probe: &mut dyn FnMut([f32; 3], [f32; 3]) -> Option<f32>) -> Tile {
     let mut t = Tile::default();
-    let s = if fine { FINE } else { COARSE };
+    let s = split.step();
     let n = (TILE / s) as u32;
     for b in 0..=n {
         for a in 0..=n {
             let (x, y) = (i as f32 * TILE + a as f32 * s, j as f32 * TILE + b as f32 * s);
-            let damp = if fine { shore.damp(x, y, z, probe) } else { 1.0 };
+            let damp = if split == Split::Fine { shore.damp(x, y, z, probe) } else { 1.0 };
             t.pos.push([x, y, z]);
             t.tag.push([rgba(OPEN), SWELL_TAG | ((damp * 65535.0).round() as u32) << 8]);
         }
@@ -109,9 +142,11 @@ fn tile(i: i32, j: i32, fine: bool, z: f32, shore: &mut ShoreMap, probe: &mut dy
     t
 }
 
-/// The tiles around the camera (game xy) within `reach`, each with whether it is fine.
-pub fn tile_set(cam: [f32; 2], reach: f32) -> Vec<(i32, i32, bool)> {
-    let r = (reach / TILE).ceil() as i32 + 1;
+/// The tiles around the camera (game xy) out to the wall's far corners (`reach` ahead, [`WALL_HALF`] to each side),
+/// each with its split.
+pub fn tile_set(cam: [f32; 2], reach: f32) -> Vec<(i32, i32, Split)> {
+    let corner = reach.hypot(WALL_HALF);
+    let r = (corner / TILE).ceil() as i32 + 1;
     let (ci, cj) = ((cam[0] / TILE).floor() as i32, (cam[1] / TILE).floor() as i32);
     let mut out = Vec::new();
     for j in cj - r..=cj + r {
@@ -120,7 +155,8 @@ pub fn tile_set(cam: [f32; 2], reach: f32) -> Vec<(i32, i32, bool)> {
             let dx = (x0 - cam[0]).max(cam[0] - x0 - TILE).max(0.0);
             let dy = (y0 - cam[1]).max(cam[1] - y0 - TILE).max(0.0);
             let d = (dx * dx + dy * dy).sqrt();
-            if d < reach { out.push((i, j, d < FINE_REACH)); }
+            let split = if d < FINE_REACH { Split::Fine } else if d < reach { Split::Coarse } else { Split::Far };
+            if d < corner { out.push((i, j, split)); }
         }
     }
     out
@@ -139,8 +175,8 @@ pub struct OceanWater {
     pub plane: Option<crate::water_mirror::FlatWater>,
     draw: Option<Slot>,
     shown: bool,
-    tiles: HashMap<(i32, i32, bool), Tile>,
-    set: Vec<(i32, i32, bool)>,
+    tiles: HashMap<(i32, i32, Split), Tile>,
+    set: Vec<(i32, i32, Split)>,
     /// The water z the tiles were made for.
     made_for: Option<u32>,
     shore: ShoreMap,
@@ -212,10 +248,10 @@ pub fn draw(
         let mut probe = |a, b| crate::water_waves::probe_line(coll, a, b);
         let t0 = std::time::Instant::now();
         let mut made = 0;
-        for &(i, j, fine) in &set {
-            if st.tiles.contains_key(&(i, j, fine)) { continue; }
-            let t = tile(i, j, fine, o.base_z, &mut st.shore, &mut probe);
-            st.tiles.insert((i, j, fine), t);
+        for &(i, j, split) in &set {
+            if st.tiles.contains_key(&(i, j, split)) { continue; }
+            let t = tile(i, j, split, o.base_z, &mut st.shore, &mut probe);
+            st.tiles.insert((i, j, split), t);
             made += 1;
         }
         let (mut pos, mut tag, mut idx) = (Vec::new(), Vec::new(), Vec::new());
@@ -254,7 +290,7 @@ pub fn draw(
                 let mat = materials.add(SeaWaterMaterial {
                     texture: image(&mut images),
                     fog: o.fog,
-                    params: WaterParams { misc: Vec4::new(ABSORB, 0.0, 0.0, 1.0), ids: UVec4::new(0, 0, 0, rgba(SKY)) },
+                    params: params(&o),
                     frame: frame.clone(),
                     ripple: rings.clone(),
                     scene_depth: copy.depth.clone(),
@@ -276,8 +312,8 @@ pub fn draw(
     let mut rec = [0u8; FRAME_RECORD];
     rec[..4].copy_from_slice(&(1.0 - (o.sea_z - o.base_z)).to_le_bytes());
     crate::asset_write::set_buffer(&mut buffers, frame, &rec);
-    if materials.get(mat).is_some_and(|m| m.fog != o.fog) {
-        if let Some(mut m) = materials.get_mut(mat) { m.fog = o.fog; }
+    if materials.get(mat).is_some_and(|m| m.fog != o.fog || m.params != params(&o)) {
+        if let Some(mut m) = materials.get_mut(mat) { (m.fog, m.params) = (o.fog, params(&o)); }
     }
     if !st.shown {
         st.shown = true;
@@ -305,20 +341,40 @@ mod tests {
             let a = k as f32 * std::f32::consts::TAU / 64.0;
             for r in [0.0, 30.0, 60.0, crate::water_waves::SWELL_FADE[1] + 4.0] {
                 let p = (cam[0] + r * a.cos(), cam[1] + r * a.sin());
-                assert!(at(p.0, p.1).is_some_and(|t| t.2), "{p:?}");
+                assert!(at(p.0, p.1).is_some_and(|t| t.2 == Split::Fine), "{p:?}");
             }
             let far = (cam[0] + 700.0 * a.cos(), cam[1] + 700.0 * a.sin());
-            assert!(at(far.0, far.1).is_some_and(|t| !t.2), "{far:?}");
+            assert!(at(far.0, far.1).is_some_and(|t| t.2 == Split::Coarse), "{far:?}");
         }
-        assert!(set.iter().all(|&(i, j, _)| ((i as f32 + 0.5) * TILE - cam[0]).hypot((j as f32 + 0.5) * TILE - cam[1]) < 750.0 + TILE));
+        let corner = 750.0f32.hypot(WALL_HALF);
+        assert!(set.iter().all(|&(i, j, _)| ((i as f32 + 0.5) * TILE - cam[0]).hypot((j as f32 + 0.5) * TILE - cam[1]) < corner + TILE));
+    }
+
+    #[test]
+    fn the_tiles_reach_the_wall_corners() {
+        // Pokitaru's band: reach 600, the wall's corners 960 out.
+        let cam = [451.3, 597.5];
+        let set = tile_set(cam, 600.0);
+        let at = |x: f32, y: f32| set.iter().find(|t| t.0 == (x / TILE).floor() as i32 && t.1 == (y / TILE).floor() as i32).copied();
+        for k in 0..64 {
+            let a = k as f32 * std::f32::consts::TAU / 64.0;
+            let (f, l) = ([a.cos(), a.sin()], [-a.sin(), a.cos()]);
+            for s in [-WALL_HALF, -300.0, 0.0, 300.0, WALL_HALF] {
+                let p = (cam[0] + 599.0 * f[0] + s * l[0], cam[1] + 599.0 * f[1] + s * l[1]);
+                let t = at(p.0, p.1);
+                assert!(t.is_some(), "{p:?}");
+                if s.abs() > 400.0 { assert_eq!(t.unwrap().2, Split::Far, "{p:?}"); }
+            }
+        }
     }
 
     #[test]
     fn tiles_share_their_edges() {
         let mut shore = ShoreMap::default();
         let mut probe = |_: [f32; 3], _: [f32; 3]| None;
-        let a = tile(0, 0, true, 222.0, &mut shore, &mut probe);
-        let b = tile(1, 0, true, 222.0, &mut shore, &mut probe);
+        let a = tile(0, 0, Split::Fine, 222.0, &mut shore, &mut probe);
+        let b = tile(1, 0, Split::Fine, 222.0, &mut shore, &mut probe);
+        assert_eq!(tile(2, 0, Split::Far, 222.0, &mut shore, &mut probe).idx.len(), 6, "one quad");
         let edge = |t: &Tile, x: f32| { let mut v: Vec<[i32; 2]> = t.pos.iter().filter(|p| p[0] == x).map(|p| [p[0] as i32, (p[1] * 8.0) as i32]).collect(); v.sort_unstable(); v };
         assert_eq!(edge(&a, TILE), edge(&b, TILE));
         assert_eq!(a.idx.len(), 32 * 32 * 6);
