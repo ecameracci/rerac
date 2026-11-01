@@ -23,9 +23,15 @@
 //!   `1 − STRENGTH` where shadowed. Only surfaces turned toward the light are darkened (the game's baked lighting
 //!   already shades the others), and the shadows fade out toward [`MAX_DISTANCE`].
 //!
-//! Limits: the game culls mobys outside the camera's view (and those its occlusion data hides) before they are
-//! drawn, so such a moby casts nothing, and a shrub casts only within its draw distance of the camera; the blended
-//! draws (water, particles, effects) are not shadowed.
+//! Casters the camera culls: a placed moby the game culls for the camera alone (occluded, behind it, out of its view)
+//! within [`MAX_DISTANCE`] still casts, its main pass dropped (crate::moby_render `update_moby_occlusion`,
+//! `moby_lod::FLAG_SHADOW_ONLY`), and the shrubs' meshes stay in Bevy's view within that reach whatever their draw
+//! distance (crate::shrub_render `cull_system`; shrub.wgsl's main pass applies the distances): culled, their shadows came
+//! and went as the camera turned (2026-10-31, Batalia's tank behind the camera, Hoven's ledge).
+//!
+//! Limits: a moby past its draw distance casts nothing (it is gone), and so do the dynamic slots' mobys the camera
+//! culls (crate::gameplay `DynMobys`); a culled moby's pose is the one its animation last evaluated; the blended draws
+//! (water, particles, effects) are not shadowed.
 //!
 //! Dev switches: `RC_SUN_DIR=x,y,z` (the light's travel direction, world), `RC_SUN_FLOOR=<degrees>` (Enhanced's
 //! floor), `RC_SUN_CASTERS` ([`casts`]),

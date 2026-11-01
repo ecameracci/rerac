@@ -479,23 +479,67 @@ impl LevelStatics {
 /// The is-rooted ground snap of the loader's instance loop (`InitLevelRenderGlobals` 0x255958, after the position is
 /// copied): a record with +0x4c ≠ 0 (`is_rooted`) gets z = `GroundHeight(0.5, position, 0)` + +0x50 (`rooted_distance`)
 /// when that height is above 0 (a miss gives 0: the record's z stays). `GroundHeight` 0x26e618 is `CollLine_Fix` from
-/// 0.5 above the position down to z = 0.01, flags 2, against the world mesh. [L] The game's line also meets the
-/// mobys the loop made before this record (`MobyBuildMatrix` registers each one's collision as it is created): on the
-/// disc that matters for one record, Hoven's 346 (index 322), which lands on the class-19 moby #129 at 25.5 in the game
-/// and on the ground at 24.1 here. Applied to the records themselves, so every load of them (the level's, the death reload's, the
-/// renderer's placements) uses the snapped height. 311 records on 13 levels (Oltanis's Qwark at the PDA stand: 74 →
-/// the floor at 72.6). Returns how many moved.
-pub fn root_instances(instances: &mut [rc_formats::gameplay::MobyInstance], mesh: &rc_formats::collision::Collision) -> usize {
-    let mut moved = 0;
-    for inst in instances.iter_mut().filter(|i| i.is_rooted != 0) {
-        let [x, y, z] = inst.position;
-        let h = crate::collision_query::coll_line(mesh, [x, y, z + 0.5], [x, y, f32::from_bits(0x3c23_d70a)], crate::collision_query::QueryFlags(2))
-            .map_or(0.0, |o| o.point[2]);
-        if 0.0 < h {
-            inst.position[2] = h + inst.rooted_distance;
-            moved += 1;
-        }
+/// 0.5 above the position down to z = 0.01, flags 2, against the world mesh. The game's line also meets the mobys
+/// the loop made before this record (`MobyBuildMatrix` registers each one's collision as it is created): that is
+/// [`root_on_mobys`], per load. Applied to the records themselves, so every reader of them (the renderer's placements)
+/// uses the snapped height. 311 records on 13 levels (Oltanis's Qwark at the PDA stand: 74 → the floor at 72.6).
+/// Returns every rooted record's index and its z before the snap (for [`root_on_mobys`]).
+pub fn root_instances(instances: &mut [rc_formats::gameplay::MobyInstance], mesh: &rc_formats::collision::Collision) -> Vec<(usize, f32)> {
+    let mut raw = Vec::new();
+    for (i, inst) in instances.iter_mut().enumerate().filter(|(_, i)| i.is_rooted != 0) {
+        raw.push((i, inst.position[2]));
+        if let Some(z) = rooted_z(inst, |a, b| crate::collision_query::coll_line(mesh, a, b, crate::collision_query::QueryFlags(2))) { inst.position[2] = z; }
     }
+    raw
+}
+
+/// `GroundHeight(0.5, position, 0)` + `rooted_distance` through the line query `line`, None on a miss (height ≤ 0).
+fn rooted_z(inst: &rc_formats::gameplay::MobyInstance, line: impl FnOnce([f32; 3], [f32; 3]) -> Option<crate::collision_query::CollOutput>) -> Option<f32> {
+    let [x, y, z] = inst.position;
+    let h = line([x, y, z + 0.5], [x, y, f32::from_bits(0x3c23_d70a)]).map_or(0.0, |o| o.point[2]);
+    (0.0 < h).then_some(h + inst.rooted_distance)
+}
+
+/// [`root_instances`]' snap as the loader makes it on one load: each rooted record's line from its record z (`raw`) also
+/// meets the mobys created before it in this load (`table`'s statics in creation order, `moby_to_instance`; `coll`: the
+/// class blobs), so a crate stacked on another stays on it (Hoven's crates #417 on #363 and #470 on #365 at z 43; the
+/// world-only snap dropped them a unit into the crate below), Hoven's 346 #322 lands on the class-19 moby #129 (25.5),
+/// and after a death that broke the crate below, the one above stands on the floor as in the game. The scratch grid
+/// leaves each moby's `+0xa0` as it was (the level's grid is built after). Returns how many mobys moved.
+pub fn root_on_mobys(
+    table: &mut MobyTable,
+    moby_to_instance: &[usize],
+    instances: &[rc_formats::gameplay::MobyInstance],
+    raw: &[(usize, f32)],
+    mesh: &rc_formats::collision::Collision,
+    classes: &dyn ClassData,
+    coll: &std::collections::HashMap<i16, rc_formats::moby_collision::MobyCollision>,
+) -> usize {
+    use crate::collision_query::{coll_line_m, MobyGrid, MobyScene, PoseCache, QueryFlags, TableMobys};
+    let raw: std::collections::HashMap<usize, f32> = raw.iter().copied().collect();
+    let saved: Vec<[u8; 4]> = table.mobys.iter().map(|m| m.ba0).collect();
+    let mut grid = MobyGrid::new();
+    let cache = std::sync::Mutex::new(PoseCache::default());
+    let mut moved = 0;
+    for (id, &ii) in moby_to_instance.iter().enumerate() {
+        if let (Some(inst), Some(&z0)) = (instances.get(ii), raw.get(&ii)) {
+            let mut rec = *inst;
+            rec.position[2] = z0;
+            let z = {
+                let src = TableMobys { table, classes, snapshots: &[] };
+                let scene = MobyScene { mobys: &src, grid: &grid, classes: coll, cache: &cache };
+                rooted_z(&rec, |a, b| coll_line_m(mesh, Some(&scene), a, b, QueryFlags(2), None)).unwrap_or(z0)
+            };
+            let m = &mut table.mobys[id];
+            if m.position[2] != z {
+                m.position[2] = z;
+                rebuild_matrix(m, classes.anim(m.o_class));
+                moved += 1;
+            }
+        }
+        grid.register(&mut table.mobys[id]);
+    }
+    for (m, b) in table.mobys.iter_mut().zip(saved) { m.ba0 = b; }
     moved
 }
 
@@ -608,8 +652,10 @@ mod root_tests {
         let mesh = rc_formats::collision::parse_collision(&core.core, &core.data).unwrap();
         let mut inst = rc_formats::gameplay::parse_moby_instances(&g).unwrap();
         let before = inst.clone();
-        let moved = super::root_instances(&mut inst, &mesh);
+        let raw = super::root_instances(&mut inst, &mesh);
+        let moved = raw.iter().filter(|&&(i, z)| inst[i].position[2] != z).count();
         let rooted = inst.iter().filter(|i| i.is_rooted != 0).count();
+        assert_eq!(raw.len(), rooted);
         eprintln!("Oltanis: {moved} of {rooted} rooted records moved (the others have no ground under them and keep their z)");
         assert!(0 < moved && moved <= rooted);
         let q = inst.iter().find(|i| i.o_class == 851).unwrap();

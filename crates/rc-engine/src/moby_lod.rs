@@ -210,6 +210,9 @@ pub const LOD_RECORD_SIZE: usize = 64;
 pub const FLAG_TINT: u32 = 1;
 /// `MobyLod.misc.y` bit: occluded like the world (crate::ao_render: a bounding sphere over `MOBY_MAX_RADIUS`).
 pub const FLAG_AO_WORLD: u32 = 2;
+/// `MobyLod.misc.y` bit: culled for the camera, kept for the sun's shadow map only (moby.wgsl's main pass draws nothing;
+/// crate::moby_render `update_moby_occlusion`).
+pub const FLAG_SHADOW_ONLY: u32 = 4;
 /// `MobyLod.misc.w` bit: the moby is on the glow list (mode 0x10); bits 0..23 are its glow RGB (moby+0x90).
 pub const GLOW_ON: u32 = 1 << 24;
 

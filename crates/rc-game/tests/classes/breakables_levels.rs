@@ -332,3 +332,28 @@ fn every_placed_breakable_breaks_on_its_level() {
     }
     assert!(broke >= 10, "{broke} breakable classes broken");
 }
+
+/// Hoven's rooted crates stacked on earlier records (G-CLS-019, play-test 2026-10-31: an explosive crate half inside a
+/// wooden one at (389.6, 325.8, 42)): the loader's ground line meets the crates made before them
+/// (`scheduler::root_on_mobys`), so #417 stays on #363 and #470 on #365 at their record z; the world-only snap
+/// (`root_instances`) had them a unit lower, inside the crate below.
+#[test]
+fn hoven_rooted_crates_stay_on_the_crates_below() {
+    use rc_game::moby_update::scheduler::{root_instances, root_on_mobys};
+    let Some(mut lv) = load(12) else { eprintln!("skipped: no extracted/"); return };
+    let raw = root_instances(&mut lv.instances, &lv.mesh);
+    let mut ct = ClassTable { classes: lv.classes.classes.clone() };
+    let statics = load_level_mobys(&lv.instances, &mut ct, &lv.pvars, &lv.tests);
+    let mut table = MobyTable::new(statics.mobys.clone(), lv.spawnable);
+    let coll = lv.coll.iter().map(|(c, b)| (*c as i16, b.clone())).collect();
+    let moved = root_on_mobys(&mut table, &statics.moby_to_instance, &lv.instances, &raw, &lv.mesh, &ct, &coll);
+    eprintln!("Hoven: {moved} rooted mobys moved by the moby pass");
+    for (top, below) in [(417usize, 363usize), (470, 365)] {
+        let z0 = raw.iter().find(|r| r.0 == top).expect("rooted").1;
+        assert!((lv.instances[top].position[2] - (z0 - 1.0)).abs() < 0.05, "world-only snap: inside #{below}");
+        let id = statics.instance_to_moby[top].expect("created");
+        assert!((table.mobys[id].position[2] - z0).abs() < 0.02, "#{top} on #{below}: {} (record {z0})", table.mobys[id].position[2]);
+    }
+    // The moby pass moves only the few records over an earlier moby; the rest keep the world snap.
+    assert!((2..=5).contains(&moved), "{moved}");
+}

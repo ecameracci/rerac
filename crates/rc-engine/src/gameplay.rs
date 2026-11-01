@@ -1518,6 +1518,9 @@ fn setup(
         }
         Err(e) => eprintln!("gameplay: no moby collision ({e:#}): the collision queries see no mobys"),
     }
+    // The loader's rooted snap also meets the mobys made before each record (the stacked crates).
+    let n = scheduler::root_on_mobys(&mut game.mobys, &statics.moby_to_instance, &lv.mobys.instances, &lv.mobys.rooted, coll, &classes, &svc.coll_classes);
+    if n != 0 { println!("mobys: {n} rooted mobys stand on a moby made before them"); }
     svc.build_grid(&mut game.mobys);
     println!(
         "gameplay: moby collision: {} class blobs, {} grid entries",
@@ -1903,13 +1906,17 @@ fn death_reload(p: &mut Play, lv: &crate::level_load::LoadedLevel, state: Option
     // The class table as the load builds it (the loader ORs each instance's mode bits into it again).
     let mut classes = class_table(lv, &external_update_fn);
     let ship_ii = p.ship.map(|(_, ii)| ii);
-    let (table, statics, ship_id) = match moby_table(lv, &mut classes, ship_ii, state, p.level, Some(&p.svc.save), Some(p.missions.slot)) {
+    let (mut table, statics, ship_id) = match moby_table(lv, &mut classes, ship_ii, state, p.level, Some(&p.svc.save), Some(p.missions.slot)) {
         Ok(t) => t,
         Err(e) => {
             eprintln!("gameplay: death reload: moby table not rebuilt ({e:#}): the old table stays");
             return;
         }
     };
+    // The rooted snap's moby pass over this load's mobys (a crate whose crate below was broken drops to the floor).
+    if let Some(mesh) = lv.collision.as_ref() {
+        scheduler::root_on_mobys(&mut table, &statics.moby_to_instance, &lv.mobys.instances, &lv.mobys.rooted, mesh, &classes, &p.svc.coll_classes);
+    }
     let Some(hero_ii) = p.moby_to_instance.get(p.hero_id).copied() else { return };
     let Some(hero_id) = statics.instance_to_moby.get(hero_ii).copied().flatten() else {
         eprintln!("gameplay: death reload: Ratchet's instance not created: the old table stays");

@@ -168,6 +168,11 @@ fn vertex(v: MobyVertex) -> MobyVertexOutput {
     let tag = mesh_functions::get_tag(v.instance_index);
     let inst = &insts[tag];
     let lod = &lods[tag];
+    // Flag 4 (crate::moby_lod `FLAG_SHADOW_ONLY`): culled for the camera, drawn into the sun's shadow map only.
+    if (((*lod).misc.y & 4u) != 0u) {
+        out.position = vec4<f32>(2.0, 2.0, 2.0, 1.0);
+        return out;
+    }
     let base = (*inst).misc.x;
     let alpha = f32((*lod).misc.x);
 
