@@ -123,6 +123,23 @@ pub struct FlightRender {
     /// the first flight draw sets the ST, later ones keep it). Reset with each flight [L: whether the boot data is
     /// fresh for every flight].
     glass: crate::fx_draw::GlassFade,
+    /// Port-only (Frame smoothing): the glass's matrix at the last two ticks (previous, newest), so it is drawn
+    /// between them as the ship's hull is (crate::frame_smooth); without it the glass led the hull by up to a tick.
+    glass_ticks: [Option<[[f32; 4]; 4]>; 2],
+}
+
+/// The glass's matrix for this frame ([`FlightRender::glass_ticks`]): the newest tick's `m`, lerped from the previous
+/// tick's by the frame's alpha while smoothing is active, unless the ship moved more than
+/// crate::frame_smooth::MOBY_CUT in that tick or a frame ran more than one tick.
+fn glass_matrix(ticks: &mut [Option<[[f32; 4]; 4]>; 2], m: [[f32; 4]; 4], phase: &crate::frame_smooth::TickPhase) -> [[f32; 4]; 4] {
+    if phase.ticks > 0 || ticks[1].is_none() {
+        ticks[0] = if phase.ticks == 1 { ticks[1] } else { None };
+        ticks[1] = Some(m);
+    }
+    let Some(prev) = ticks[0].filter(|_| phase.active) else { return m };
+    let d = (0..3).map(|k| (m[3][k] - prev[3][k]).powi(2)).sum::<f32>().sqrt();
+    if d > crate::frame_smooth::MOBY_CUT { return m; }
+    std::array::from_fn(|r| std::array::from_fn(|c| prev[r][c] + (m[r][c] - prev[r][c]) * phase.alpha))
 }
 
 /// Marks the flight's sky shells.
@@ -248,6 +265,7 @@ fn draw_fx(
     mut images: ResMut<Assets<Image>>,
     mut materials: ResMut<Assets<FxPrimMaterial>>,
     mut vis: Query<&mut Visibility>,
+    phase: Res<crate::frame_smooth::TickPhase>,
 ) {
     let f = &mut *f;
     let layer = RenderLayers::layer(crate::travel_render::TRAVEL_LAYER);
@@ -255,7 +273,10 @@ fn draw_fx(
     f.slots.layer = Some(layer);
     let fog = fog.map(|g| g.uniform).unwrap_or_else(|| TfragFog::new(&level.0.fog));
     let (mut planet, mut groups) = (Vec::new(), Vec::new());
-    if !f.active { f.glass = Default::default(); }
+    if !f.active {
+        f.glass = Default::default();
+        f.glass_ticks = [None; 2];
+    }
     if let (Some(d), true, Some(cam_t)) = (f.draw.as_ref(), f.active, cams.iter().next()) {
         if f.fx_dest != Some(d.dest) {
             f.fx = fx_for(d.dest);
@@ -283,6 +304,7 @@ fn draw_fx(
                 if let Some(g) = t.of(o_class) {
                     // `ShipDrawCallback` in mode 6 sub 4: never live (the ST of the first draw stays), FX 1 (the
                     // flight bank's) instead of 0x15.
+                    let m = glass_matrix(&mut f.glass_ticks, m, &phase);
                     let mut grp = crate::fx_draw::ship_glass_prims(g, &m, cam, false, &mut f.glass);
                     grp.fx = FLIGHT_GLASS_FX;
                     groups.push(grp);
@@ -403,5 +425,31 @@ fn audio_requests(mut audio: Option<ResMut<crate::audio_out::AudioOut>>) {
                 println!("flight: sound {v} of the flight's bank (handle {h})");
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::frame_smooth::TickPhase;
+
+    fn at(x: f32) -> [[f32; 4]; 4] { [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [x, 0.0, 0.0, 1.0]] }
+
+    /// The glass follows the hull between ticks: lerped by alpha while smoothing is on, the tick's matrix when off,
+    /// past a cut, or on a frame that ran two ticks.
+    #[test]
+    fn glass_matrix_lerps_between_the_last_two_ticks() {
+        let tick = |ticks, alpha, active| TickPhase { ticks, alpha, active };
+        let mut t = [None; 2];
+        assert_eq!(glass_matrix(&mut t, at(0.0), &tick(1, 0.5, true)), at(0.0));
+        assert_eq!(glass_matrix(&mut t, at(2.0), &tick(1, 0.25, true))[3][0], 0.5);
+        // A frame without a tick keeps both and moves on with alpha.
+        assert_eq!(glass_matrix(&mut t, at(2.0), &tick(0, 0.75, true))[3][0], 1.5);
+        assert_eq!(glass_matrix(&mut t, at(2.0), &tick(0, 0.75, false)), at(2.0));
+        // Two ticks in one frame: no previous of the right age.
+        assert_eq!(glass_matrix(&mut t, at(4.0), &tick(2, 0.5, true)), at(4.0));
+        // A cut.
+        glass_matrix(&mut t, at(4.0), &tick(1, 0.0, true));
+        assert_eq!(glass_matrix(&mut t, at(4.0 + crate::frame_smooth::MOBY_CUT + 1.0), &tick(1, 0.5, true))[3][0], 4.0 + crate::frame_smooth::MOBY_CUT + 1.0);
     }
 }
