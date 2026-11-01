@@ -22,7 +22,7 @@
 //!    [`UnderwaterTint`] full-screen pass on the main camera, after `bevy::ui_render::ui_pass`, blending in
 //!    display-encoded bytes like the GS (`assets/shaders/underwater_tint.wgsl`). The page menu's frames (mode 3: the pause
 //!    and map pages) draw no tint (`PageMenuModeRender` 0x21ab50 runs `PageMenuDraw` only); their snapshot has it.
-//!    Water Enhanced draws the alternate fog and the tint in the level's Enhanced water colour where it has one
+//!    Water Enhanced draws the alternate fog and the tint in the Enhanced colour of the water above, where it has one
 //!    (crate::underwater_render `enhanced_look`).
 //!
 //! Environment: `RC_FOG_ZONES=0` disables the zones (the level settings stay); `RC_UNDERWATER=1` / `=0` forces
@@ -215,12 +215,13 @@ fn update_fog_state(
     cams: MainCamera,
     hook: Option<Res<crate::hud_render::Hud2dHook>>,
     g: Option<Res<crate::graphics::GraphicsSettings>>,
+    uw: Option<Res<crate::underwater_render::UnderwaterView>>,
 ) {
     let Some(mut state) = state else { return };
     let state = &mut *state;
-    // Water Enhanced draws the level's own water colour under it (crate::underwater_render::enhanced_look); the
-    // game's look stays as its water managers leave it.
-    let colour = g.is_some_and(|g| g.water.on()).then(|| crate::underwater_render::surface_colour(crate::level_load::level_index())).flatten();
+    // Water Enhanced draws the colour of the water above the camera under it (crate::underwater_render::enhanced_look,
+    // `UnderwaterView::colour` as the last frame's probe found it); the game's look stays as its water managers leave it.
+    let colour = g.is_some_and(|g| g.water.on()).then(|| uw.and_then(|v| v.colour)).flatten();
     // The Visibomb's missile view writes the level fog globals during the ticks (crate::visibomb_view).
     if let Some(p) = play.as_deref() { crate::visibomb_view::apply_fog(&p.svc.visibomb, &mut state.level, &mut state.underwater.flag, &mut state.visibomb); }
     // 1. UpdateFog (end of the previous frame's render): what this frame draws with.

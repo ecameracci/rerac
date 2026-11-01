@@ -228,24 +228,10 @@ pub fn ocean_groups(pv: &[u8], run: &gs::SeaRun, t: &rc_formats::sea::OceanTable
     let w = |k: usize| u32::from_le_bytes(pv[4 * k..4 * k + 4].try_into().unwrap());
     let f = |off: usize| f32::from_le_bytes(pv[off..off + 4].try_into().unwrap());
     let mut out = Vec::new();
-    let flat = |v: [f32; 3]| -> [f32; 3] {
-        let l = (v[0] * v[0] + v[1] * v[1]).sqrt();
-        if l == 0.0 { [0.0; 3] } else { [v[0] / l, v[1] / l, 0.0] }
-    };
-    let (fw, lf) = (flat(rows[0]), flat(rows[1]));
     let z = run.sea_z;
-    let at = |a: f32, b: f32| [cam[0] + fw[0] * a + lf[0] * b, cam[1] + fw[1] * a + lf[1] * b, z];
-    let reach = f(o::REACH);
-    let (n0, n1, f0, f1) = (at(-75.0, -87.0), at(-75.0, 87.0), at(reach, -750.0), at(reach, 750.0));
-    let lerp = |a: [f32; 3], b: [f32; 3], t: f32| [a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1]), a[2] + t * (b[2] - a[2])];
+    let [_, _, f0, f1] = band_corners(f(o::REACH), z, cam, rows);
     // 1. The far band.
-    let mut band = PrimBuf::default();
-    band.strip((0..6).flat_map(|i| {
-        let t = (2 * i) as f32 / 10.0;
-        let c = tween(t, w(0), w(1));
-        [(lerp(n0, f0, t), [0.0, 0.0], c), (lerp(n1, f1, t), [0.0, 0.0], c)]
-    }));
-    out.push((OCEAN_BAND_FX, false, band));
+    out.push((OCEAN_BAND_FX, false, band_rows(pv, z, cam, rows, (0..6).map(|i| ((2 * i) as f32 / 10.0, 1.0)))));
     // 2. The wall.
     let top = cam[2] - f(o::WALL_DROP);
     if f(o::SEA_Z) < top {
@@ -282,6 +268,45 @@ pub fn ocean_groups(pv: &[u8], run: &gs::SeaRun, t: &rc_formats::sea::OceanTable
         }
     }
     out
+}
+
+/// The band's corners N0, N1, F0, F1 at `z` (module doc: the camera's rows flattened, `reach` ahead).
+fn band_corners(reach: f32, z: f32, cam: [f32; 3], rows: [[f32; 3]; 2]) -> [[f32; 3]; 4] {
+    let flat = |v: [f32; 3]| -> [f32; 3] {
+        let l = (v[0] * v[0] + v[1] * v[1]).sqrt();
+        if l == 0.0 { [0.0; 3] } else { [v[0] / l, v[1] / l, 0.0] }
+    };
+    let (fw, lf) = (flat(rows[0]), flat(rows[1]));
+    let at = |a: f32, b: f32| [cam[0] + fw[0] * a + lf[0] * b, cam[1] + fw[1] * a + lf[1] * b, z];
+    [at(-75.0, -87.0), at(-75.0, 87.0), at(reach, -750.0), at(reach, 750.0)]
+}
+
+/// The band's strip through rows `(t, alpha share)`: `L(t), R(t)` with colour `FastTweenColor(t, pvar 0, pvar 1)`, its
+/// alpha times the share (the game's band: t = 0, 0.2 … 1, share 1).
+fn band_rows(pv: &[u8], z: f32, cam: [f32; 3], rows: [[f32; 3]; 2], ts: impl Iterator<Item = (f32, f32)>) -> PrimBuf {
+    let w = |k: usize| u32::from_le_bytes(pv[4 * k..4 * k + 4].try_into().unwrap());
+    let reach = f32::from_le_bytes(pv[gs::ocean_pvar::REACH..gs::ocean_pvar::REACH + 4].try_into().unwrap());
+    let [n0, n1, f0, f1] = band_corners(reach, z, cam, rows);
+    let lerp = |a: [f32; 3], b: [f32; 3], t: f32| [a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1]), a[2] + t * (b[2] - a[2])];
+    let mut band = PrimBuf::default();
+    band.strip(ts.flat_map(|(t, share)| {
+        let c = tween(t, w(0), w(1));
+        let c = c & 0x00ff_ffff | (((c >> 24) as f32 * share).round() as u32) << 24;
+        [(lerp(n0, f0, t), [0.0, 0.0], c), (lerp(n1, f1, t), [0.0, 0.0], c)]
+    }));
+    band
+}
+
+/// Water Enhanced's share of the band (crate::ocean_water's far end): the game's band from `edge[0]` of the reach ahead
+/// to the wall, its alpha rising from 0 to the game's at `edge[1]`, over the surface that fades out under it there, so
+/// the sea meets the wall's foot as the game draws it.
+pub fn ocean_far_band(pv: &[u8], z: f32, cam: [f32; 3], rows: [[f32; 3]; 2], edge: [f32; 2]) -> PrimBuf {
+    let reach = f32::from_le_bytes(pv[gs::ocean_pvar::REACH..gs::ocean_pvar::REACH + 4].try_into().unwrap());
+    // t of a distance ahead: N at −75, F at the reach.
+    let t = |share: f32| (share * reach + 75.0) / (reach + 75.0);
+    let (ta, tb) = (t(edge[0]), t(edge[1]));
+    let game = (0..6).map(|i| (2 * i) as f32 / 10.0).filter(|&s| s > tb);
+    band_rows(pv, z, cam, rows, [(ta, 0.0), (tb, 1.0)].into_iter().chain(game.map(|s| (s, 1.0))))
 }
 
 fn pvar_i32(pv: &[u8], o: usize) -> i32 { i32::from_le_bytes(pv[o..o + 4].try_into().unwrap()) }
@@ -619,14 +644,15 @@ fn draw(
             (SeaKind::Ocean, SeaData::Ocean(t)) => {
                 if m.pvars.len() < 0x30 { continue; }
                 // Water Enhanced, seen from above: crate::ocean_water's surface in place of the band (the first group)
-                // and the layers.
+                // and the layers, the band kept over the surface's far end only (`ocean_far_band`).
                 let surface = gfx.water.on() && cam[2] > run.sea_z;
                 if surface {
                     let reach = f32::from_le_bytes(m.pvars[gs::ocean_pvar::REACH..gs::ocean_pvar::REACH + 4].try_into().unwrap());
                     ocean = Some(crate::ocean_water::OceanFrame { cam, base_z: run.base_z, sea_z: run.sea_z, reach, fog: level_fog });
                 }
                 for (j, (fxi, additive, prims)) in ocean_groups(&m.pvars, run, t, cam, rows).into_iter().enumerate() {
-                    if surface && (j == 0 || additive) { continue; }
+                    if surface && additive { continue; }
+                    let prims = if surface && j == 0 { ocean_far_band(&m.pvars, run.sea_z, cam, rows, crate::ocean_water::EDGE) } else { prims };
                     groups.push(Group { tex: Tex::Fx(fxi, false), effect: Some(Blend::of(additive)), fog: level_fog, bias: bias + j as f32 * 0.25, prims });
                 }
             }

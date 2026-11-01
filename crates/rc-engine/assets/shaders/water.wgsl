@@ -55,8 +55,8 @@ struct WaterFog {
 }
 
 struct WaterParams {
-    // x = FIX / 128, y = kind, z = an even absorption or a chute's flow speed, w = the Enhanced surface lift (game units;
-    // ripple water only) or 1: Pokitaru's ocean (kind 0).
+    // x = FIX / 128, y = kind, z = an even absorption, a chute's flow speed or the ocean's wall distance ahead, w = the
+    // Enhanced surface lift (game units; ripple water only) or 1: Pokitaru's ocean (kind 0).
     misc: vec4<f32>,
     // x = frame slot, y = ripple record's first word, z = water UV offset in the record, w = the ocean's sky (RGB).
     ids: vec4<u32>,
@@ -248,6 +248,8 @@ fn vertex(v: WaterVertex) -> WaterVertexOutput {
         out.swell = look.sun.w * damp;
         p.y += out.swell * (1.0 - smoothstep(SWELL_FADE.x, SWELL_FADE.y, d)) * swell_height(p.xz, globals.time, d);
     }
+    let ahead = ocean_ahead(p);
+    if (look.misc.x > 0.5 && ahead >= 0.0) { p.y -= OCEAN_EDGE_DROP * smoothstep(OCEAN_EDGE.x - 0.05, OCEAN_EDGE.x, ahead / params.misc.z); }
     out.position = position_world_to_clip(p);
     out.uv = uv;
     out.color = vec3<f32>(f32(c & 0xffu), f32((c >> 8u) & 0xffu), f32((c >> 16u) & 0xffu)) / 128.0;
@@ -366,6 +368,19 @@ const OCEAN_SLOPE: f32 = 0.4;
 const OCEAN_SSR_TOL: f32 = 1.0;
 const OCEAN_GLINT: vec2<f32> = vec2<f32>(900.0, 0.8);
 const OCEAN_FOAM: f32 = 0.15;
+// The ocean's far end (shares of the wall's distance ahead, params.misc.z; crate::ocean_water::EDGE, kept equal by
+// hand): from x the surface gives way to the game's band, gone by y; the surface sinks by OCEAN_EDGE_DROP from x so the
+// band in its plane draws over it (no depth fight).
+const OCEAN_EDGE: vec2<f32> = vec2<f32>(0.5, 0.8);
+const OCEAN_EDGE_DROP: f32 = 0.1;
+
+// The ocean's distance ahead of the camera (Bevy world point; along the view's flattened forward, as the game's band
+// and wall stand along the camera's), −1 when this draw is not the ocean or the view looks straight down.
+fn ocean_ahead(p: vec3<f32>) -> f32 {
+    let f = -view.world_from_view[2].xz;
+    if (params.misc.w < 0.5 || u32(params.misc.y + 0.5) != 0u || params.misc.z <= 0.0 || length(f) < 1e-3) { return -1.0; }
+    return max(dot(p.xz - view.world_position.xz, normalize(f)), 0.0);
+}
 
 // The surface's height gradient over world xz from travelling sine waves: (direction, wavenumber, amplitude·wavenumber),
 // seen from horizontal distance d.
@@ -597,5 +612,14 @@ fn fragment(in: WaterVertexOutput) -> @location(0) vec4<f32> {
     // The fog over all of it, as on the game's fogged strip: unfogged, a far sea's reflection of the lit sky ends in a
     // hard line where the grid stops drawing its blocks (Batalia: 400 units out, past the grid fog's far end).
     if (fog.color.w > 0.5 && !ocean) { col = mix(srgb_to_linear(fog.color.rgb), col, in.fog); }
+    // The ocean's far end (params.misc.z = the wall's distance ahead; crate::ocean_water): over OCEAN_EDGE the surface
+    // gives way to the scene behind it as the game's band fades in over it (crate::sea_render `ocean_far_band`), so the
+    // sea meets the wall's foot as the game draws it; nothing past the wall.
+    let ahead = ocean_ahead(wp);
+    if (ocean && ahead >= 0.0) {
+        if (ahead > params.misc.z) { discard; }
+        let behind = textureLoad(scene_color, clamp(here, vec2<i32>(0), size - 1), 0).rgb;
+        col = mix(col, behind, clamp((ahead / params.misc.z - OCEAN_EDGE.x) / (OCEAN_EDGE.y - OCEAN_EDGE.x), 0.0, 1.0));
+    }
     return vec4<f32>(col, 1.0);
 }

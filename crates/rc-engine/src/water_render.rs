@@ -179,7 +179,7 @@ pub fn load(root: &Path, index: u32, gameplay: &[u8]) -> Result<LevelWater> {
 }
 
 /// Static uniform of one water draw.
-#[derive(Clone, Copy, Debug, Default, ShaderType)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, ShaderType)]
 pub struct WaterParams {
     /// x = FIX / 128, y = kind (0/1 strip layer, 2 ripple water, 3 ripple env, 4 chute), z = an even absorption
     /// (Enhanced; crate::sea_water::clarity; 0 here) or a chute's flow speed, w = the Enhanced surface lift
