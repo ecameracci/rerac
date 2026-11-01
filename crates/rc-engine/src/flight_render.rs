@@ -310,7 +310,8 @@ fn raw_alpha(t: &Texture) -> Texture {
 }
 
 /// The flight's 2D draws (module docs): the caption and the card icon, into the transition's HUD layer
-/// (crate::travel_render's `hud_layer`). `side`: the shown aspect's side margin (`display::side_extra`).
+/// (crate::travel_render's `hud_layer`). `side`: the shown aspect's side margin (`display::side_extra`); the caption and
+/// the card icon, both anchored left, move out by it (port-only).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn hud_prims(f: &mut FlightRender, h: &mut crate::hud_render::Hud2d, img: &mut crate::hud_images::HudImages, assets: &mut Assets<Image>, lang: u32, card_busy: bool, side: i32) {
     use crate::hud_render::H;
@@ -327,7 +328,7 @@ pub(crate) fn hud_prims(f: &mut FlightRender, h: &mut crate::hud_render::Hud2d, 
         if let Some((_, t)) = &f.caption {
             let src = ImageSrc::Pixels { key: 0x7c00_0000 | (d.dest as u64) << 8 | lang as u64, tex: t.clone() };
             if let Some(s) = img.resolve(&src, assets) {
-                h.prims.push(crate::hud_images::prim(s, space::CAPTION_X, H - space::CAPTION_DY, space::CAPTION_W, space::CAPTION_H, 0, 0, space::CAPTION_W, space::CAPTION_H, d.caption_alpha << 24 | 0x80_8080));
+                h.prims.push(crate::hud_images::prim(s, space::CAPTION_X - side, H - space::CAPTION_DY, space::CAPTION_W, space::CAPTION_H, 0, 0, space::CAPTION_W, space::CAPTION_H, d.caption_alpha << 24 | 0x80_8080));
             }
         }
     }

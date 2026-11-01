@@ -155,6 +155,9 @@ struct MenuRt {
     qs: Option<QuickSelect>,
     menu: Option<PageMenu>,
     draws: Vec<MenuDraw>,
+    /// Port-only: the quick select's draws (HUD slot 3, anchored left), kept off the 4:3 box's clip and moved out
+    /// with the HUD's left slots in a wide frame (`build_prims`; rc_game::hud's `side_extra`).
+    qs_draws: Vec<MenuDraw>,
     /// The mode the frame's draws belong to (the mode at the frame's start).
     render_mode: Mode,
     script: Option<Script>,
@@ -409,6 +412,7 @@ fn setup(
         qs,
         menu,
         draws: Vec::new(),
+        qs_draws: Vec::new(),
         render_mode: Mode::Gameplay,
         script,
         last_counter: None,
@@ -811,6 +815,7 @@ fn menu_frame(
     let reopened = std::mem::take(&mut rt.reopened);
     rt.render_mode = if reopened { Mode::Gameplay } else { mode };
     rt.draws.clear();
+    rt.qs_draws.clear();
     let trace = rt.trace;
     match mode {
         Mode::Gameplay => {
@@ -852,7 +857,7 @@ fn menu_frame(
                 }
                 mm.ring_open = qs.open;
                 // The cursor pulse runs on 0x15f5cc; the held ticks keep it pulsing (Classic: `qs_held` 0).
-                qs.draw(&rt.assets, &gs.global, play.game.counter + play.qs_held, listeners, &mut rt.draws);
+                qs.draw(&rt.assets, &gs.global, play.game.counter + play.qs_held, listeners, &mut rt.qs_draws);
             }
             // 0x2abfb0: once the map page has found the level's map (0x184694), move record 9 ("the map was used")
             // is bumped every mode-0 frame (the Novalis director's map hint waits for it).
@@ -1528,6 +1533,7 @@ fn front_end_frame(
     let vsync = frame as u32;
     rt.render_mode = Mode::Menu;
     rt.draws.clear();
+    rt.qs_draws.clear();
     if movie_busy { return; }
     if mm.state.mode != Mode::Menu { mm.state.set(Mode::Menu); }
     let input = match &rt.script {
@@ -1706,6 +1712,14 @@ fn build_prims(
     let snapshot = convert(&rt.draws, &mut h, &mut statics, &mut st, &lh.glyphs, &mut resolve);
     // The pages stay clipped to the 512×416 screen in a 16:9 frame (`Prim::boxed`): their unused panels lie off it.
     for p in h.prims.iter_mut().chain(statics.iter_mut().flatten()) { p.boxed = true; }
+    // Port-only: the quick select (HUD slot 3, anchored left) unclipped and moved out by the shown aspect's side
+    // margin, as the HUD's left slots are (rc_game::hud `HudState::anchor`).
+    if !rt.qs_draws.is_empty() {
+        let side = crate::saves::shown_side(icon_env.display.as_deref(), &icon_env.frame, icon_env.cutscene.as_ref().is_some_and(|c| c.0));
+        let n = h.prims.len();
+        convert(&rt.qs_draws, &mut h, &mut statics, &mut st, &lh.glyphs, &mut resolve);
+        for p in &mut h.prims[n..] { for v in &mut p.pos { v[0] -= side; } }
+    }
     // `entry` 0x25a0fc: the card icon after every mode's draw (rc_game::menus::freeze::card_busy_draw); the flight and
     // the front end run their own loops.
     let flying = icon_env.flight.as_ref().is_some_and(|f| f.active);
