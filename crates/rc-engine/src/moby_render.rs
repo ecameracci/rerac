@@ -115,6 +115,9 @@ pub struct LevelMobys {
     /// Per class: sequences, skeleton, rest pose (crate::moby_anim).
     pub anim: Vec<MobyAnimClass>,
     pub instances: Vec<MobyInstance>,
+    /// The rooted records' indices and z before the world snap (`root_instances`), for each load's moby pass
+    /// (`rc_game::moby_update::scheduler::root_on_mobys`, crate::gameplay).
+    pub rooted: Vec<(usize, f32)>,
     /// Per instance: placement, or None when the class has no geometry in this level.
     pub placed: Vec<Option<Placed>>,
     pub lighting: Option<MobyLighting>,
@@ -183,8 +186,10 @@ pub fn load_mobys_with_gs(root: &Path, core: &LevelCore, core_data: &[u8], gamep
     .context("parsing moby instances")?;
     // The loader's ground snap of the rooted records (`InitLevelRenderGlobals`), before anything reads a position.
     // Not for Going Commando until its loader's snap is read (docs/plan/rac2_bringup.md §6.3 C).
+    let mut rooted = Vec::new();
     if let Some(mesh) = mesh.filter(|_| !rac2) {
-        let n = rc_game::moby_update::scheduler::root_instances(&mut instances, mesh);
+        rooted = rc_game::moby_update::scheduler::root_instances(&mut instances, mesh);
+        let n = rooted.iter().filter(|&&(i, z)| instances[i].position[2] != z).count();
         if n != 0 { println!("mobys: {n} rooted instances put on the ground"); }
     }
     let env_maps = decode_env_maps(core, gs_ram);
@@ -230,7 +235,7 @@ pub fn load_mobys_with_gs(root: &Path, core: &LevelCore, core_data: &[u8], gamep
             colors.len(), check_sum.0, check_sum.1, check_sum.2, check_sum.3
         );
     }
-    Ok(LevelMobys { classes, anim, instances, placed, lighting, colors, cpu_light, env_maps, parse_time, light_time: t0.elapsed() })
+    Ok(LevelMobys { classes, anim, instances, rooted, placed, lighting, colors, cpu_light, env_maps, parse_time, light_time: t0.elapsed() })
 }
 
 /// Moby material: texture × vertex colour (GS MODULATE), tfrag fog; skinning and lighting in the vertex
@@ -1414,9 +1419,14 @@ pub fn update_moby_occlusion(
     mut ents_q: Query<(&mut Visibility, &mut Transform), Without<Camera3d>>,
     time: Res<Time<Real>>,
     point_lights: Res<PointLightFrame>,
+    sun: Option<Res<crate::sun_shadow::KeyLight>>,
 ) {
     let Some(mut state) = state else { return };
     let mask = occl.as_ref().map(|o| o.mask);
+    // [P] While the sun casts, a moby culled for the camera alone (occluded, behind it, out of its view) within the
+    // shadows' reach keeps its high group in Bevy's view, marked `FLAG_SHADOW_ONLY` (moby.wgsl's main pass drops it, the
+    // shadow pass casts it): culled, its shadow came and went as the camera turned (G-REN-038).
+    let shadow_reach = sun.filter(|s| s.sun_shadows && crate::sun_shadow::casts("moby")).map(|_| crate::sun_shadow::MAX_DISTANCE);
     let tans = crate::game_camera::projection_tans(cams.iter().next().and_then(|(_, p)| p));
     let cam = cams.iter().next().map(|(t, _)| {
         let [fwd, left, up] = crate::game_camera::game_rows(t);
@@ -1441,17 +1451,28 @@ pub fn update_moby_occlusion(
         if let Some(dd) = look.draw_dist { inp.draw_distance = dd as i32; }
         let k = s.anim_index[ii];
         let late = look.late.unwrap_or(true);
-        let (want, pick, sphere) = if s.driven_hidden[ii] {
-            (None, None, None)
-        } else if mask.as_ref().is_some_and(|m| !s.bits[ii].visible(m)) {
-            hist[0] += 1;
-            (None, None, None)
-        } else if let Some((eye, rows)) = cam {
+        // The camera's sphere of this moby (MobyProc's), and whether a cull for the camera alone leaves it casting.
+        let view_sphere = cam.map(|(eye, rows)| {
             let seq = match k.zip(anim.as_ref()) {
                 Some((k, a)) => moby_lod::seq_sphere(&classes[d.class], &a.instances[k].state, d.class_sphere),
                 None => d.class_sphere,
             };
-            let sphere = moby_lod::world_sphere(&inp, seq);
+            (moby_lod::world_sphere(&inp, seq), eye, rows)
+        });
+        let game_hidden = k.zip(anim.as_ref()).is_some_and(|(k, a)| a.hidden[k]);
+        let caster = shadow_reach.zip(view_sphere).is_some_and(|(r, (sp, eye, _))| {
+            let u = crate::game_camera::UNITS;
+            !game_hidden && (Vec3::new(sp[0], sp[1], sp[2]) / u).distance(eye) - sp[3] / u <= r
+        });
+        let shadow_only = Shown { group: GroupKey { low: false, blend: MobyBlend::pick(mode, false, inp.alpha) }, metal: false, late };
+        let mut cast_only = false;
+        let (want, pick, sphere) = if s.driven_hidden[ii] {
+            (None, None, None)
+        } else if mask.as_ref().is_some_and(|m| !s.bits[ii].visible(m)) {
+            hist[0] += 1;
+            cast_only = caster;
+            (cast_only.then_some(shadow_only), None, None)
+        } else if let Some((sphere, eye, rows)) = view_sphere {
             let v = moby_lod::view_centre(sphere, eye, &rows);
             let result = if s.lod_on {
                 moby_lod::moby_proc_view(v, sphere[3], &inp, tans)
@@ -1461,12 +1482,13 @@ pub fn update_moby_occlusion(
             match result {
                 Err(c) => {
                     hist[match c { moby_lod::Cull::DrawDistance => 1, moby_lod::Cull::Near => 2, moby_lod::Cull::Frustum => 3 }] += 1;
-                    (None, None, None)
+                    // Behind the camera or out of its view: still casting; past its draw distance it is gone.
+                    cast_only = caster && c != moby_lod::Cull::DrawDistance;
+                    (cast_only.then_some(shadow_only), None, None)
                 }
                 Ok(p) => {
                     let group = GroupKey { low: p.low_lod, blend: MobyBlend::pick(mode, p.fading, p.alpha) };
-                    let hidden = k.zip(anim.as_ref()).is_some_and(|(k, a)| a.hidden[k]);
-                    let metal = s.metal_on && p.shine > 0 && !d.metal.is_empty() && !hidden;
+                    let metal = s.metal_on && p.shine > 0 && !d.metal.is_empty() && !game_hidden;
                     hist[4 + (p.low_lod as usize) * 2 + (group.blend != MobyBlend::Plain) as usize] += 1;
                     if metal { hist[8] += 1; }
                     (Some(Shown { group, metal, late }), Some(p), Some((sphere, eye, rows)))
@@ -1486,7 +1508,7 @@ pub fn update_moby_occlusion(
                 let flags = if s.tint && p.low_lod { moby_lod::FLAG_TINT } else { 0 } | if big { moby_lod::FLAG_AO_WORLD } else { 0 };
                 (p.alpha, flags, if w.metal { p.shine } else { 0 }, e)
             }
-            (None, Some(_)) => (inp.alpha, 0, 0, [[0.0; 3]; 3]),
+            (None, Some(_)) => (inp.alpha, if cast_only { moby_lod::FLAG_SHADOW_ONLY } else { 0 }, 0, [[0.0; 3]; 3]),
             _ => (0x80, 0, 0, [[0.0; 3]; 3]),
         };
         moby_lod::write_lod_record(rec, alpha, flags, shine, moby_lod::glow_word(mode, look.glow), &e);

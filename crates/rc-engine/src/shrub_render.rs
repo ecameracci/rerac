@@ -277,12 +277,18 @@ fn cull_system(
     cams: Query<&Transform, (With<Camera3d>, Without<crate::sky_render::SkyCamera>)>,
     mut q: Query<(&ShrubCull, &mut Visibility)>,
     gfx: Res<crate::graphics::GraphicsSettings>,
+    sun: Option<Res<crate::sun_shadow::KeyLight>>,
 ) {
     let Some(cam) = cams.iter().next() else { return };
     let (eye, fwd) = (cam.translation, *cam.forward());
     let (scale, draw) = (gfx.detail.lod_scale(), gfx.draw.scale());
+    // While the sun casts, the meshes (not the fading list) stay in Bevy's view within its shadows' reach whatever their
+    // distances (shrub.wgsl's main pass still drops them by its rules; the shadow pass casts them): culled by view
+    // depth, a shrub's shadow came and went as the camera turned (Hoven's ledge, play-test 2026-10-31; G-REN-038).
+    let reach = sun.is_some_and(|s| s.sun_shadows && crate::sun_shadow::casts("shrub")).then_some(crate::sun_shadow::MAX_DISTANCE + CULL_MARGIN);
     for (c, mut vis) in &mut q {
-        let show = cull_shows(c, (c.centre - eye).dot(fwd), scale, draw);
+        let casts = reach.is_some_and(|r| c.variant != 2 && c.centre.distance(eye) <= r);
+        let show = casts || cull_shows(c, (c.centre - eye).dot(fwd), scale, draw);
         vis.set_if_neq(if show { Visibility::Inherited } else { Visibility::Hidden });
     }
 }
