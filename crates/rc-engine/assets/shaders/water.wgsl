@@ -339,6 +339,11 @@ fn planar(ssr: vec3<f32>, wp: vec3<f32>, n_world: vec3<f32>, frag: vec4<f32>, di
     return mix(ssr, m, mirror.state.x * on * smoothstep(0.0, 0.04, inside));
 }
 
+// The ripple water's two extra texture samples (Bevy world xz → UV): rotated 34° at 1/5.5 per unit and −57° at 1/7.1,
+// so neither period nor axis meets the game's 4-unit tile (Hoven's rising water, play-test 2026-10-31).
+const RIPPLE_BREAK_A: mat2x2<f32> = mat2x2<f32>(0.1513, 0.1020, -0.1020, 0.1513);
+const RIPPLE_BREAK_B: mat2x2<f32> = mat2x2<f32>(0.0767, -0.1181, 0.1181, 0.0767);
+
 // Wavelengths from the camera over which each ripple wave fades out (whole to RIPPLE_LOD, none from twice that): the
 // short ones would alias into sparkle in the distance.
 const RIPPLE_LOD: f32 = 30.0;
@@ -551,8 +556,18 @@ fn fragment(in: WaterVertexOutput) -> @location(0) vec4<f32> {
     }
     // Absorption toward the water's own colour (the texture as the game drew it, darkened with depth). Unfogged: the
     // fog goes over the finished colour at the end, reflection and glint included (the ocean keeps its fogged tint and
-    // its own sky).
-    let tint = srgb_to_linear(select(rgb, raw, !ocean));
+    // its own sky). The ripple water's texture (kind 2) repeats every sub-block (4 units: one UV table for all), which
+    // the game's env layer and its blend over the floor hid; Enhanced draws it alone, so it is averaged with two samples
+    // on the world plane at other angles, scales and drifts (RIPPLE_BREAK), and the tile no longer lines up.
+    var water_rgb = raw;
+    if (kind == 2u) {
+        let a = textureSampleLevel(tex, tex_sampler, RIPPLE_BREAK_A * wp.xz + vec2<f32>(0.011, 0.007) * t_now, 0.0).rgb;
+        let b = textureSampleLevel(tex, tex_sampler, RIPPLE_BREAK_B * wp.xz - vec2<f32>(0.006, 0.013) * t_now, 0.0).rgb;
+        let tone = in.color;
+        water_rgb = (raw + min(floor(round(a * 255.0) * tone + vec3<f32>(1e-3)), vec3<f32>(255.0)) / 255.0
+            + min(floor(round(b * 255.0) * tone + vec3<f32>(1e-3)), vec3<f32>(255.0)) / 255.0) / 3.0;
+    }
+    let tint = srgb_to_linear(select(rgb, water_rgb, !ocean));
     // look.misc.w: the deep water's share of the colour (crate::sea_water's seas; 0: 0.55).
     let deep = tint * select(0.55, look.misc.w, look.misc.w > 0.0);
     // params.misc.z: an even absorption per unit (crate::sea_water's translucent grids; 0: this coloured one), the
