@@ -764,6 +764,11 @@ fn start_scene(w: &mut World, id: MobyId, scene: i16) {
     if scene as u16 & 0x4000 == 0 {
         w.mm(id).mode |= 1;
         w.svc.interact.handoffs.push(Handoff::Scene { scene: scene as i32, npc: Some(id) });
+        // DialogStreamStart stores game mode 2 (0x15f5c4) at once, as `cinematic::start_scene`: the frame's
+        // `Help_Update` then drops a request made later in this tick (Pokitaru's Persuader giver 298 asked for its
+        // Raritanium hint 0x86 in the trade tick, after the purchase cleared flag 1; it opened under the scene and
+        // played after it in place of 11001). A request the engine drops is set back to mode 0 (crate::scene_render).
+        w.svc.game_mode = 2;
     } else {
         w.svc.interact.handoffs.push(Handoff::Movie { movie: (scene as u16 ^ 0x4000) as i32, npc: Some(id) });
         // StartPssMovie's game mode 1 at once (`cinematic::start_movie`): without it the talker's own update in the
