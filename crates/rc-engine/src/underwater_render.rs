@@ -26,7 +26,9 @@
 //! fog and the 50 % tint sprite). Where the Enhanced surface has a colour of its own ([`SURFACE_COLOURS`]: Pokitaru's
 //! turquoise ocean), the fog the frame is drawn with, the tint sprite and this pass take it instead ([`enhanced_look`],
 //! read by crate::fog_state), so under the water reads as the surface does from above (G-REN-103's tint at
-//! [`TINT_SHARE`] of its strength there). The game's look and its flag are unchanged; other levels keep the navy.
+//! [`TINT_SHARE`] of its strength there). Only under that surface: the plane found above the camera must be the ocean's
+//! sea z ([`water_colour`]; 2026-10-31: Pokitaru's indoor pools, at z 137 under the ocean's 223, took the turquoise).
+//! The game's look and its flag are unchanged; other levels and other water keep the navy.
 //!
 //! The pass fades in and out over [`RAMP_SECS`] ([`ramp_step`]) when the flag flips, and runs only while that fade is
 //! above 0; with Water Original it never runs, so those frames are unchanged.
@@ -93,6 +95,8 @@ pub struct UnderwaterView {
     pub surface: Option<f32>,
     /// The water's colour (linear): the alternate fog colour.
     pub water: Vec3,
+    /// The Enhanced colour of the water above ([`water_colour`] of the plane found), for crate::fog_state's next frame.
+    pub colour: Option<[u8; 3]>,
     pub time: f32,
     pub strength: f32,
     pub debug: u32,
@@ -106,6 +110,7 @@ impl Default for UnderwaterView {
             amount: 0.0,
             surface: None,
             water: Vec3::new(0.009, 0.030, 0.279),
+            colour: None,
             time: 0.0,
             strength: env("RC_UNDERWATER_FX_STRENGTH").and_then(|v| v.parse().ok()).unwrap_or(1.0f32).max(0.0),
             debug: env("RC_UNDERWATER_FX_DEBUG").and_then(|v| v.parse().ok()).unwrap_or(0),
@@ -206,8 +211,18 @@ pub const SURFACE_COLOURS: &[(u32, [u8; 3])] = &[(11, [0x18, 0xbc, 0xb0])];
 /// The share of the game's tint sprite strength kept under a [`SURFACE_COLOURS`] water ([`enhanced_look`]).
 pub const TINT_SHARE: f32 = 0.6;
 
+/// How far the plane found may be from the ocean's sea z and still be the ocean (its bob, the probe's 0.5 band).
+pub const OCEAN_PLANE: f32 = 2.0;
+
 /// [`SURFACE_COLOURS`]' entry for a level.
 pub fn surface_colour(level: u32) -> Option<[u8; 3]> { SURFACE_COLOURS.iter().find(|e| e.0 == level).map(|e| e.1) }
+
+/// [`surface_colour`] when the water `plane` above the camera is that surface, the ocean at `ocean_z`
+/// (rc_game::water::sea::ocean_z); None (the game's colours) under any other water.
+pub fn water_colour(level: u32, plane: Option<f32>, ocean_z: Option<f32>) -> Option<[u8; 3]> {
+    let ocean = matches!((plane, ocean_z), (Some(p), Some(o)) if (p - o).abs() < OCEAN_PLANE);
+    surface_colour(level).filter(|_| ocean)
+}
 
 /// The underwater colours drawn with Water Enhanced (crate::fog_state: the alternate fog `UpdateFog` swaps in and the
 /// tint sprite; this pass's water colour): the game's `look` with the level's [`surface_colour`] in place of the fog's
@@ -242,10 +257,18 @@ fn follow(
     if amount <= 0.0 { return; }
     v.time = time.elapsed_secs_wrapped();
     let Some(state) = state else { return };
-    v.water = Vec3::from_array(enhanced_look(state.look(), surface_colour(crate::level_load::level_index())).fog.color.map(srgb_to_linear));
-    if !flag { return; }
-    let Some(eye) = cams.iter().next().map(|t| crate::game_camera::game_eye(t).to_array()) else { return };
-    let found = state.mesh().and_then(|mesh| match play.as_deref() {
+    if flag {
+        let Some(eye) = cams.iter().next().map(|t| crate::game_camera::game_eye(t).to_array()) else { return };
+        probe(v, &state, play.as_deref(), eye);
+        let colour = water_colour(crate::level_load::level_index(), v.surface, play.as_deref().map(|p| rc_game::water::sea::ocean_z(&p.svc.water)));
+        if v.colour != colour { v.colour = colour; }
+    }
+    v.water = Vec3::from_array(enhanced_look(state.look(), v.colour).fog.color.map(srgb_to_linear));
+}
+
+/// The water plane above `eye` into `v.surface` (the last one kept while none is found).
+fn probe(v: &mut UnderwaterView, state: &FogState, play: Option<&Play>, eye: [f32; 3]) {
+    let found = state.mesh().and_then(|mesh| match play {
         Some(p) => {
             let src = p.svc.scene_parts(&p.game.mobys, &*p.classes);
             let scene = p.svc.scene(&src);
@@ -445,6 +468,16 @@ mod tests {
             assert_eq!(surface_colour(level), None);
             assert_eq!(enhanced_look(&game, surface_colour(level)), game);
         }
+    }
+
+    #[test]
+    fn only_the_ocean_above_takes_its_colour() {
+        // Pokitaru: the ocean at 223 (bobbing), an indoor pool at 136.9 under it.
+        assert_eq!(water_colour(11, Some(223.0), Some(223.2)), surface_colour(11));
+        assert_eq!(water_colour(11, Some(136.93), Some(223.0)), None);
+        assert_eq!(water_colour(11, None, Some(223.0)), None);
+        assert_eq!(water_colour(11, Some(223.0), None), None);
+        assert_eq!(water_colour(5, Some(223.0), Some(223.0)), None);
     }
 
     #[test]
