@@ -21,7 +21,7 @@
 //!   second end) lerped from the previous tick's. Sizes, fades and culls stay the tick's.
 //! * **Not interpolated** (they step at the tick rate): the HUD and menus, the moby shadow volumes
 //!   (crate::shadow_render) and blob shadows, the sky shells' spin and the stars, water and sea surfaces, shrub sway,
-//!   UV scrolls and texture animation, the effect quads (crate::fx_draw: glows, beams, unit quads), the entities' sort
+//!   UV scrolls and texture animation, the effect quads (crate::fx_draw: glows, beams, unit quads; the flight's canopy glass is, crate::flight_render::glass_matrix), the entities' sort
 //!   keys and Bevy's frustum culls (the tick's view). Docs/plan/gaps.md G-REN-150.
 //!
 //! **Discontinuities** draw the tick's value: a camera that moves more than [`CAMERA_CUT`] units or turns more than
