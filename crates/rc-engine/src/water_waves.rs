@@ -30,25 +30,28 @@
 
 use std::collections::HashMap;
 
-/// Per wave: Bevy xz direction (unit), wavenumber 2π/λ (λ = 22, 14, 9, 6 units), amplitude (slopes about 0.03–0.04
-/// each). `water.wgsl`'s `swell_wave` holds the same values.
-pub const WAVES: [[f32; 4]; 4] = [
-    [0.8, 0.6, 0.2856, 0.11],
-    [0.98058, -0.19612, 0.4488, 0.08],
-    [0.45099, 0.89254, 0.69813, 0.06],
-    [0.92918, 0.36961, 1.05, 0.04],
+/// Per wave: Bevy xz direction (unit), wavenumber 2π/λ (λ = 23, 15.3, 10.7, 8.3, 6.9, 6.05 units), amplitude (slopes about
+/// 0.033–0.044 each). The wavelengths share no common step and the directions spread over 140° (37°, −12°, 64°, 18°,
+/// −41°, 101°), so the crests do not repeat in a regular lattice. `water.wgsl`'s `swell_wave` holds the same values.
+pub const WAVES: [[f32; 4]; 6] = [
+    [0.79864, 0.60182, 0.27318, 0.12],
+    [0.97815, -0.20791, 0.41067, 0.095],
+    [0.43837, 0.89879, 0.58721, 0.075],
+    [0.95106, 0.30902, 0.75701, 0.055],
+    [0.75471, -0.65606, 0.91061, 0.043],
+    [-0.19081, 0.98163, 1.03856, 0.035],
 ];
 /// Phase offsets (radians), so the crests do not meet at the origin.
 #[cfg_attr(not(test), allow(dead_code))]
-pub const PHASE: [f32; 4] = [0.0, 1.7, 3.4, 5.1];
-/// Angular speed `ω = SPEED·√(G·k)` (deep water, slowed: the λ = 22 swell runs 3.5 units/s).
+pub const PHASE: [f32; 6] = [0.0, 1.7, 3.4, 5.1, 6.8, 8.5];
+/// Angular speed `ω = SPEED·√(G·k)` (deep water, slowed: the λ = 23 swell runs 3.6 units/s).
 #[cfg_attr(not(test), allow(dead_code))]
 pub const SPEED: f32 = 0.6;
 #[cfg_attr(not(test), allow(dead_code))]
 pub const G: f32 = 9.8;
-/// The swell's peak (the amplitudes' sum).
-pub const MAX_HEIGHT: f32 = 0.3;
-const _: () = assert!(WAVES[0][3] + WAVES[1][3] + WAVES[2][3] + WAVES[3][3] <= MAX_HEIGHT);
+/// The swell's peak (the amplitudes' sum), under the mirror's 0.5 (crate::water_mirror reads it within 0.5 of the plane).
+pub const MAX_HEIGHT: f32 = 0.43;
+const _: () = assert!(WAVES[0][3] + WAVES[1][3] + WAVES[2][3] + WAVES[3][3] + WAVES[4][3] + WAVES[5][3] <= MAX_HEIGHT);
 /// The displacement's far fade: whole to the first horizontal distance from the camera, none from the second (game
 /// units; the split reaches no farther). The slope carries on, each wave to [`WAVE_LOD`]·2 of its wavelengths.
 pub const SWELL_FADE: [f32; 2] = [50.0, 100.0];
@@ -290,10 +293,10 @@ mod tests {
             assert_eq!(wave_weight(w, WAVE_LOD * l(w)), 1.0);
             assert_eq!(wave_weight(w, 2.0 * WAVE_LOD * l(w)), 0.0);
         }
-        // Every wave whole where the displacement is whole; the λ = 22 swell still on at 300.
+        // Every wave whole where the displacement is whole; the λ = 23 swell still on at 300.
         assert!(WAVES.iter().all(|w| wave_weight(w, SWELL_FADE[0] - 3.0) == 1.0));
-        assert!(wave_weight(&WAVES[0], 300.0) > 0.0 && wave_weight(&WAVES[3], 100.0) == 0.0);
-        assert!(WAVE_LOD * l(&WAVES[3]) >= SWELL_FADE[0] - 3.0);
+        assert!(wave_weight(&WAVES[0], 300.0) > 0.0 && wave_weight(&WAVES[5], 100.0) == 0.0);
+        assert!(WAVES.iter().all(|w| WAVE_LOD * l(w) >= SWELL_FADE[0] - 3.0));
     }
 
     #[test]

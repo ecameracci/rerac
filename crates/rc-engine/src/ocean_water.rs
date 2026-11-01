@@ -47,8 +47,9 @@ pub const FINE: f32 = 2.0;
 pub const COARSE: f32 = 16.0;
 /// A tile is fine while its nearest point is within this of the camera (the displacement's end plus a tick's travel).
 pub const FINE_REACH: f32 = crate::water_waves::SWELL_FADE[1] + crate::water_waves::TESS_MARGIN;
-/// The swell's scale over crate::water_waves::scale (open water; the shore damping calms it as on the grid seas).
-pub const SWELL: f32 = 1.0;
+/// The swell's scale over crate::water_waves::scale (open water; the shore damping calms it as on the grid seas): 0.8
+/// keeps Pokitaru near the grid seas' old four-wave swell (peak 0.34 of [`crate::water_waves::MAX_HEIGHT`]'s 0.43).
+pub const SWELL: f32 = 0.8;
 /// The water's colour (RGB bytes): the Original's open water as drawn (the band at its 0x60 alpha over the GS clear
 /// colour, plus the layers), sampled from Original frames over the lagoon, taken back out of the level fog, its red
 /// lowered for the sky the surface reflects on top.
