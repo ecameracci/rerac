@@ -18,7 +18,11 @@
 //!   the Infobot sold): `UnlockPlanet(2)` and `ShowPlanetBanner(2)` (`crate::cinematic`: the saved game's planet
 //!   bits and the HUD banner "Infobot for Planet Aridia acquired"), state 3, the save (`crate::cinematic::save`).
 //! * **3**: `DeleteMoby`.
-//! * **4 / 5** (Batalia's turret guy; state 5 moves Ratchet to a fixed point): not ported (counted).
+//! * **4** (Batalia's "Big Turret Guy", level08 0x2f90c8): `NpcTalkUpdate`; when it starts a scene: state 5, the talk
+//!   block's +8 (the node's auto flag) = 0.
+//! * **5**: waits while game mode 2 (a scene) runs; then talk +6 = 2: Ratchet's position 0x13f3d0 = (130.5, 299.5,
+//!   46.0) (no teleport: only the position) and state 6; else state 4.
+//! * **6**: nothing but the head look-at.
 //! * **7** ("Mystery 774", the other levels): nothing but the head look-at.
 //!
 //! **The head look-at** (every state but 3; [`look_at`], docs/plan/moby_animation.md §9), coverage of 0x2ff3d0..0x2ff734:
@@ -47,6 +51,8 @@ pub const UPDATE_FN: u32 = 0x2ff118;
 pub const CLASSES: [i16; 1] = [774];
 /// `FUN_002783a8(2.2, npc)`.
 const PLACE_DISTANCE: f32 = 2.2;
+/// State 5's store into 0x13f3d0 (level08 0x2f90c8): Ratchet by Batalia's turret.
+const TURRET_SPOT: [f32; 3] = [130.5, 299.5, 46.0];
 
 /// `TalkingNpcUpdate` (0x2ff118).
 pub fn update(w: &mut World, id: MobyId) {
@@ -109,9 +115,26 @@ pub fn update(w: &mut World, id: MobyId) {
             }
         }
         3 => return w.delete_moby(id),
-        // "Mystery 774" (every level but 1 and 8): no talk, only the head look-at below.
-        7 => {}
-        _ => w.svc.unported("talking npc: Batalia turret guy states 4/5"),
+        4 => {
+            if interact::talk_update(w, id) {
+                w.mm(id).state = 5;
+                p::set_u8(&mut w.mm(id).pvars, talk::AUTO, 0);
+            }
+        }
+        5 => {
+            if w.svc.interact.talker == Some(id) || w.svc.game_mode == 2 { return look_at(w, id); }
+            if p::i16(&w.m(id).pvars, 0x06) == 2 {
+                // 0x13f3d0 = (130.5, 299.5, 46.0): only Ratchet's position (by the turret).
+                let (yaw, target_yaw) = (w.hero.rot[2].to_f32(), w.hero.target_yaw.to_f32());
+                w.hero_fields_mut().pose = Some(crate::moby_update::services::HeroPose { pos: TURRET_SPOT, yaw, target_yaw });
+                w.mm(id).state = 6;
+            } else {
+                w.mm(id).state = 4;
+            }
+        }
+        // 6: Batalia's turret guy after his talk; 7: "Mystery 774" (every level but 1 and 8): only the head look-at.
+        6 | 7 => {}
+        _ => {}
     }
     look_at(w, id);
 }
