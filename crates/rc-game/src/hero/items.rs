@@ -499,6 +499,10 @@ fn refresh_seq_loop(fx: &mut super::fx::HeroFx, lp: u8, frame: i32) {
 /// a glove: rows = W, no advance, no normalisation, and its pose is Ratchet's hand ([`glove_frame`]; frame
 /// A = B = that keyframe, t = 0: the port shows it as the snapshot key).
 fn attach_hand(hero: &mut Hero, table: &MobyTable, anim: &dyn AnimCtl, env: &ItemEnv) {
+    // Game modes 2 and 6 (a scene, the ship mode): the slot loop skips every slot but 4 and 5 (L00 0x20f580, the same
+    // code in every level), so the hand item is neither placed nor advanced and its triggers stay silent (the Suck
+    // Cannon's sounded through Batalia's landing, session 2026-10-31_16-42-07).
+    if matches!(hero.gadgets.game_mode, 2 | 6) { return; }
     let id = hero.items.slot.id;
     let detached = hero.items.slot.detached != 0;
     let Some(it) = hero.items.slot.item.as_mut() else { return };
