@@ -111,9 +111,10 @@ const ORBS_4: [(i32, i32); 4] = [(-80, 0), (-48, 0), (-16, 0), (16, 0)];
 const ORBS_5: [(i32, i32); 5] = [(-64, 0), (-32, 0), (0, 0), (-48, 32), (-16, 32)];
 const ORBS_8: [(i32, i32); 8] = [(-80, 0), (-48, 0), (-16, 0), (16, 0), (-80, 32), (-48, 32), (-16, 32), (16, 32)];
 /// 0x15f808 health y base (+18 NTSC, +10 PAL), 0x15f80c second bar row, 0x15f810 bar y offset,
-/// 0x15f81c bar tile size, 0x15f820 health bar alpha.
+/// 0x15f81c bar tile size, 0x15f820 health bar alpha. Port-only: the second bar row is 32, the orb rows' step
+/// (0x17e8e0: row 2 at +32), not the disc's 16, which left the five-orb bar half over the gap between the rows.
 const HEALTH_Y: i32 = 14;
-const BAR_ROW_DY: i32 = 16;
+const BAR_ROW_DY: i32 = 32;
 const BAR_DY: i32 = -16;
 const BAR_TILE: i32 = 32;
 const HEALTH_BAR_ALPHA: i32 = 20;
