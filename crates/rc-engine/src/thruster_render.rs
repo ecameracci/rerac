@@ -78,11 +78,23 @@ impl FlameTables {
 /// The tables and the mesh ST the draws scroll (the game writes it back into its table).
 type Loaded = (FlameTables, Mutex<Vec<[f32; 2]>>);
 
-/// The loaded level's tables (once per process).
-fn tables() -> Option<&'static Loaded> {
-    static T: crate::level_load::PerLevel<Option<Loaded>> = [const { OnceLock::new() }; 20];
-    crate::level_load::per_level(&T).get_or_init(|| {
-        let (root, index) = (crate::level_load::extracted_root(), crate::level_load::level_index());
+/// The tables of level `index` (once per process).
+static TABLES: crate::level_load::PerLevel<Option<Loaded>> = [const { OnceLock::new() }; 20];
+
+/// The loaded level's tables.
+fn tables() -> Option<&'static Loaded> { tables_of(crate::level_load::level_index()) }
+
+/// Builds the loaded level's tables on a thread of their own, from the level setup (crate::gameplay): reading both
+/// overlays and relocating took 94 ms in the frame of the first flame on Rilgar (Tracy, 2026-11-01). A flame drawn
+/// before it is done waits on the `OnceLock` rather than building them twice.
+pub fn preload() {
+    let index = crate::level_load::level_index();
+    std::thread::spawn(move || { tables_of(index); });
+}
+
+fn tables_of(index: u32) -> Option<&'static Loaded> {
+    TABLES[(index as usize).min(19)].get_or_init(|| {
+        let root = crate::level_load::extracted_root();
         let ov = |l: u32| crate::disc_source::level_file(&root, l, "overlay.bin").ok().and_then(|b| LevelOverlay::parse(&b).ok());
         let (Some(target), Some(reference)) = (ov(index), ov(1)) else {
             eprintln!("thruster flames: no level overlay: the flames draw only their particles");

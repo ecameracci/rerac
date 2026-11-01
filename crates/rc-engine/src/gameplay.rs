@@ -1378,6 +1378,8 @@ fn setup(
     map_setup(&mut svc, level_index, state.as_ref().map(|s| &s.0));
     // The class reaction tables of the level's `lvl.vtbl` (rc_game::moby_update::creature::react).
     svc.creatures.react.tables = level_reactions().clone();
+    // The Thruster-Pack flames' tables, built off the frame before the first flame (crate::thruster_render::preload).
+    crate::thruster_render::preload();
     // The level's water (rc_game::water::world: the ripple managers' tables, the module, the underwater look).
     if let Some(d) = lv.water.data.clone() { svc.water = rc_game::water::world::WaterWorld::new(d); }
     // The level fog globals 0x15f444.. as the moby code reads them (crate::fog_state keeps the copy current).
