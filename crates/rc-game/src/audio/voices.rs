@@ -412,7 +412,12 @@ impl SoundSlots {
             if let (Some(Some(p)), true) = (owner_now, s.flags & flags::NO_FOLLOW == 0) {
                 // Flag 0x40 (rotated local offset) needs the moby matrix; not ported: plain follow.
                 let old = [s.pos[0], s.pos[1], s.pos[2] - 1.0];
-                scratch = vsub(p, old);
+                let step = vsub(p, old);
+                // [P] A step of a unit or more is a teleport and gets no Doppler (the listener ring's rule above): the
+                // game takes it as this frame's velocity, so Hoven's turret drones 326, moved back to their path start
+                // the tick after their death, bent their explosion's pitch by some 240 semitones for a frame (the note
+                // wraps in `sceSdNote2Pitch` to the SPU's 0x3fff: a chirp at 4× on every kill).
+                scratch = if length(step) >= 60.0 * (1.0 / 60.0) { vel } else { step };
                 s.pos = [p[0], p[1], p[2] + 1.0];
             }
             scratch = vsub(scratch, vel);
@@ -917,6 +922,33 @@ mod tests {
         assert_eq!((s.slots[2].handle, s.slots[2].state), (5, state::CONFIRMED));
         s.apply_reply(SndReply { slot: 2, handle: 0, play: false });
         assert_eq!(s.slots[2].state, state::FREE);
+    }
+
+    /// An owner that moves gets the Doppler of its step; one that jumps a unit or more (Hoven's turret drone 326 back
+    /// at its path start) gets none.
+    #[test]
+    fn doppler_skips_a_teleport() {
+        let mut rng = Rng::new();
+        let l = Listener { pos: [0.0; 3], rows: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]], ..Default::default() };
+        let def = SoundDef { near: 0.0, far: 200.0, vol_far: 0, vol_near: 2048, ..Default::default() };
+        let mut pm_after = |to: [f32; 3]| {
+            let mut s = SoundSlots::new();
+            let owner = Owner { id: 7, privileged: false };
+            let at = std::cell::Cell::new([10.0f32, 0.0, 0.0]);
+            let k = s.play(&def, 0, Some(owner), Some(at.get()), None, 0x400, &l, &mut rng) as usize;
+            let pos = |_: u32| Some(at.get());
+            let frame = |s: &mut SoundSlots, rng: &mut Rng, f: u32| {
+                let mut ctx = UpdateCtx { listener: &l, collision: None, rng, frame: f, owner_pos: &pos, sfx_option: 0x400, music_option: 0x400, sound_page: false, cutscene: false };
+                s.update(&mut ctx)
+            };
+            frame(&mut s, &mut Rng::new(), 0);
+            s.apply_reply(SndReply { slot: k, handle: 5, play: true });
+            for f in 1..5 { frame(&mut s, &mut Rng::new(), f); s.slots[k].handle = 5; }
+            at.set(to);
+            frame(&mut s, &mut Rng::new(), 5).iter().find_map(|c| match *c { SndCommand::SetParams { slot, pm, .. } if slot == k => Some(pm), _ => None }).expect("params")
+        };
+        assert!(pm_after([10.5, 0.0, 0.0]) < 0, "receding half a unit: pitched down");
+        assert_eq!(pm_after([40.0, 0.0, 0.0]), 0, "a 30-unit jump: no Doppler");
     }
 
     #[test]
