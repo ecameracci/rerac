@@ -516,6 +516,9 @@ pub fn vendor_frame(
     let mut demo_exit = false;
     if let Some(d) = out.weapon_demo.take() {
         println!("interact: frame {frame}: VendorStartWeaponDemo: item {} scene unknown_1530[{}], stream {}", d.item, d.scene, d.stream);
+        // The held item, unless it is the bought one, goes at once (`FUN_002305e8(0, 0)`: slot 0 emptied and its moby
+        // removed, no put-away).
+        if play.game.hero.items.slot.id != d.item as i32 { rc_game::hero::items::delete_hand(&mut play.game.hero, 0); }
         sess.temp_hand = if d.item == 0x18 { 0 } else { d.item as i32 };
         match vr.moby {
             Some(id) => {
