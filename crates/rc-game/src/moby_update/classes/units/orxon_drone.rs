@@ -31,8 +31,8 @@
 //! drone: a moby gets damage 1, flags 0x10003; then (or its life or target gone) the death explosion (0.25, light 13
 //! but 0 on level 10), sound 0 of class 0x99, deleted.
 //!
-//! Read from the level10 decomp; gp−0x4d1c ticks, −0x4d18 the shot speed, −0x4d14 the anim speed. [L] The help's
-//! guard 0x141c48 (an s16 of the hero block) is taken as 0.
+//! Read from the level10 decomp; gp−0x4d1c ticks, −0x4d18 the shot speed, −0x4d14 the anim speed. The help's
+//! guard 0x141c48 is help record 0x5c's count (0x141968 + 8·0x5c): the help shows until it has been seen.
 //!
 //! | address | what | port |
 //! |---|---|---|
@@ -316,7 +316,7 @@ pub fn update(w: &mut World, id: MobyId) {
                 if w.m(id).anim.seq_b != 1 { blend(w, id, 1, 0x14); }
                 w.mm(id).mode &= !0x41;
                 w.mm(id).has_collision = super::class_collision(w, 1229);
-                if w.svc.help.idle() && w.body() == 0 && !w.inventory.owned(11) { w.svc.help.request(0x2715, 0x5c); }
+                if w.svc.help.idle() && w.body() == 0 && w.svc.help.records.help[0x5c].count == 0 && !w.inventory.owned(11) { w.svc.help.request(0x2715, 0x5c); }
             }
         }
         2 => {
