@@ -141,11 +141,13 @@ const SHORE_DEPTH: vec2<f32> = vec2<f32>(0.5, 8.0);
 
 // crate::water_waves::WAVES (direction x, z, wavenumber, amplitude), PHASE, SPEED, G.
 fn swell_wave(i: i32) -> vec4<f32> {
-    var w = array<vec4<f32>, 4>(
-        vec4<f32>(0.8, 0.6, 0.2856, 0.11),
-        vec4<f32>(0.98058, -0.19612, 0.4488, 0.08),
-        vec4<f32>(0.45099, 0.89254, 0.69813, 0.06),
-        vec4<f32>(0.92918, 0.36961, 1.05, 0.04),
+    var w = array<vec4<f32>, 6>(
+        vec4<f32>(0.79864, 0.60182, 0.27318, 0.12),
+        vec4<f32>(0.97815, -0.20791, 0.41067, 0.095),
+        vec4<f32>(0.43837, 0.89879, 0.58721, 0.075),
+        vec4<f32>(0.95106, 0.30902, 0.75701, 0.055),
+        vec4<f32>(0.75471, -0.65606, 0.91061, 0.043),
+        vec4<f32>(-0.19081, 0.98163, 1.03856, 0.035),
     );
     return w[i];
 }
@@ -162,7 +164,7 @@ fn swell_weight(w: vec4<f32>, d: f32) -> f32 {
 
 fn swell_height(xz: vec2<f32>, t: f32, d: f32) -> f32 {
     var h = 0.0;
-    for (var i = 0; i < 4; i += 1) {
+    for (var i = 0; i < 6; i += 1) {
         let w = swell_wave(i);
         h += swell_weight(w, d) * w.w * sin(swell_phase(w, i, xz, t));
     }
@@ -171,7 +173,7 @@ fn swell_height(xz: vec2<f32>, t: f32, d: f32) -> f32 {
 
 fn swell_grad(xz: vec2<f32>, t: f32, d: f32) -> vec2<f32> {
     var g = vec2<f32>(0.0);
-    for (var i = 0; i < 4; i += 1) {
+    for (var i = 0; i < 6; i += 1) {
         let w = swell_wave(i);
         g += w.xy * (swell_weight(w, d) * w.w * w.z * cos(swell_phase(w, i, xz, t)));
     }
@@ -425,7 +427,7 @@ fn ring_grad(xz: vec2<f32>, t: f32) -> vec2<f32> {
         let s = dist - speed * age;
         let w = 0.25 + 0.2 * age;
         let env = exp(-(s * s) / (w * w));
-        let amp = r.w * 0.1 * exp(-1.3 * age) / (1.0 + dist);
+        let amp = r.w * 0.13 * exp(-1.1 * age) / (1.0 + dist);
         g += (off / dist) * (-amp * k * sin(k * s) * env);
     }
     return g;
@@ -593,7 +595,7 @@ fn fragment(in: WaterVertexOutput) -> @location(0) vec4<f32> {
     col = mix(col, tint, select(select(0.12, 0.4, chute), 0.0, ocean) * shore);
     col = mix(col, tint, far);
     // The swell's crests lighter, its troughs darker (crate::water_waves::CREST, by the height over MAX_HEIGHT).
-    col = col * (1.0 + 0.35 * clamp(swell * swell_height(wp.xz, t_now, swell_d) / 0.3, -1.5, 1.5) * select(1.0, OCEAN_CREST / 0.35, ocean));
+    col = col * (1.0 + 0.35 * clamp(swell * swell_height(wp.xz, t_now, swell_d) / 0.43, -1.5, 1.5) * select(1.0, OCEAN_CREST / 0.35, ocean));
     if (chute) {
         // White streaks stretched along the flow and carried with it.
         let q = vec2<f32>(in.flow.x * 5.0, (in.flow.y - t_now * params.misc.z * 1.1) * 0.5);
