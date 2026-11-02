@@ -657,18 +657,23 @@ fn draw(
                 }
             }
             (SeaKind::Hoven, SeaData::Hoven(h)) => {
-                // Water Enhanced's ice (crate::liquid_render): every layer drifts slowly; the added pass (the white
-                // streaks) stays the game's draw.
+                // Water Enhanced's ice (crate::liquid_render): the opaque groups take the ice look, which draws no
+                // texture but the open sea's mean colour (FX 0x2f for both groups, so they meet without a seam); the
+                // added pass (the white streaks, the game's low-resolution caustics) is not drawn, the look draws its
+                // own.
                 let ice = crate::liquid_render::hoven_ice(gfx.water.on());
                 let scroll = |speed: [f32; 2], game: [f32; 2]| if ice { crate::liquid_render::hoven_scroll(speed, counter) } else { game };
                 if gs::hoven_group1_drawn(&m.pvars, &p.svc.volumes, cam) {
                     if ice { ice_groups.push(groups.len()); }
-                    groups.push(Group { tex: Tex::Fx(HOVEN_G1_FX, false), effect: None, fog: level_fog, bias, prims: strip_prims(&h.groups[0], scroll(h.g1_speed, run.g1_scroll), None) });
+                    let fx = if ice { HOVEN_FX[0] } else { HOVEN_G1_FX };
+                    groups.push(Group { tex: Tex::Fx(fx, false), effect: None, fog: level_fog, bias, prims: strip_prims(&h.groups[0], scroll(h.g1_speed, run.g1_scroll), None) });
                 }
                 if ice { ice_groups.push(groups.len()); }
                 groups.push(Group { tex: Tex::Fx(HOVEN_FX[0], false), effect: None, fog: level_fog, bias: bias + 1.0, prims: strip_prims(&h.groups[1], scroll(h.layer_speed[0], run.scroll[0]), None) });
-                let added = strip_prims(&h.groups[1], scroll(h.layer_speed[1], run.scroll[1]), Some(h.fix2));
-                groups.push(Group { tex: Tex::Fx(HOVEN_FX[1], true), effect: Some(Blend::Add), fog: level_fog, bias: bias + 2.0, prims: added });
+                if !ice {
+                    let added = strip_prims(&h.groups[1], scroll(h.layer_speed[1], run.scroll[1]), Some(h.fix2));
+                    groups.push(Group { tex: Tex::Fx(HOVEN_FX[1], true), effect: Some(Blend::Add), fog: level_fog, bias: bias + 2.0, prims: added });
+                }
             }
             (SeaKind::GridSet, SeaData::GridSet(g)) => {
                 // 854's callback `0x2ea048`: the shared image and fog (`0x2a4818`), the gated records, the fog restore.

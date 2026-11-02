@@ -54,7 +54,7 @@
 // (crate::graphics::end_fade), dithered 4x4 (`end_fade_shown`); nothing past 500·s is drawn, so the cull never pops.
 // s = 1 (Original): no fade, the game's cut.
 
-#import bevy_pbr::view_transformations::{position_world_to_clip, position_world_to_view, position_ndc_to_world, frag_coord_to_ndc}
+#import bevy_pbr::view_transformations::{position_world_to_clip, position_world_to_view}
 #ifndef PREPASS_PIPELINE
 #import bevy_pbr::mesh_view_bindings::{view, globals}
 #endif
@@ -177,6 +177,10 @@ struct TfragVertex {
     @location(0) position: vec3<f32>,
     // (global vertex-info index, tfrag index | strip list << 16 | TEX1 K (s12, 1/16 units) << 18)
     @location(1) tref: vec2<u32>,
+#ifdef TFRAG_LIQUID
+    // The triangle's ST → world xz map (crate::tfrag_render::ATTRIBUTE_ST_MAP).
+    @location(2) st_map: vec4<f32>,
+#endif
 }
 
 struct TfragVertexOutput {
@@ -192,6 +196,11 @@ struct TfragVertexOutput {
     @location(4) @interpolate(flat) tint: u32,
     // TEX1 K of the triangle's ad-gif, in mip levels.
     @location(5) @interpolate(flat) k: f32,
+#ifdef TFRAG_LIQUID
+    // The Bevy world position (the view, `goo_look`) and the pattern's plane: the ST through the triangle's map.
+    @location(6) world: vec3<f32>,
+    @location(7) plane: vec2<f32>,
+#endif
 }
 
 // Position (world, game units) and colour (0..255) of a VU position slot.
@@ -323,6 +332,10 @@ fn vertex(v: TfragVertex) -> TfragVertexOutput {
     }
     let r = value(e.slot, m);
     out.position = position_world_to_clip(r.pos);
+#ifdef TFRAG_LIQUID
+    out.world = r.pos;
+    out.plane = vec2<f32>(dot(v.st_map.xy, e.uv), dot(v.st_map.zw, e.uv));
+#endif
     out.uv = e.uv;
     out.color = r.col / 128.0;
     let depth = depth_raw(r.pos);
@@ -398,7 +411,7 @@ fn goo_swell(q: vec2<f32>, t: f32) -> f32 {
 }
 
 // The game's texture made alive: "eyes" (its orange bubbles, yellow centre, dark rim) in GOO_EYE-unit cells that
-// wander, swell and pop over 3..6.5 s into a neon ring running out to 2.5 radii; around a living one, a neon arc (the
+// wander, swell and pop over 3..6.5 s into a neon ring running out to 2.1 radii; around a living one, a neon arc (the
 // texture's green crescents). `slope` the domes' and rings' height gradient over xz. `foot` the pixel's world size:
 // the edges widen to it (thin lines keep their weight as they widen) and the domes' shading and glints fade, so the
 // eyes hold without aliasing out to a few pixels across.
@@ -447,12 +460,15 @@ fn goo_eyes(q: vec2<f32>, t: f32, foot: f32) -> GooEyes {
                 let arc = exp(-(s - 1.35) * (s - 1.35) / w2) * sqrt(1.0 / 60.0 / w2);
                 o.neon = max(o.neon, arc * smoothstep(0.2, 0.7, sin(ang)) * 0.8);
             } else {
-                // The pop: a neon ring and a ring wave running out, fading.
+                // The pop: a neon ring and a ring wave running out to 2.1 radii, fading; it stays inside the cells
+                // searched (a centre is at least 0.13 cells from its cell's edge, so 1.13 cells around it are seen:
+                // `reach` closes it off before, or it is cut along the cell edges as straight lines).
                 let a = (age - 0.88) / 0.12;
-                let front = size * (0.6 + 1.9 * a);
-                let w0 = size * (0.12 + 0.12 * a);
+                let front = size * (0.6 + 1.5 * a);
+                let w0 = size * (0.1 + 0.06 * a);
                 let w = max(w0, foot);
-                let env = exp(-(dl - front) * (dl - front) / (w * w)) * (1.0 - a);
+                let reach = 1.0 - smoothstep(0.95, 1.1, dl / GOO_EYE);
+                let env = exp(-(dl - front) * (dl - front) / (w * w)) * (1.0 - a) * reach;
                 o.neon = max(o.neon, env * w0 / w);
                 o.slope += d / max(dl, 1e-3) * (0.6 * env * cos((dl - front) * 8.0 / size)) * (1.0 - smoothstep(0.03, 0.1, foot / size));
             }
@@ -461,15 +477,19 @@ fn goo_eyes(q: vec2<f32>, t: f32, foot: f32) -> GooEyes {
     return o;
 }
 
+
 // The goo's look over its base `rgb` (the texture's mean colour × the vertex colours, display space, before the fog):
 // the texture's palette around that base (olive-brown mottling, yellow-orange eyes with dark rims, neon green
 // squiggles and crescents) drawn procedurally on the world plane, carried by the swell's flow and alive: the eyes
 // swell and pop ([`goo_eyes`]), the squiggles drift, the mottling breathes. Shaded by the swell's and the eyes'
 // normal under a fixed light from above (Orxon is night), a faint Fresnel sheen of the fog colour, a soft highlight
 // on the swell's high ground and a glint on each eye. The details widen to the pixel's footprint and fade only once
-// they would be under a few pixels (the eyes from 0.25 units a pixel, the squiggles from 0.4).
-fn goo_look(rgb: vec3<f32>, world: vec3<f32>, t: f32) -> vec3<f32> {
-    let xz = world.xz;
+// they would be under a few pixels (the eyes from 0.25 units a pixel, the squiggles from 0.4). `world` the Bevy
+// position (the view), `xz` the plane the pattern is drawn on: the texture's ST mapped to world units by each
+// triangle's own map (crate::tfrag_render::liquid_st_map). Not the world position: the goo's mesh has overlapping
+// pieces at slightly different heights, where the world position jumps by the parallax and the pattern showed thin
+// lines of a shifted copy (marker 1 of session 2026-11-02_12-34-52); the ST runs on across them, as the texture does.
+fn goo_look(rgb: vec3<f32>, world: vec3<f32>, xz: vec2<f32>, t: f32) -> vec3<f32> {
     let to_cam = view.world_position - world;
     let e = 0.08;
     let h0 = goo_swell(xz, t);
@@ -522,12 +542,12 @@ fn fragment(in: TfragVertexOutput) -> @location(0) vec4<f32> {
     // GS mip level: round(log2(z / n) + K), clamped to 0..MXL (or the texture option's level: sample_world).
     let t = sample_world(in.uv, log2(in.depth / lod.misc.z) + in.k, lod.tex.y, duv);
     var rgb = min(t.rgb * in.color.rgb, vec3<f32>(1.0));
-    // The world position from the pixel and its depth: a vertex output of its own would change Original's compiled
-    // positions (a few edge pixels per frame).
-    if (lod.tex.z > 0.5) {
-        let base = min(goo_mean() * in.color.rgb, vec3<f32>(1.0));
-        rgb = min(goo_look(base, position_ndc_to_world(frag_coord_to_ndc(in.position)), globals.time), vec3<f32>(1.0));
-    }
+#ifdef TFRAG_LIQUID
+    // The liquid's own pipeline (crate::tfrag_render::TfragKey): the world position and the pattern's plane from its
+    // vertex outputs (crate::tfrag_render::liquid_st_map).
+    let base = min(goo_mean() * in.color.rgb, vec3<f32>(1.0));
+    rgb = min(goo_look(base, in.world, in.plane, globals.time), vec3<f32>(1.0));
+#endif
     if (fog.color.w > 0.5) {
         rgb = mix(fog.color.rgb, rgb, in.fog);
     }
