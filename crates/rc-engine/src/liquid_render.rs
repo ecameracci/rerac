@@ -24,10 +24,10 @@
 //!   horizon, so the swell shows as glossy bands) by Fresnel and the key light's highlight, the wet patches' darkening
 //!   paying for most of it (Aridia's marker 2: the mud's mean about a fifth up, the frame's about 5 %);
 //! * **sludge**: murky, a weak emissive tint of its colour, slow ripples and bubbles that swell and pop;
-//! * **ice** (Hoven's slush): flat and still. The game scrolls its two layers (FX 0x2f opaque, FX 0x30 added over it
-//!   at `fix2`) against each other, which reads as rolling waves; here every layer drifts at [`ICE_DRIFT`] of its
-//!   speed. The opaque layers keep the game's own darker green-blue colour and pattern, with only a faint sky sheen
-//!   and a sharp glint (`ICE`); the added pass, the white streaks, stays the game's draw over them.
+//! * **ice** (Hoven's freezing water, `liquid_look.wgsl` `ice_look`): no texture is drawn (its mean colour only,
+//!   `liquid.wgsl`; both opaque groups take FX 0x2f's so they meet without a seam) and the game's added pass (the
+//!   white streaks) is left out (crate::sea_render). The water keeps the Original's teal, pushed toward its emerald,
+//!   with a moving caustic web drawn at any resolution, a fine ripple, a sky sheen and a glint (`ICE`).
 //! * **tfrag liquids** ([`TFRAG_LIQUIDS`]: Orxon's goo, level geometry under a still texture): drawn by the tfrag
 //!   pass itself (`tfrag.wgsl` `goo_look`, the batch flagged in its LOD uniform, [`follow_tfrag_liquids`]): the
 //!   texture is not drawn: its look (olive mottling, dark-rimmed yellow "eyes", neon squiggles and crescents) is
@@ -700,9 +700,10 @@ mod tests {
         // Orxon's tex 12 only; the same index elsewhere, and Orxon's other textures (its grass 16), stay Original.
         assert!(tfrag_liquid(10, 12));
         assert!(!tfrag_liquid(10, 16) && !tfrag_liquid(1, 12) && !tfrag_liquid(13, 12));
-        // The shader's branch: `lod.tex.z` set only on a marked batch (`lod.tex.w`).
+        // The look is its own pipeline variant (crate::tfrag_render::TfragKey: `lod.tex.z`, set only on a marked
+        // batch, `lod.tex.w`): Original's tfrag shader has none of it.
         let tfrag = include_str!("../assets/shaders/tfrag.wgsl");
-        assert!(tfrag.contains("if (lod.tex.z > 0.5) {"));
+        assert!(tfrag.contains("#ifdef TFRAG_LIQUID") && tfrag.contains("goo_look(base, in.world, in.plane, globals.time)"));
         // The mean colour round-trips through `goo_mean`'s unpacking.
         let v = pack_mean(&[200, 150, 30, 128, 174, 148, 38, 128]);
         assert_eq!(v, 187.0 + 256.0 * 149.0 + 65536.0 * 34.0);

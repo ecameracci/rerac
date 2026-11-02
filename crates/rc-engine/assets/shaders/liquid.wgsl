@@ -73,7 +73,17 @@ fn fragment(in: LiquidVertexOutput) -> @location(0) vec4<f32> {
         frame.shore = textureSampleLevel(shore_tex, shore_sampler, q, 0.0).r;
     }
     let kind = u32(params.misc.x + 0.5);
-    let rgb = modulate(textureSample(tex, tex_sampler, in.uv), in.color.rgb);
+    var rgb = modulate(textureSample(tex, tex_sampler, in.uv), in.color.rgb);
+    if (kind == 4u) {
+        // Ice draws no texture: its mean (4 × 4 texels spread over it) under the vertex colours.
+        var m = vec3<f32>(0.0);
+        for (var j = 0; j < 4; j += 1) {
+            for (var i = 0; i < 4; i += 1) {
+                m += textureSampleLevel(tex, tex_sampler, (vec2<f32>(f32(i), f32(j)) + 0.5) * 0.25, 0.0).rgb;
+            }
+        }
+        rgb = modulate(vec4<f32>(m / 16.0, 1.0), in.color.rgb);
+    }
     // Four taps around for the mud's low-contrast colour.
     let d = 0.37;
     let soft = (modulate(textureSample(tex, tex_sampler, in.uv + vec2<f32>(d, 0.0)), in.color.rgb)

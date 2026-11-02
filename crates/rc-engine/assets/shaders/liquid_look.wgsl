@@ -278,6 +278,39 @@ fn mud_look(rgb: vec3<f32>, soft: vec3<f32>, xz: vec2<f32>, slope: vec2<f32>, su
     return mix(body, env, refl) + light * spec;
 }
 
+// The open water's caustic web (the game's added layer of white streaks, redrawn at any resolution): the thin ridges
+// of two warped noise layers flowing different ways, sharpened; 0 far away (`fine`), where their mean takes over.
+fn ice_caustics(xz: vec2<f32>, t: f32, foot: f32) -> f32 {
+    let warp = vec2<f32>(wnoise(xz * 0.21 + vec2<f32>(t * 0.05, 0.0)), wnoise(xz * 0.21 + vec2<f32>(6.1, -t * 0.04))) * 1.6;
+    let a = 1.0 - abs(wnoise(xz * 0.55 + warp + vec2<f32>(t * 0.16, t * 0.07)));
+    let b = 1.0 - abs(wnoise(xz * 0.9 - warp * 0.7 + vec2<f32>(-t * 0.12, t * 0.13) + vec2<f32>(3.7, 1.2)));
+    // Thinner lines need a finer pixel: the exponents ease off as the footprint grows.
+    let k = mix(9.0, 3.0, smoothstep(0.02, 0.15, foot));
+    return pow(a, k) * 0.7 + pow(b, k * 1.3) * 0.5;
+}
+
+// The ice look (kind 4, Hoven's 1901, the freezing water): the game's texture is not drawn; `base` is its mean colour
+// under the vertex colours, the dark teal of the Original. The water flows: a slow mottling and a bright caustic web
+// (`ice_caustics`) moving across it, a fine ripple, a sky sheen (ICE.x of the Fresnel term) and a glint (ICE.y). The
+// fine detail fades by `foot` (a pixel's world size).
+fn ice_look(base: vec3<f32>, xz: vec2<f32>, sun: vec3<f32>, sky: vec3<f32>, to_eye: vec3<f32>, t: f32, foot: f32) -> vec3<f32> {
+    let mott = wnoise(xz * 0.13 + vec2<f32>(t * 0.03, -t * 0.02));
+    let caus = ice_caustics(xz, t, foot) * (1.0 - smoothstep(0.15, 0.4, foot)) + 0.12 * smoothstep(0.15, 0.4, foot);
+    // The Original's water is greener than the texture's mean (its added streaks brighten it toward emerald): the mean
+    // pushed toward green, the caustics a bright mint.
+    let deep = base * vec3<f32>(0.55, 1.15, 0.85);
+    let bright = min(deep * 2.6 + vec3<f32>(0.03, 0.12, 0.08), vec3<f32>(1.0));
+    var col = mix(deep * (0.8 + 0.35 * mott), bright, clamp(caus, 0.0, 1.0));
+    let rip = vec2<f32>(wnoise(xz * 1.7 + vec2<f32>(t * 0.3, 0.0)), wnoise(xz * 1.7 + vec2<f32>(5.3, -t * 0.25))) * 0.12;
+    let n = normalize(vec3<f32>(rip.x, 1.0, rip.y));
+    let fres = 0.03 + 0.97 * pow(1.0 - max(dot(n, to_eye), 0.0), 5.0);
+    col = mix(col, sky, clamp(fres * ICE.x, 0.0, 0.35));
+    // Light: the key light if it is up, else one from above (Hoven is night).
+    let l = select(normalize(vec3<f32>(0.3, 1.0, 0.2)), sun, sun.y > 0.15);
+    let spec = pow(max(dot(n, normalize(l + to_eye)), 0.0), 120.0) * ICE.y;
+    return col + vec3<f32>(0.9, 0.97, 1.0) * spec;
+}
+
 // The look of `kind` in linear light: `rgb` the draw's MODULATE colour (display bytes / 255), `soft` the same at low
 // contrast (mud; else `rgb`), `uv` its ST, `world` the Bevy position, `slope` an extra surface slope over world xz (the
 // ripple module's), `flow` the second lava layer (crate::liquid_render::layer_flow), `sun` toward the key light, `sky`
@@ -323,11 +356,7 @@ fn liquid_look(kind: u32, rgb: vec3<f32>, soft: vec3<f32>, uv: vec2<f32>, world:
     let xz = world.xz;
     let to_v = max(to_eye.y, 0.0);
     if (kind == 4u) {
-        // Ice (Hoven's slush, frozen): the game's own darker green-blue colour and pattern, flat and still (the white
-        // streaks are the game's added layer, drawn over it as in Original); a faint sky sheen and a sharp glint.
-        let fres = 0.04 + 0.96 * pow(1.0 - to_v, 5.0);
-        let spec = pow(max(dot(vec3<f32>(0.0, 1.0, 0.0), normalize(sun + to_eye)), 0.0), 120.0) * ICE.y * sun_up;
-        return mix(base, sky, clamp(fres * ICE.x, 0.0, 0.25)) + vec3<f32>(spec);
+        return ice_look(base, xz, sun, sky, to_eye, t, frame.foot);
     }
     if (kind == 2u) {
         return mud_look(rgb, soft, xz, slope, sun, sky, to_eye, t, frame);

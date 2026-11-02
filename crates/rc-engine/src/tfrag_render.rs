@@ -52,7 +52,7 @@ pub const ATTRIBUTE_TFRAG_REF: MeshVertexAttribute = MeshVertexAttribute::new("T
 
 /// Tfrag material: texture × vertex colour, GS MODULATE semantics, no lighting; LOD/morph data in storage buffers.
 #[derive(Asset, TypePath, AsBindGroup, Debug, Clone)]
-#[bind_group_data(GsPass)]
+#[bind_group_data(TfragKey)]
 pub struct TfragMaterial {
     /// The texture with its full mip chain (`TextureEntry::ty` levels).
     #[texture(0)]
@@ -80,6 +80,19 @@ pub struct TfragMaterial {
 
 impl From<&TfragMaterial> for GsPass {
     fn from(m: &TfragMaterial) -> Self { m.pass }
+}
+
+/// The pipeline key: the GS state, and whether the batch's tfrag-liquid look is on (crate::liquid_render
+/// `TFRAG_LIQUIDS`, `lod.tex.z`): only that variant (`TFRAG_LIQUID`) carries the world position as a vertex output,
+/// so every other tfrag pipeline, and the liquid's in Original, stays the shader it was.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct TfragKey {
+    pass: GsPass,
+    liquid: bool,
+}
+
+impl From<&TfragMaterial> for TfragKey {
+    fn from(m: &TfragMaterial) -> Self { TfragKey { pass: m.pass, liquid: m.lod.tex.z > 0.5 } }
 }
 
 impl Material for TfragMaterial {
@@ -119,16 +132,19 @@ impl Material for TfragMaterial {
         key: MaterialPipelineKey<Self>,
     ) -> Result<(), SpecializedMeshPipelineError> {
         descriptor.primitive.cull_mode = None;
-        if gs_state::is_shadow_pipeline(descriptor) {
-            key.bind_group_data.specialize_shadow(descriptor, "tfrag");
-        } else {
-            key.bind_group_data.specialize_world(descriptor);
-        }
         // Own position (bounds only) and the (vertex-info, tfrag | list) reference; everything else is in storage.
-        descriptor.vertex.buffers = vec![layout.0.get_layout(&[
-            Mesh::ATTRIBUTE_POSITION.at_shader_location(0),
-            ATTRIBUTE_TFRAG_REF.at_shader_location(1),
-        ])?];
+        let mut attributes = vec![Mesh::ATTRIBUTE_POSITION.at_shader_location(0), ATTRIBUTE_TFRAG_REF.at_shader_location(1)];
+        if gs_state::is_shadow_pipeline(descriptor) {
+            key.bind_group_data.pass.specialize_shadow(descriptor, "tfrag");
+        } else {
+            key.bind_group_data.pass.specialize_world(descriptor);
+            if key.bind_group_data.liquid {
+                descriptor.vertex.shader_defs.push("TFRAG_LIQUID".into());
+                if let Some(f) = descriptor.fragment.as_mut() { f.shader_defs.push("TFRAG_LIQUID".into()); }
+                attributes.push(ATTRIBUTE_ST_MAP.at_shader_location(2));
+            }
+        }
+        descriptor.vertex.buffers = vec![layout.0.get_layout(&attributes)?];
         Ok(())
     }
 }
@@ -176,6 +192,36 @@ struct Batch {
     vertex_alpha: Option<AlphaRange>,
     /// (tfrag, list, vertex-info index, K) → vertex, so shared strip vertices stay shared.
     remap: HashMap<(u32, u8, u16, u32), u32>,
+    /// A tfrag liquid's batch (crate::liquid_render::TFRAG_LIQUIDS): [`ATTRIBUTE_ST_MAP`] per vertex, and the last
+    /// triangle's map.
+    liquid: bool,
+    st_maps: Vec<[f32; 4]>,
+    st_map: [f32; 4],
+}
+
+/// Per vertex of a tfrag liquid (only its `TFRAG_LIQUID` pipeline reads it, crate::tfrag_render::TfragKey): the
+/// triangle's ST → Bevy world xz map, `(a, b, c, d)` with `xz = (a·s + b·t, c·s + d·t)` up to a constant.
+pub const ATTRIBUTE_ST_MAP: MeshVertexAttribute = MeshVertexAttribute::new("TfragStMap", 0x5446_534d, VertexFormat::Float32x4);
+
+/// The ST → world map of a triangle of `t` (vertex-info indices `v`), in Bevy xz (game x, −y), rounded to a
+/// thousandth so the triangles of one mapping agree exactly; None for a triangle degenerate in ST. Orxon's goo maps ST
+/// in several ways (most of it s = 0.0747·x, t = −0.0896·y in game units; some parts 0.125 with the axes swapped, a
+/// few turned), so the map is per triangle (`tfrag.wgsl` `goo_look`'s plane).
+fn liquid_st_map(t: &rc_formats::tfrag::Tfrag, v: [u16; 3]) -> Option<[f32; 4]> {
+    let [a, b, c] = v.map(|i| (t.world_position(i as usize), t.vertex_info[i as usize].st()));
+    let (e1, e2) = ([b.0[0] - a.0[0], b.0[1] - a.0[1]], [c.0[0] - a.0[0], c.0[1] - a.0[1]]);
+    let (s1, s2) = ([b.1[0] - a.1[0], b.1[1] - a.1[1]], [c.1[0] - a.1[0], c.1[1] - a.1[1]]);
+    let det = s1[0] * s2[1] - s2[0] * s1[1];
+    if det.abs() < 1e-6 { return None; }
+    // World per ST: W = E · S⁻¹.
+    let w = [
+        (e1[0] * s2[1] - e2[0] * s1[1]) / det,
+        (e2[0] * s1[0] - e1[0] * s2[0]) / det,
+        (e1[1] * s2[1] - e2[1] * s1[1]) / det,
+        (e2[1] * s1[0] - e1[1] * s2[0]) / det,
+    ];
+    let r = |x: f32| (x * 1000.0).round() / 1000.0;
+    Some([r(w[0]), r(w[1]), r(-w[2]), r(-w[3])])
 }
 
 pub struct TfragSceneStats {
@@ -309,12 +355,19 @@ pub fn spawn_tfrags_on(
                 let k12 = ad.lod_k_raw() as u32 & 0xfff;
                 let b = batches.entry(key).or_default();
                 b.vertex_alpha = Some(b.vertex_alpha.map_or(alpha, |r| r.union(alpha)));
+                // A tfrag liquid's vertices carry their triangle's ST → world map (`liquid_st_map`; a degenerate
+                // triangle keeps the batch's last one).
+                if crate::liquid_render::tfrag_liquid(level.water.level, key.0) {
+                    if let Some(m) = liquid_st_map(t, [tri.a, tri.b, tri.c]) { b.st_map = m; }
+                    b.liquid = true;
+                }
                 for vi in [tri.a, tri.b, tri.c] {
                     let v = if let Some(&v) = b.remap.get(&(ti as u32, list as u8, vi, k12)) { v } else {
                         let p = t.world_position(vi as usize);
                         if list == 0 { for k in 0..3 { min[k] = min[k].min(p[k]); max[k] = max[k].max(p[k]); } }
                         b.positions.push(game_to_bevy(p).to_array());
                         b.refs.push([vinfo_base[ti] + vi as u32, ti as u32 | (list as u32) << 16 | k12 << 18]);
+                        if b.liquid { b.st_maps.push(b.st_map); }
                         let v = (b.positions.len() - 1) as u32;
                         b.remap.insert((ti as u32, list as u8, vi, k12), v);
                         v
@@ -408,12 +461,12 @@ pub fn spawn_tfrags_on(
             .map(|l| crate::liquid_render::pack_mean(&l.rgba));
         lod.tex = Vec4::new(liquid.unwrap_or(0.0), mxl as f32, 0.0, if liquid.is_some() { 1.0 } else { 0.0 });
         lod.misc.z /= lod_scale;
-        let mesh = meshes.add(
-            Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD)
-                .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, b.positions)
-                .with_inserted_attribute(ATTRIBUTE_TFRAG_REF, VertexAttributeValues::Uint32x2(b.refs))
-                .with_inserted_indices(Indices::U32(b.indices)),
-        );
+        let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD)
+            .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, b.positions)
+            .with_inserted_attribute(ATTRIBUTE_TFRAG_REF, VertexAttributeValues::Uint32x2(b.refs))
+            .with_inserted_indices(Indices::U32(b.indices));
+        if b.liquid { mesh.insert_attribute(ATTRIBUTE_ST_MAP, b.st_maps); }
+        let mesh = meshes.add(mesh);
         for pass in passes {
             let mut e = commands.spawn((
                 Mesh3d(mesh.clone()),
