@@ -275,7 +275,8 @@ pub enum Particles {
     /// Faded by their distance in front of the world behind them (crate::particle_render).
     Soft,
     /// Soft, and the bright effects (flashes, fireballs, additive sprites) light the opaque world around them
-    /// (crate::particle_lights); the stars glow and the rain and snow are restyled ([`Particles::atmosphere`]).
+    /// (crate::particle_lights); the stars glow and the rain and snow are restyled ([`Particles::atmosphere`]); the
+    /// ground fire rings (Gemlik's stompers, Blarg's fire waves) burn as flame curtains (crate::fx_draw::flame_curtain).
     Enhanced,
 }
 

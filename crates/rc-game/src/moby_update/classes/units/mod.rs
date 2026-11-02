@@ -1571,6 +1571,13 @@ pub fn fx_quads(table: &crate::moby_runtime::MobyTable, svc: &crate::moby_update
     }
 }
 
+/// Port-only (Particles Enhanced: rc-engine `fx_draw::flame_curtain` and `particle_lights`): the 16 points (xyz, fade
+/// in w) of a running ground fire ring, Gemlik's stomper ring (1262) or Blarg's fire wave (1068, levels 6 and 10);
+/// both ride 0.3..0.4 over the floor.
+pub fn fire_ring_points(table: &crate::moby_runtime::MobyTable, id: MobyId) -> Option<[[f32; 4]; 16]> {
+    gemlik_robot::ring_points(table, id).or_else(|| blarg_wave_bot::ring_points(table, id))
+}
+
 /// The quad groups of the draw callback unit row `i` registered for moby `id` (`Callback::UnitQuads(i)`): the rows
 /// whose callback draws more than one texture or blend (1471's beams), else [`fx_quads`]'s one group.
 pub fn fx_quad_groups(table: &crate::moby_runtime::MobyTable, svc: &crate::moby_update::Services, i: u16, id: MobyId) -> Vec<FxQuads> {

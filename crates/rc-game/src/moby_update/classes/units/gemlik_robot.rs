@@ -239,6 +239,13 @@ pub fn fx_quads(table: &MobyTable, _svc: &Services, id: MobyId) -> Option<FxQuad
     Some(FxQuads { fx: 0xb, additive: true, subtract: false, quads })
 }
 
+/// Port-only (`super::fire_ring_points`): the ring's 16 points (xyz, fade in w) while it runs (+0x1fc), read only.
+pub fn ring_points(table: &MobyTable, id: MobyId) -> Option<[[f32; 4]; 16]> {
+    let m = table.mobys.get(id).filter(|m| m.pvars.len() >= o::SIZE && CLASSES.contains(&m.o_class))?;
+    if p::ff(&m.pvars, o::RING_T) <= 0.0 { return None; }
+    Some(std::array::from_fn(|j| p::v4f(&m.pvars, o::RING + 0x10 * j)))
+}
+
 /// `0x308d10(m)`: the tick (module doc). False: deleted.
 fn tick(w: &mut World, id: MobyId) -> bool {
     let oc = w.m(id).o_class;

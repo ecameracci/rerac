@@ -642,3 +642,29 @@ fn stomper_ring_rolls_out_and_is_drawn() {
     eprintln!("stomper #{b}: ring from tick {launched:?}, fully live {lit} ticks");
     assert!(launched.is_some() && lit >= 120, "the ring live {lit} ticks");
 }
+
+/// Both ground fire rings feed Particles Enhanced's flame curtain through `units::fire_ring_points`: a Blarg fire-wave
+/// bot (1068, level 6) with Ratchet 7 ahead sends its wave, and the accessor gives its 16 points while it runs
+/// (+0x21c): fades in 0..1, the live ones riding the ground.
+#[test]
+fn blarg_fire_wave_points_feed_the_flame_curtain() {
+    use rc_game::moby_update::classes::units::blarg_wave_bot as bw;
+    let Some(mut lv) = load(6) else { eprintln!("skipped: no extracted/"); return };
+    // The bot by the ledge at (304.8, 373.8) (it stands and waits, no path out).
+    let near = |b: &MobyId| { let q = lv.table.mobys[*b].position; (q[0] - 304.8).hypot(q[1] - 373.8) };
+    let b = *lv.of_class(1068).iter().min_by(|a, c| near(a).total_cmp(&near(c))).expect("a fire-wave bot");
+    let (p, y) = (lv.table.mobys[b].position, lv.table.mobys[b].rotation[2]);
+    let hero = hero_at([p[0] + y.cos() * 7.0, p[1] + y.sin() * 7.0, p[2] + 0.1]);
+    lv.load_pass(&hero);
+    let (mut ran, mut live) = (0, 0);
+    for t in 0..300 {
+        lv.tick(&hero);
+        let Some(pts) = units::fire_ring_points(&lv.table, b) else { continue };
+        assert_eq!(Some(pts), bw::ring_points(&lv.table, b));
+        ran += 1;
+        assert!(pts.iter().all(|q| (0.0..=1.0).contains(&q[3])), "tick {t}: fades out of 0..1");
+        live += pts.iter().filter(|q| q[3] >= 1.0).count();
+    }
+    eprintln!("fire-wave bot #{b} at {p:?} yaw {y}: wave {ran} ticks, {live} live point-ticks");
+    assert!(ran >= 100 && live > 0, "the wave ran {ran} ticks");
+}
