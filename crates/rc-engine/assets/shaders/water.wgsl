@@ -496,6 +496,10 @@ fn fragment(in: WaterVertexOutput) -> @location(0) vec4<f32> {
     let ct = round(t.rgb * 255.0);
     var rgb = min(floor(ct * in.color + vec3<f32>(1e-3)), vec3<f32>(255.0)) / 255.0;
     let raw = rgb;
+    // A ripple patch's (kind 2) texture on the game plane (`in.wuv`), sampled here in uniform control flow: Enhanced
+    // draws from it instead of the table's UV, which restarts every sub-block (the game's env pass hid the seams).
+    let tw = textureSample(tex, tex_sampler, in.wuv);
+    let wraw = min(floor(round(tw.rgb * 255.0) * in.color + vec3<f32>(1e-3)), vec3<f32>(255.0)) / 255.0;
     if (fog.color.w > 0.5) {
         rgb = mix(fog.color.rgb, rgb, in.fog);
     }
@@ -508,13 +512,11 @@ fn fragment(in: WaterVertexOutput) -> @location(0) vec4<f32> {
 
     if (kind == 1u || kind == 3u) { return vec4<f32>(0.0); }
     // Another liquid (look.misc.x = 2, look.misc.y = its kind: crate::liquid_render), opaque, fogged after the look.
-    // A ripple patch's (kind 2) texture and look on the game plane (`in.wuv`): its table restarts every sub-block,
-    // which the game's env pass hid.
+    // A ripple patch's (kind 2) texture and look on the game plane (`wraw`, `in.wuv`).
     if (look.misc.x > 1.5) {
         let lp = (view.world_from_view * vec4<f32>(position_ndc_to_view(frag_coord_to_ndc(in.position)), 1.0)).xyz;
         let sky = srgb_to_linear(mix(fog.color.rgb, vec3<f32>(1.0), 0.25));
-        let tw = textureSample(tex, tex_sampler, in.wuv);
-        let lraw = select(raw, min(floor(round(tw.rgb * 255.0) * in.color + vec3<f32>(1e-3)), vec3<f32>(255.0)) / 255.0, kind == 2u);
+        let lraw = select(raw, wraw, kind == 2u);
         var lc = liquid_look(u32(look.misc.y + 0.5), lraw, lraw, select(in.uv, in.wuv, kind == 2u), lp, in.ripple_grad, DRIFT, normalize(look.sun.xyz), sky, normalize(view.world_position - lp), globals.time, still_frame());
         if (fog.color.w > 0.5) { lc = mix(srgb_to_linear(fog.color.rgb), lc, in.fog); }
         return vec4<f32>(lc, 1.0);
@@ -587,15 +589,16 @@ fn fragment(in: WaterVertexOutput) -> @location(0) vec4<f32> {
     }
     // Absorption toward the water's own colour (the texture as the game drew it, darkened with depth). Unfogged: the
     // fog goes over the finished colour at the end, reflection and glint included (the ocean keeps its fogged tint and
-    // its own sky). The ripple water's texture (kind 2) repeats every sub-block (4 units: one UV table for all), which
-    // the game's env layer and its blend over the floor hid; Enhanced draws it alone, so it is averaged with two samples
-    // on the world plane at other angles, scales and drifts (RIPPLE_BREAK), and the tile no longer lines up.
+    // its own sky). The ripple water's texture (kind 2) repeats every 4-unit sub-block (one UV table for all), which
+    // the game's env layer and its blend over the floor hid; Enhanced draws it alone, so the game-plane sample (`wraw`,
+    // no seams) is averaged with two samples on the world plane at other angles, scales and drifts (RIPPLE_BREAK), and
+    // the tile no longer lines up.
     var water_rgb = raw;
     if (kind == 2u) {
         let a = textureSampleLevel(tex, tex_sampler, RIPPLE_BREAK_A * wp.xz + vec2<f32>(0.011, 0.007) * t_now, 0.0).rgb;
         let b = textureSampleLevel(tex, tex_sampler, RIPPLE_BREAK_B * wp.xz - vec2<f32>(0.006, 0.013) * t_now, 0.0).rgb;
         let tone = in.color;
-        water_rgb = (raw + min(floor(round(a * 255.0) * tone + vec3<f32>(1e-3)), vec3<f32>(255.0)) / 255.0
+        water_rgb = (wraw + min(floor(round(a * 255.0) * tone + vec3<f32>(1e-3)), vec3<f32>(255.0)) / 255.0
             + min(floor(round(b * 255.0) * tone + vec3<f32>(1e-3)), vec3<f32>(255.0)) / 255.0) / 3.0;
     }
     let tint = srgb_to_linear(select(rgb, water_rgb, !ocean));
