@@ -908,7 +908,7 @@ fn draw_ripples(
                 let mask = sim.patches[p].mask;
                 let uv = sim.advance_uv(p);
                 let verts = sim.patch_verts(p, cam);
-                write_patch(&mut st.ripple_bytes, p, mask, &verts, &uv, sim.world_uv(&uv));
+                write_patch(&mut st.ripple_bytes, p, mask, &verts, &uv, sim.world_uv(p, st.counter));
                 wrote = true;
             }
         }

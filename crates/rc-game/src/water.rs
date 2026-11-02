@@ -708,22 +708,23 @@ impl RippleSim {
         })
     }
 
-    /// Port-only (Water Enhanced's liquid looks, rc-engine `water_render`): the water UV of this frame's `uv`
-    /// ([`Self::advance_uv`]) as one affine map of game (x, y), `[au, bu, u0, av, bv, v0]` with `u = au·x + bu·y + u0`.
-    /// The game's table restarts every sub-block and alternates two wobbles between its vertices, which seams the
-    /// texture at every sub-block edge (its env pass hid that); the map is the table's first-wobble vertices fitted
-    /// on the grid (cells along game x and y), offset by that wobble and the scroll, so it runs on across sub-blocks
-    /// and patches. None without three such vertices off one line.
-    pub fn world_uv(&self, uv: &[[f32; 2]; SUB_STRIP_LEN]) -> Option<[f32; 6]> {
+    /// Port-only (Water Enhanced's liquid looks, rc-engine `water_render`): patch `p`'s water UV as one affine map
+    /// of game (x, y), `[au, bu, u0, av, bv, v0]` with `u = au·x + bu·y + u0`. The game's table restarts every
+    /// sub-block and alternates two wobbles between its vertices, which seams the texture at every sub-block edge (its
+    /// env pass hid that); the map is the table's first-wobble vertices fitted on the grid (cells along game x and y).
+    /// Its scroll and wobble run on `frame`, one clock for all patches, at the patch's own speeds, step and radius:
+    /// [`Self::advance_uv`]'s phases are per patch and move only while it is drawn, which seamed the patch edges.
+    /// None without three such vertices off one line.
+    pub fn world_uv(&self, p: usize, frame: u32) -> Option<[f32; 6]> {
         let c = &self.consts;
         let (cx, cy) = (c.cell[0].to_f32() as f64, c.cell[1].to_f32() as f64);
-        type Pt = (f64, f64, [f64; 2], [f64; 2]);
+        type Pt = (f64, f64, [f64; 2]);
         let pts: Vec<Pt> = (0..SUB_STRIP_LEN)
             .filter(|&k| self.uv_select.get(k) == Some(&0))
             .filter_map(|k| {
                 let o = *self.strip_order.get(k)? as usize;
                 let b = self.uv_base.get(k)?.map(|v| v.to_f32() as f64);
-                Some(((o % VG) as f64 * cx, (o / VG) as f64 * cy, b, uv[k].map(f64::from)))
+                Some(((o % VG) as f64 * cx, (o / VG) as f64 * cy, b))
             })
             .collect();
         // Least squares of `b = a·x + b·y + c` per component (normal equations, Cramer's rule).
@@ -741,9 +742,12 @@ impl RippleSim {
                 det3(m) / d
             })
         };
-        // The frame's offset of the first-wobble vertices (scroll + wobble), the same for all of them.
-        let k0 = pts.first()?;
-        let off = [k0.3[0] - k0.2[0], k0.3[1] - k0.2[1]];
+        // The first-wobble vertices' offset (`advance_uv`: scroll + radius·(cos θ0, sin θ0)) on the shared clock.
+        let pa = self.patches.get(p)?;
+        let (f, r) = (frame as f64, pa.radius.to_f32() as f64);
+        let th = pa.dtheta[0].to_f32() as f64 * f;
+        let s = pa.speed.map(|v| (v.to_f32() as f64 * f).rem_euclid(1.0));
+        let off = [s[0] + th.cos() * r, s[1] + th.sin() * r];
         let (fu, fv) = (fit(0), fit(1));
         Some([fu[0], fu[1], fu[2] + off[0], fv[0], fv[1], fv[2] + off[1]].map(|v| v as f32))
     }
@@ -941,7 +945,7 @@ mod tests {
     }
 
     /// The water UV map: the first-wobble vertices' table fitted on the grid (2-unit cells here), per game unit,
-    /// offset by this frame's scroll and wobble.
+    /// offset by the scroll and wobble at the shared frame, whatever the patch's own phases.
     #[test]
     fn world_uv_fits_the_table_on_the_grid() {
         let mut s = one_patch();
@@ -950,13 +954,15 @@ mod tests {
         s.strip_order = (0..SUB_STRIP_LEN).map(off).collect();
         s.uv_base = (0..SUB_STRIP_LEN).map(|k| { let o = off(k) as usize; [Pf::f(0.25 * (o % VG) as f32), Pf::f(0.5 * (o / VG) as f32)] }).collect();
         s.uv_select = (0..SUB_STRIP_LEN as u32).map(|k| k & 1).collect();
-        let uv: [[f32; 2]; SUB_STRIP_LEN] = std::array::from_fn(|k| { let b = s.uv_base[k]; [b[0].to_f32() + 0.3, b[1].to_f32() + 0.6] });
-        let m = s.world_uv(&uv).expect("a map");
-        let want = [0.125, 0.0, 0.3, 0.0, 0.25, 0.6];
+        let pa = &mut s.patches[0];
+        (pa.speed, pa.dtheta, pa.radius) = ([Pf::f(0.01), Pf::f(0.02)], [Pf::f(0.1), Pf::f(0.3)], Pf::f(0.05));
+        (pa.scroll, pa.theta) = ([Pf::f(0.7); 2], [Pf::f(1.0); 2]);
+        let m = s.world_uv(0, 10).expect("a map");
+        let want = [0.125, 0.0, 0.1 + 0.05 * 1f32.cos(), 0.0, 0.25, 0.2 + 0.05 * 1f32.sin()];
         assert!(m.iter().zip(want).all(|(a, b)| (a - b).abs() < 1e-5), "{m:?}");
         // All on one line: no map.
         s.strip_order = vec![0; SUB_STRIP_LEN];
-        assert_eq!(s.world_uv(&uv), None);
+        assert_eq!(s.world_uv(0, 10), None);
     }
 
     #[test]
