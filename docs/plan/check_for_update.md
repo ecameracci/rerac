@@ -18,7 +18,14 @@ Updates come from this fork's releases (`ecameracci/rerac`).
 - **Prereleases.** GitHub's `releases/latest` skips prereleases, and every release so far is one (`-alpha`). Either list releases and take prereleases, or make the beta releases non-prerelease.
 - **Comparison.** Compare the tag's `X.Y.Z[-pre]` with the build's version; offline or an error shows "Couldn't check", never an error state.
 - **Network only on request.** Check when the page opens, never in the background.
-- **What Update does (to decide).**
-  - Hand off to the launcher, which already picks and downloads the zip for its OS and CPU (`docs/plan/launcher_contract.md`; may need a new message there, outside its verbatim section).
-  - Or download `rerac-<version>-<os>-<arch>.zip` in the game and swap the files on restart. Windows can't overwrite a running `rerac.exe`, so this needs a helper or a restart step.
+- **Update installs it itself, without the launcher.** The game downloads the release's
+  `rerac-<version>-<os>-<arch>.zip` for its OS and CPU and replaces the packaged files (the allow-list in
+  `docs/workflows/release.md`: `rerac`, `rerac-extract`, `assets/shaders/*.wgsl`, `rerac-manifest.json`, `README.txt`),
+  then restarts. Open points:
+  - Windows can't overwrite a running `rerac.exe`: rename it aside (allowed while running) and move the new one in,
+    or hand off to a small helper that waits for the game to exit.
+  - Unpack to a temporary folder next to the game and check it (e.g. `rerac --version-json`) before swapping, so a
+    failed download leaves the old build working.
+  - macOS: a downloaded zip is quarantined by Gatekeeper (no signing yet); a `.app` bundle swaps as a whole.
+  - Extracted game data (`extracted/`) and the settings are left alone; a new extractor version may need a re-extract.
 - Release assets and names: `docs/workflows/release.md`.
