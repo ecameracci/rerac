@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.5.2-alpha
+
+- Particles Enhanced: Gemlik's stomper robots and Blarg's fire-wave robots (also on Orxon) burn a curtain of flickering flames instead of a flat glowing ring, lighting the ground around them.
+- Water Enhanced: Orxon's goo is alive, with bubbles that pop, drifting streaks and an uneven swell; Hoven's water drops its old texture and white streaks.
+- Water Enhanced: Gemlik's liquid pools no longer show seams, and its orange pools look like lava.
+- Water Enhanced: the seas swell higher and less regularly, and Ratchet's ripples are stronger.
+- Water Enhanced: Pokitaru's far sea meets the distant wall without a hard line, and its indoor pools no longer turn turquoise under water.
+- Sun shadows no longer vanish as the camera turns away from or behind objects.
+- Hoven: the stacked crates sit on each other instead of sinking in, and the turret drones' explosions no longer warp in pitch.
+- With 5 or 8 health orbs, the second health bar sits behind the second row of orbs.
+- In wide aspect ratios, the quick-select ring and the planet caption in flight move out to the screen's side with the rest of the HUD.
+- Frame smoothing: the ship's canopy glass stays on the ship in flight.
+- The Thruster-Pack's first flame on a level no longer stutters.
+- A held weapon no longer plays its sounds during Batalia's landing, and buying a weapon from a vendor swaps it in at once.
+- Hints no longer repeat: Pokitaru's Raritanium hint and the Orxon drones' help.
+- Batalia's turret guy finishes his talk as in the original.
+
 ## v0.5.1-alpha
 
 Fixes from playing v0.5.0.
