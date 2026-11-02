@@ -193,9 +193,10 @@ pub struct WaterParams {
 /// Bytes per callback slot in the `frame` buffer: (w, scroll x, scroll y, 0), then the eight wobble offsets
 /// two per vec4 (index = hash & 7).
 const FRAME_RECORD: usize = 80;
-/// Words of a patch's `ripple` record: mask + 3 pad, per grid vertex (x, y, z, env u, env v, RGBA), then the
-/// 46 water UVs.
-const RIPPLE_HEAD: usize = 4;
+/// Words of a patch's `ripple` record: mask, the water UV as a map of game (x, y) (`RippleSim::world_uv`, six f32;
+/// Water Enhanced's liquid looks sample it), a pad; per grid vertex (x, y, z, env u, env v, RGBA), then the 46 water
+/// UVs.
+const RIPPLE_HEAD: usize = 8;
 const RIPPLE_VERTEX: usize = 6;
 const RIPPLE_UV_AT: usize = RIPPLE_HEAD + VG * VG * RIPPLE_VERTEX;
 const RIPPLE_WORDS: usize = RIPPLE_UV_AT + SUB_STRIP_LEN * 2;
@@ -511,13 +512,16 @@ fn patch_mesh(order: &[u16]) -> Mesh {
         .with_inserted_indices(Indices::U32(idx))
 }
 
-/// Writes patch `p`'s `ripple` record: the mask, the 17×17 vertices and the 46 water UVs.
-fn write_patch(bytes: &mut [u8], p: usize, mask: u16, v: &ww::PatchVerts, water_uv: &[[f32; 2]; SUB_STRIP_LEN]) {
+/// Writes patch `p`'s `ripple` record: the mask, the water UV map (zeros without one), the 17×17 vertices and the
+/// 46 water UVs.
+fn write_patch(bytes: &mut [u8], p: usize, mask: u16, v: &ww::PatchVerts, water_uv: &[[f32; 2]; SUB_STRIP_LEN], world: Option<[f32; 6]>) {
     let at = p * RIPPLE_WORDS * 4;
     let Some(rec) = bytes.get_mut(at..at + RIPPLE_WORDS * 4) else { return };
     let mut w = rec.as_chunks_mut::<4>().0.iter_mut();
     let mut put = |x: u32| if let Some(d) = w.next() { *d = x.to_le_bytes() };
-    for x in [mask as u32, 0, 0, 0] { put(x); }
+    put(mask as u32);
+    for x in world.unwrap_or([0.0; 6]) { put(x.to_bits()); }
+    put(0);
     for g in 0..VG * VG {
         let (pos, uv) = (v.pos[g], v.env_uv[g]);
         for x in [pos[0], pos[1], pos[2], uv[0], uv[1]] { put(x.to_bits()); }
@@ -904,7 +908,7 @@ fn draw_ripples(
                 let mask = sim.patches[p].mask;
                 let uv = sim.advance_uv(p);
                 let verts = sim.patch_verts(p, cam);
-                write_patch(&mut st.ripple_bytes, p, mask, &verts, &uv);
+                write_patch(&mut st.ripple_bytes, p, mask, &verts, &uv, sim.world_uv(&uv));
                 wrote = true;
             }
         }

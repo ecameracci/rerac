@@ -708,6 +708,46 @@ impl RippleSim {
         })
     }
 
+    /// Port-only (Water Enhanced's liquid looks, rc-engine `water_render`): the water UV of this frame's `uv`
+    /// ([`Self::advance_uv`]) as one affine map of game (x, y), `[au, bu, u0, av, bv, v0]` with `u = au·x + bu·y + u0`.
+    /// The game's table restarts every sub-block and alternates two wobbles between its vertices, which seams the
+    /// texture at every sub-block edge (its env pass hid that); the map is the table's first-wobble vertices fitted
+    /// on the grid (cells along game x and y), offset by that wobble and the scroll, so it runs on across sub-blocks
+    /// and patches. None without three such vertices off one line.
+    pub fn world_uv(&self, uv: &[[f32; 2]; SUB_STRIP_LEN]) -> Option<[f32; 6]> {
+        let c = &self.consts;
+        let (cx, cy) = (c.cell[0].to_f32() as f64, c.cell[1].to_f32() as f64);
+        type Pt = (f64, f64, [f64; 2], [f64; 2]);
+        let pts: Vec<Pt> = (0..SUB_STRIP_LEN)
+            .filter(|&k| self.uv_select.get(k) == Some(&0))
+            .filter_map(|k| {
+                let o = *self.strip_order.get(k)? as usize;
+                let b = self.uv_base.get(k)?.map(|v| v.to_f32() as f64);
+                Some(((o % VG) as f64 * cx, (o / VG) as f64 * cy, b, uv[k].map(f64::from)))
+            })
+            .collect();
+        // Least squares of `b = a·x + b·y + c` per component (normal equations, Cramer's rule).
+        let s = |f: &dyn Fn(&Pt) -> f64| pts.iter().map(f).sum::<f64>();
+        let (n, sx, sy, sxx, syy, sxy) = (pts.len() as f64, s(&|p| p.0), s(&|p| p.1), s(&|p| p.0 * p.0), s(&|p| p.1 * p.1), s(&|p| p.0 * p.1));
+        let det3 = |m: [[f64; 3]; 3]| m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0]) + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
+        let a = [[sxx, sxy, sx], [sxy, syy, sy], [sx, sy, n]];
+        let d = det3(a);
+        if d.abs() < 1e-9 { return None; }
+        let fit = |i: usize| -> [f64; 3] {
+            let r = [s(&|p| p.0 * p.2[i]), s(&|p| p.1 * p.2[i]), s(&|p| p.2[i])];
+            std::array::from_fn(|col| {
+                let mut m = a;
+                for row in 0..3 { m[row][col] = r[row]; }
+                det3(m) / d
+            })
+        };
+        // The frame's offset of the first-wobble vertices (scroll + wobble), the same for all of them.
+        let k0 = pts.first()?;
+        let off = [k0.3[0] - k0.2[0], k0.3[1] - k0.2[1]];
+        let (fu, fv) = (fit(0), fit(1));
+        Some([fu[0], fu[1], fu[2] + off[0], fv[0], fv[1], fv[2] + off[1]].map(|v| v as f32))
+    }
+
     /// The 17×17 draw vertices of patch `p` for a camera at `cam` (`0x2b8c08` positions from the drawn
     /// buffer, the pin overrides, `0x261df8` normal → grey and sphere-map UV).
     pub fn patch_verts(&self, p: usize, cam: [f32; 3]) -> PatchVerts {
@@ -898,6 +938,25 @@ mod tests {
         s.patches[0].buf.fill([Pf::ZERO; G * G]);
         s.patches[0].mask = 0xffff;
         s
+    }
+
+    /// The water UV map: the first-wobble vertices' table fitted on the grid (2-unit cells here), per game unit,
+    /// offset by this frame's scroll and wobble.
+    #[test]
+    fn world_uv_fits_the_table_on_the_grid() {
+        let mut s = one_patch();
+        s.consts.cell = [Pf::f(2.0); 2];
+        let off = |k: usize| (k % 5 + (k / 5 % 5) * VG) as u16;
+        s.strip_order = (0..SUB_STRIP_LEN).map(off).collect();
+        s.uv_base = (0..SUB_STRIP_LEN).map(|k| { let o = off(k) as usize; [Pf::f(0.25 * (o % VG) as f32), Pf::f(0.5 * (o / VG) as f32)] }).collect();
+        s.uv_select = (0..SUB_STRIP_LEN as u32).map(|k| k & 1).collect();
+        let uv: [[f32; 2]; SUB_STRIP_LEN] = std::array::from_fn(|k| { let b = s.uv_base[k]; [b[0].to_f32() + 0.3, b[1].to_f32() + 0.6] });
+        let m = s.world_uv(&uv).expect("a map");
+        let want = [0.125, 0.0, 0.3, 0.0, 0.25, 0.6];
+        assert!(m.iter().zip(want).all(|(a, b)| (a - b).abs() < 1e-5), "{m:?}");
+        // All on one line: no map.
+        s.strip_order = vec![0; SUB_STRIP_LEN];
+        assert_eq!(s.world_uv(&uv), None);
     }
 
     #[test]

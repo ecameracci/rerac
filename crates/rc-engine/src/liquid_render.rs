@@ -3,8 +3,9 @@
 //! colours) get a kind ([`classify`]): clear water goes to crate::sea_water as before; lava, mud and sludge are drawn
 //! here (`liquid.wgsl`) instead of their Original draw; anything doubtful stays Original. Ice is never judged by colour:
 //! Hoven's liquid 1901 (grey 57 under green vertex colours) is ice by its port ([`hoven_scroll`]).
-//! crate::water_render's ripple patches that are not clear water take sludge only
-//! ([`patch_verdict`]: Gemlik's acid pools) and draw it in `water.wgsl`. The looks live in `liquid_look.wgsl`
+//! crate::water_render's ripple patches that are not clear water take sludge or lava
+//! ([`patch_verdict`]: Gemlik's acid and lava pools) and draw it in `water.wgsl` on a world-plane UV
+//! (`rc_game::water::RippleSim::world_uv`), so the 4×4 sub-blocks show no seams. The looks live in `liquid_look.wgsl`
 //! (`rerac::liquid_look`, [`keep_look_module`]). Each keeps the draw's own colour (the texture as the game modulates
 //! and fogs it) and adds a procedural surface over it:
 //! * **lava**: a dark crust of that colour with bright, emissive cracks (the zero lines of two gradient-noise layers in
@@ -428,11 +429,23 @@ pub fn keep_look_module(app: &mut App) {
 
 /// The kind of a level-code water texture that is not clear water (crate::water_render's ripple patches and strips,
 /// whose clear-water test stays its own): sludge by [`classify`] of its average colour (Gemlik's acid, FX 46 / 45),
-/// else Original (Gemlik's orange FX 54 / 53 are unidentified: no mud or lava is known there). The switches as in
-/// [`verdict`]; a forced water is Original (crate::water_render's water look keeps its own test).
+/// lava by [`patch_lava`] (Gemlik's lava pools, FX 54 / 53: a bright orange [`classify`] reads as mud or nothing),
+/// else Original. The switches as in [`verdict`]; a forced water is Original (crate::water_render's water look keeps
+/// its own test).
 pub fn patch_verdict(rgb: [u8; 3], enabled: bool, forced: Option<LiquidKind>) -> LiquidKind {
-    let k = forced.unwrap_or(match classify(rgb) { LiquidKind::Sludge => LiquidKind::Sludge, _ => LiquidKind::Original });
+    let k = forced.unwrap_or(match classify(rgb) {
+        LiquidKind::Sludge => LiquidKind::Sludge,
+        _ if patch_lava(rgb) => LiquidKind::Lava,
+        _ => LiquidKind::Original,
+    });
     if !enabled || !k.drawn_here() { LiquidKind::Original } else { k }
+}
+
+/// A ripple patch's warm orange (red over green over blue, each at least 1.3 times the next, red at least 160):
+/// Gemlik's lava pools, [244, 154, 97] and [205, 115, 7]. Patches only: on the grids [`classify`]'s lava test stands.
+fn patch_lava(rgb: [u8; 3]) -> bool {
+    let [r, g, b] = rgb.map(f32::from);
+    r >= 160.0 && r >= 1.3 * g && g >= 1.3 * b
 }
 
 /// [`patch_verdict`] of FX texture `fx` (None: absent) as `water.wgsl`'s `look.misc.y` (0: Original), logged.
@@ -644,12 +657,12 @@ mod tests {
     }
 
     #[test]
-    fn the_ripple_patches_take_sludge_only() {
-        // Gemlik's acid (FX 46 / 45), its orange patches (FX 54 / 53), an empty patch (FX 0).
+    fn the_ripple_patches_take_sludge_and_lava() {
+        // Gemlik's acid (FX 46 / 45), its lava pools (FX 54 / 53), an empty patch (FX 0).
         assert_eq!(patch_verdict([54, 182, 0], true, None), LiquidKind::Sludge);
         assert_eq!(patch_verdict([52, 182, 6], true, None), LiquidKind::Sludge);
-        assert_eq!(patch_verdict([245, 155, 98], true, None), LiquidKind::Original);
-        assert_eq!(patch_verdict([205, 115, 7], true, None), LiquidKind::Original);
+        assert_eq!(patch_verdict([245, 155, 98], true, None), LiquidKind::Lava);
+        assert_eq!(patch_verdict([205, 115, 7], true, None), LiquidKind::Lava);
         assert_eq!(patch_verdict([4, 4, 4], true, None), LiquidKind::Original);
         assert_eq!(patch_verdict([54, 182, 0], false, None), LiquidKind::Original);
         assert_eq!(patch_verdict([245, 155, 98], true, Some(LiquidKind::Lava)), LiquidKind::Lava);
