@@ -54,7 +54,10 @@
 // (crate::graphics::end_fade), dithered 4x4 (`end_fade_shown`); nothing past 500·s is drawn, so the cull never pops.
 // s = 1 (Original): no fade, the game's cut.
 
-#import bevy_pbr::view_transformations::{position_world_to_clip, position_world_to_view}
+#import bevy_pbr::view_transformations::{position_world_to_clip, position_world_to_view, position_ndc_to_world, frag_coord_to_ndc}
+#ifndef PREPASS_PIPELINE
+#import bevy_pbr::mesh_view_bindings::{view, globals}
+#endif
 #import rerac::world_lights::{WorldLight, NO_LIGHTS}
 
 struct TfragFog {
@@ -352,12 +355,179 @@ fn end_fade(depth: f32, s: f32) -> u32 {
     return select(min(u32(steps), 128u), 0u, steps <= 0.0);
 }
 
+// Port-only (Water Enhanced): the tfrag liquids (crate::liquid_render::TFRAG_LIQUIDS, Orxon's goo), on while
+// `lod.tex.z` = 1. The game's texture is not drawn: its mean colour (`lod.tex.x`, packed r + 256 g + 65536 b by
+// crate::liquid_render::pack_mean) under the vertex colours, the texture's look redrawn procedurally and alive: eyes that
+// swell and pop, drifting squiggles, an uneven swell (`goo_look`). Original never takes this branch.
+
+fn goo_hash(p: vec2<f32>) -> vec3<f32> {
+    var q = fract(p.xyx * vec3<f32>(0.1031, 0.1030, 0.0973));
+    q += dot(q, q.yzx + 33.33);
+    return fract((q.xxy + q.yzz) * q.zyx);
+}
+
+// The texture's mean colour (display bytes / 255).
+fn goo_mean() -> vec3<f32> {
+    let v = lod.tex.x;
+    let b = floor(v / 65536.0);
+    let g = floor((v - b * 65536.0) / 256.0);
+    return vec3<f32>(v - b * 65536.0 - g * 256.0, g, b) / 255.0;
+}
+
+// Gradient noise over `p` (about −0.7..0.7).
+fn goo_noise(p: vec2<f32>) -> f32 {
+    let i = floor(p);
+    let f = fract(p);
+    let u = f * f * (3.0 - 2.0 * f);
+    let g00 = goo_hash(i).xy * 2.0 - 1.0;
+    let g10 = goo_hash(i + vec2<f32>(1.0, 0.0)).xy * 2.0 - 1.0;
+    let g01 = goo_hash(i + vec2<f32>(0.0, 1.0)).xy * 2.0 - 1.0;
+    let g11 = goo_hash(i + vec2<f32>(1.0, 1.0)).xy * 2.0 - 1.0;
+    let x0 = mix(dot(g00, f), dot(g10, f - vec2<f32>(1.0, 0.0)), u.x);
+    let x1 = mix(dot(g01, f - vec2<f32>(0.0, 1.0)), dot(g11, f - vec2<f32>(1.0, 1.0)), u.x);
+    return mix(x0, x1, u.y);
+}
+
+// The goo's swell: three octaves of noise (about 6, 2.5 and 1.1 units) drifting in three directions, so it rolls
+// unevenly with no regular crests. Height in about −1..1.
+fn goo_swell(q: vec2<f32>, t: f32) -> f32 {
+    let a = goo_noise(q * 0.17 + vec2<f32>(t * 0.05, t * 0.02));
+    let b = goo_noise(q * 0.4 + vec2<f32>(-t * 0.08, t * 0.05) + vec2<f32>(3.7, 1.1));
+    let c = goo_noise(q * 0.9 + vec2<f32>(t * 0.03, -t * 0.11) + vec2<f32>(8.3, 5.9));
+    return (a * 0.55 + b * 0.3 + c * 0.15) * 1.6;
+}
+
+// The game's texture made alive: "eyes" (its orange bubbles, yellow centre, dark rim) in GOO_EYE-unit cells that
+// wander, swell and pop over 3..6.5 s into a neon ring running out to 2.5 radii; around a living one, a neon arc (the
+// texture's green crescents). `slope` the domes' and rings' height gradient over xz. `foot` the pixel's world size:
+// the edges widen to it (thin lines keep their weight as they widen) and the domes' shading and glints fade, so the
+// eyes hold without aliasing out to a few pixels across.
+const GOO_EYE: f32 = 1.4;
+struct GooEyes {
+    slope: vec2<f32>,
+    eye: f32,
+    rim: f32,
+    neon: f32,
+    glint: f32,
+}
+
+fn goo_eyes(q: vec2<f32>, t: f32, foot: f32) -> GooEyes {
+    var o = GooEyes(vec2<f32>(0.0), 0.0, 0.0, 0.0, 0.0);
+    let c = floor(q / GOO_EYE);
+    for (var j = -1; j <= 1; j += 1) {
+        for (var i = -1; i <= 1; i += 1) {
+            let id = c + vec2<f32>(f32(i), f32(j));
+            let h = goo_hash(id + 31.0);
+            if (h.x > 0.85) { continue; }
+            let wander = 0.12 * vec2<f32>(sin(t * 0.3 + h.x * 6.28), cos(t * 0.27 + h.y * 6.28));
+            let centre = (id + 0.5 + (h.yz - 0.5) * 0.5 + wander) * GOO_EYE;
+            let period = mix(3.0, 6.5, h.y);
+            let age = fract(t / period + h.z);
+            let size = GOO_EYE * mix(0.28, 0.42, fract(h.x * 17.3 + h.z * 5.1));
+            let d = q - centre;
+            let dl = length(d);
+            if (age < 0.88) {
+                let rise = smoothstep(0.0, 0.88, age);
+                let rad = size * (0.4 + 0.6 * sqrt(rise));
+                let s = dl / rad;
+                // The pixel in units of this eye's radius.
+                let sw = foot / rad;
+                let fine = 1.0 - smoothstep(0.1, 0.4, sw);
+                if (s < 1.0) {
+                    let up = sqrt(1.0 - s * s);
+                    o.slope -= d / (rad * max(up, 0.3)) * (0.06 + 0.14 * rise) * fine;
+                    o.glint = max(o.glint, smoothstep(0.25, 0.08, length(d / rad - vec2<f32>(-0.3, -0.35))) * rise * fine);
+                }
+                o.eye = max(o.eye, smoothstep(0.8 + sw, 0.1, s));
+                // A thick dark ring round the yolk, softening outside the dome.
+                o.rim = max(o.rim, smoothstep(0.5 - sw, 0.85 + sw * 0.5, s) * smoothstep(1.35 + sw, 0.95 - sw * 0.5, s));
+                // The crescent: half a ring just outside, turning slowly.
+                let ang = atan2(d.y, d.x) + h.x * 6.28 + t * 0.2;
+                let w2 = 1.0 / 60.0 + sw * sw;
+                let arc = exp(-(s - 1.35) * (s - 1.35) / w2) * sqrt(1.0 / 60.0 / w2);
+                o.neon = max(o.neon, arc * smoothstep(0.2, 0.7, sin(ang)) * 0.8);
+            } else {
+                // The pop: a neon ring and a ring wave running out, fading.
+                let a = (age - 0.88) / 0.12;
+                let front = size * (0.6 + 1.9 * a);
+                let w0 = size * (0.12 + 0.12 * a);
+                let w = max(w0, foot);
+                let env = exp(-(dl - front) * (dl - front) / (w * w)) * (1.0 - a);
+                o.neon = max(o.neon, env * w0 / w);
+                o.slope += d / max(dl, 1e-3) * (0.6 * env * cos((dl - front) * 8.0 / size)) * (1.0 - smoothstep(0.03, 0.1, foot / size));
+            }
+        }
+    }
+    return o;
+}
+
+// The goo's look over its base `rgb` (the texture's mean colour × the vertex colours, display space, before the fog):
+// the texture's palette around that base (olive-brown mottling, yellow-orange eyes with dark rims, neon green
+// squiggles and crescents) drawn procedurally on the world plane, carried by the swell's flow and alive: the eyes
+// swell and pop ([`goo_eyes`]), the squiggles drift, the mottling breathes. Shaded by the swell's and the eyes'
+// normal under a fixed light from above (Orxon is night), a faint Fresnel sheen of the fog colour, a soft highlight
+// on the swell's high ground and a glint on each eye. The details widen to the pixel's footprint and fade only once
+// they would be under a few pixels (the eyes from 0.25 units a pixel, the squiggles from 0.4).
+fn goo_look(rgb: vec3<f32>, world: vec3<f32>, t: f32) -> vec3<f32> {
+    let xz = world.xz;
+    let to_cam = view.world_position - world;
+    let e = 0.08;
+    let h0 = goo_swell(xz, t);
+    let g = vec2<f32>(goo_swell(xz + vec2<f32>(e, 0.0), t) - h0, goo_swell(xz + vec2<f32>(0.0, e), t) - h0) / e * 0.35;
+    // The pattern rides the swell: warped by it and by a slow flow.
+    let q = xz + g * 0.6 + 0.3 * vec2<f32>(goo_noise(xz * 0.5 + vec2<f32>(t * 0.04, 0.0)), goo_noise(xz * 0.5 + vec2<f32>(5.2, -t * 0.03)));
+    // The pixel's world size; the eyes hold to about 0.6 units a pixel, the squiggles to 0.9.
+    let foot = length(fwidth(xz));
+    let keep = 1.0 - smoothstep(0.25, 0.6, foot);
+    let keep_s = 1.0 - smoothstep(0.4, 0.9, foot);
+    var eyes = GooEyes(vec2<f32>(0.0), 0.0, 0.0, 0.0, 0.0);
+    if (keep > 0.0) { eyes = goo_eyes(q, t, foot); }
+    // The squiggles: a band of one drifting noise layer, broken into short pieces by a second; the bands widen to the
+    // pixel (about half a noise unit a world unit) and keep their weight.
+    let n1 = goo_noise(q * 0.9 + vec2<f32>(t * 0.06, -t * 0.04));
+    let n2 = goo_noise(q * 0.7 + vec2<f32>(-t * 0.05, t * 0.07) + vec2<f32>(2.9, 7.7));
+    let n3 = goo_noise(q * 1.4 + vec2<f32>(t * 0.04, t * 0.05) + vec2<f32>(6.1, 0.4));
+    let aa1 = foot * 0.45;
+    let aa3 = foot * 0.7;
+    let band1 = smoothstep(0.11 + aa1, 0.04, abs(n1 - 0.2)) * 0.075 / (0.075 + aa1) * smoothstep(-0.15, 0.2, n2);
+    let band2 = smoothstep(0.09 + aa3, 0.03, abs(n3 + 0.2)) * 0.06 / (0.06 + aa3) * smoothstep(-0.1, 0.25, -n2);
+    let squiggle = max(band1, band2 * 0.85) * keep_s;
+    let mottle = smoothstep(-0.15, 0.35, goo_noise(q * 0.55 + vec2<f32>(t * 0.015, 1.3)));
+    // The palette around the base colour.
+    let dark = rgb * vec3<f32>(0.62, 0.55, 0.3);
+    let yolk = rgb * vec3<f32>(1.25, 1.15, 0.7);
+    let neon = min(rgb * vec3<f32>(0.7, 1.35, 0.55) + vec3<f32>(0.0, 0.04, 0.0), vec3<f32>(1.0));
+    var col = mix(rgb, dark, mottle * 0.6);
+    col = mix(col, dark * 0.9, eyes.rim * 0.7 * keep);
+    col = mix(col, yolk, eyes.eye * keep);
+    col = mix(col, neon, max(squiggle, eyes.neon * keep) * 0.8);
+    let slope = g + eyes.slope * keep;
+    let n = normalize(vec3<f32>(-slope.x, 1.0, -slope.y));
+    let l = normalize(vec3<f32>(0.35, 1.0, 0.25));
+    let to_eye = normalize(to_cam);
+    col *= clamp(1.0 + 1.6 * (dot(n, l) - l.y), 0.6, 1.4) * (1.0 + 0.12 * h0);
+    let r = reflect(-to_eye, n);
+    let sky = fog.color.rgb * mix(0.5, 1.5, clamp(r.y, 0.0, 1.0));
+    let fres = 0.03 + 0.97 * pow(1.0 - max(dot(n, to_eye), 0.0), 5.0);
+    col = mix(col, sky, clamp(fres * 0.5, 0.0, 0.4));
+    let nh = max(dot(n, normalize(l + to_eye)), 0.0);
+    let high = smoothstep(0.3, 0.8, h0);
+    let spec = pow(nh, 40.0) * 0.12 * (0.4 + high) + pow(nh, 250.0) * 0.2 * eyes.eye * keep + eyes.glint * keep * 0.25;
+    return col + vec3<f32>(1.0, 1.0, 0.8) * spec;
+}
+
 @fragment
 fn fragment(in: TfragVertexOutput) -> @location(0) vec4<f32> {
     let duv = vec4<f32>(dpdx(in.uv), dpdy(in.uv));
     // GS mip level: round(log2(z / n) + K), clamped to 0..MXL (or the texture option's level: sample_world).
     let t = sample_world(in.uv, log2(in.depth / lod.misc.z) + in.k, lod.tex.y, duv);
     var rgb = min(t.rgb * in.color.rgb, vec3<f32>(1.0));
+    // The world position from the pixel and its depth: a vertex output of its own would change Original's compiled
+    // positions (a few edge pixels per frame).
+    if (lod.tex.z > 0.5) {
+        let base = min(goo_mean() * in.color.rgb, vec3<f32>(1.0));
+        rgb = min(goo_look(base, position_ndc_to_world(frag_coord_to_ndc(in.position)), globals.time), vec3<f32>(1.0));
+    }
     if (fog.color.w > 0.5) {
         rgb = mix(fog.color.rgb, rgb, in.fog);
     }
