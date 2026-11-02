@@ -101,7 +101,7 @@ fn follow(
     mut copy: ResMut<SceneCopy>,
     cams: Query<&Camera, With<ShadowCamera>>,
     mut images: ResMut<Assets<Image>>,
-    mut water: ResMut<Assets<WaterMaterial>>,
+    water: Option<ResMut<Assets<WaterMaterial>>>,
     mut particles: ResMut<Assets<ParticleMaterial>>,
 ) {
     let (want_depth, want_color) = (g.water.on() || g.particles.on(), g.water.on());
@@ -114,9 +114,12 @@ fn follow(
     copy.depth = images.add(target_image(size, DEPTH_FORMAT));
     copy.color = images.add(target_image(size, COLOR_FORMAT));
     copy.size = size;
-    for (_, m) in water.iter_mut() {
-        m.scene_depth = copy.depth.clone();
-        m.scene_color = copy.color.clone();
+    // No water materials under `RC_WATER=0` (crate::water_render skips its plugin).
+    if let Some(mut water) = water {
+        for (_, m) in water.iter_mut() {
+            m.scene_depth = copy.depth.clone();
+            m.scene_color = copy.color.clone();
+        }
     }
     for (_, m) in particles.iter_mut() { m.scene_depth = copy.depth.clone(); }
 }

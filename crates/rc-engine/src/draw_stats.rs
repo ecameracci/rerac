@@ -44,12 +44,13 @@ impl Plugin for DrawStatsPlugin {
                 changes::<crate::moby_render::MobyMetalMaterial>,
                 changes::<crate::fx_draw::FxPrimMaterial>,
                 changes::<crate::particle_render::ParticleMaterial>,
-                changes::<crate::water_render::WaterMaterial>,
                 changes::<crate::hud_render::HudMaterial>,
                 buffer_detail,
                 mesh_detail,
             ),
         );
+        // Its asset events exist only with crate::water_render's plugin (`RC_WATER=0` skips it).
+        if crate::water_render::enabled() { app.add_systems(Last, changes::<crate::water_render::WaterMaterial>); }
     }
 }
 
