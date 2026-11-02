@@ -252,6 +252,14 @@ pub fn fx_quads(table: &MobyTable, _svc: &Services, id: MobyId) -> Option<FxQuad
     Some(FxQuads { fx: FX, additive: false, subtract: false, quads })
 }
 
+/// Port-only (`super::fire_ring_points`): the wave's 16 points (xyz; w 1 live, 0.98.. dying, 0 gone) while it runs
+/// (+0x21c), read only.
+pub fn ring_points(table: &MobyTable, id: MobyId) -> Option<[[f32; 4]; 16]> {
+    let m = table.mobys.get(id).filter(|m| m.pvars.len() >= pv::SIZE && CLASSES.contains(&m.o_class))?;
+    if p::ff(&m.pvars, pv::LIFE) <= 0.0 { return None; }
+    Some(std::array::from_fn(|i| p::v4f(&m.pvars, pv::POINTS + 0x10 * i)))
+}
+
 /// States 5 / 0xc (module doc).
 fn swing(w: &mut World, id: MobyId, up: f32, clank_slow: bool) {
     let j = w.joint_point(id, 0);

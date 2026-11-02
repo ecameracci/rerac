@@ -62,6 +62,12 @@
 //! `rc_game::moby_update::classes::units::fx_quads` lists (the laser fences 838's `0x30de90`: ten bars per lit fence
 //! of the group, FX 0x13, additive).
 //!
+//! **Port-only: Particles Enhanced's flame curtain** ([`flame_curtain`]): the ground fire rings, Gemlik's stomper rings
+//! (1262's `0x3098d0`) and Blarg's fire waves (1068's `0x2ff680`, levels 6 and 10), each a flat band of the radial glow
+//! FX 0xb lying on the floor (a row of glow spots on screen), burn instead as upright flickering tongues on each
+//! live segment, the upper half of the same glow so each is brightest at the floor. The game's band is not drawn then;
+//! its type-2 sparks are, as embers. Original and Soft draw the band.
+//!
 //! **The census units' glow callbacks** (`Callback::UnitGlow`): the glow quads `rc_game::moby_update::classes::units::
 //! glow_quads` lists (the lamps 1060's `0x2df3d8`: one quad of size 1.2 / pull 0.5 on each visible lamp of the group).
 //!
@@ -680,6 +686,50 @@ pub fn glow_quad(b: &mut PrimBuf, size: f32, pull: f32, point: [f32; 3], rgba: u
     b.quad(pts, GLOW_ST, [rgba; 4]);
 }
 
+/// The flame curtain's tongues per ring segment, their height and width (game units), and their two layers' colours
+/// (GS bytes, R low; alpha at full fade): an orange-red body and a shorter yellow core.
+const TONGUES: usize = 3;
+const TONGUE_H: f32 = 1.1;
+const TONGUE_W: f32 = 0.6;
+const TONGUE_BODY: u32 = 0x2214_50ff;
+const TONGUE_CORE: u32 = 0x1850_c8ff;
+
+/// Particles Enhanced's flame curtain (module doc) on a fire ring's points (`rc_game::moby_update::classes::units::
+/// fire_ring_points`: xyz, fade in w; 0.3..0.4 over the floor), for the eye `cam` at game
+/// tick `tick`; `seed` keeps two rings' flicker apart.
+pub fn flame_curtain(pts: &[[f32; 4]; 16], cam: [f32; 3], tick: u64, seed: u32) -> FxGroup {
+    let mut b = PrimBuf::default();
+    // Wrapped where every flicker term is near a whole period, so f32 keeps its precision.
+    let t = (tick % 0x10_0000) as f32;
+    for j in 0..15 {
+        let (a, c) = (pts[j], pts[j + 1]);
+        let fade = a[3].min(c[3]).clamp(0.0, 1.0);
+        if fade <= 0.02 { continue; }
+        for k in 0..TONGUES {
+            let s = (k as f32 + 0.5) / TONGUES as f32;
+            let hash = (seed.wrapping_mul(97) ^ (j * TONGUES + k) as u32).wrapping_mul(2_654_435_761);
+            let ph = (hash >> 16) as f32 / 65536.0 * std::f32::consts::TAU;
+            // The foot just under the floor (the points ride 0.35 over it).
+            let foot = [a[0] + (c[0] - a[0]) * s, a[1] + (c[1] - a[1]) * s, a[2] + (c[2] - a[2]) * s - 0.4];
+            let h = TONGUE_H * (0.75 + 0.17 * (t * 0.31 + ph).sin() + 0.08 * (t * 0.87 + 2.3 * ph).sin());
+            // Upright, turned to the eye about the vertical; the tip sways sideways.
+            let d = [cam[0] - foot[0], cam[1] - foot[1]];
+            let n = (d[0] * d[0] + d[1] * d[1]).sqrt().max(1e-4);
+            let r = [-d[1] / n, d[0] / n, 0.0];
+            let sway = 0.12 * (t * 0.47 + 1.7 * ph).sin();
+            for (scale, rgba) in [(1.0f32, TONGUE_BODY), (0.6, TONGUE_CORE)] {
+                let (hw, top) = (TONGUE_W * 0.5 * scale.max(0.55), h * scale);
+                let tip = add3(foot, [r[0] * sway * scale, r[1] * sway * scale, top]);
+                let alpha = (((rgba >> 24) as f32) * fade) as u32;
+                let col = (rgba & 0x00ff_ffff) | alpha << 24;
+                let pts = [add3(foot, scale3(r, -hw)), add3(tip, scale3(r, -hw)), add3(foot, scale3(r, hw)), add3(tip, scale3(r, hw))];
+                b.quad(pts, [[0.0, 0.5], [0.0, 0.0], [1.0, 0.5], [1.0, 0.0]], [col; 4]);
+            }
+        }
+    }
+    FxGroup { fx: HALO_FX, additive: true, subtract: false, prims: b }
+}
+
 /// The vendor callback's four glow points (module doc) for the vendor moby's rotation rows, position and glow word.
 pub fn vendor_glow_points(rows: &[[f32; 3]; 3], pos: [f32; 3], glow: u32, cam: [f32; 3]) -> FxGroup {
     let mut b = PrimBuf::default();
@@ -796,6 +846,7 @@ fn draw_list1(
     mut vis: Query<&mut Visibility>,
     scene: Option<Res<crate::scene_render::SceneRuntime>>,
     attach: Option<Res<crate::moby_attach::MobyAttach>>,
+    gfx: Option<Res<crate::graphics::GraphicsSettings>>,
 ) {
     let Some(cam_t) = cams.iter().next() else { return };
     let counter = play.as_deref().map(|p| p.game.counter);
@@ -853,6 +904,13 @@ fn draw_list1(
                     }
                     // A census unit port's quads (the laser fences 838, …).
                     Callback::UnitQuads(i) => {
+                        // Particles Enhanced: a ground fire ring burns as a flame curtain in place of its glow band (module doc).
+                        if gfx.as_deref().is_some_and(|g| g.particles.lights()) {
+                            if let Some(pts) = rc_game::moby_update::classes::units::fire_ring_points(&p.game.mobys, id) {
+                                out.push(flame_curtain(&pts, cam, p.game.counter, id as u32));
+                                continue;
+                            }
+                        }
                         for g in rc_game::moby_update::classes::units::fx_quad_groups(&p.game.mobys, &p.svc, i, id) {
                             if g.quads.is_empty() { continue; }
                             let mut b = PrimBuf::default();
@@ -945,6 +1003,19 @@ mod tests {
         let want = [[9.75, -0.5, 2.5], [9.75, -0.5, 1.5], [9.75, 0.5, 2.5], [9.75, 0.5, 1.5]];
         for (g, w) in game.iter().zip(want) { assert!(g.iter().zip(w).all(|(a, b)| (a - b).abs() < 1e-5), "{game:?}"); }
         assert!(b.color.iter().all(|c| *c == [0.0, 0.0, 0xbb as f32 / 128.0, 1.0]));
+    }
+
+    /// The flame curtain: nothing on a faded ring; on a live one, three upright tongues a segment (two layers each)
+    /// with their feet under the ring, additive FX 0xb.
+    #[test]
+    fn flame_curtain_stands_on_live_segments() {
+        let ring = |w: f32| -> [[f32; 4]; 16] { std::array::from_fn(|j| [10.0, j as f32 * 0.3, 5.35, w]) };
+        assert!(flame_curtain(&ring(0.0), [0.0, 2.0, 6.0], 7, 1).prims.idx.is_empty());
+        let g = flame_curtain(&ring(1.0), [0.0, 2.0, 6.0], 7, 1);
+        assert!(g.additive && g.fx == 0xb);
+        assert_eq!(g.prims.pos.len(), 15 * TONGUES * 2 * 4);
+        let game: Vec<[f32; 3]> = g.prims.pos.iter().map(|p| [p[0], -p[2], p[1]]).collect();
+        for q in game.chunks(4) { assert!((q[0][2] - 4.95).abs() < 1e-4 && q[1][2] > q[0][2], "{q:?}"); }
     }
 
     /// The vendor's glow points: four quads at the antenna tips (1.1 out along ±x / ±y of the vendor, 0.59 up), coloured

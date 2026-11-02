@@ -8,8 +8,9 @@
 //! [`NON_EMISSIVE`] types, the weather, water, mist, smoke and dust, whose additive white is a veil, not a glow), the
 //! explosion flashes (classes 0x70 / 1192, `rc_game::moby_update::classes::debris::flash_update`: ambient colour,
 //! alpha, the growing bounding sphere) and the Bomb Glove's fireballs (122, `classes::bomb::fireball_update`, a fire
-//! colour tinted by the ambient). Each gives a colour, a power (peak channel × alpha × size, [`sprite_source`]) and a
-//! reach (a few times its size); a light's intensity saturates with its power ([`to_light`]).
+//! colour tinted by the ambient) and the ground fire rings' flame curtains ([`ring_sources`]: Gemlik's stompers,
+//! Blarg's fire waves). Each gives a colour, a power (peak channel × alpha × size, [`sprite_source`]) and a reach (a few
+//! times its size); a light's intensity saturates with its power ([`to_light`]).
 //!
 //! **Lights from frame to frame** ([`Tracker`]): a light lives on while sources keep coming within its reach: each
 //! source joins the nearest tracked light that reaches it, the rest merge into new ones ([`cluster`]: sources within
@@ -430,6 +431,23 @@ fn moby_sources(mobys: &[Moby], eye: Vec3, out: &mut Vec<Source>) {
     }
 }
 
+/// The ground fire rings' flame curtains (crate::fx_draw::flame_curtain): three sources along each live ring, at its
+/// segments 2, 7 and 12, a tongue's orange by the segment's fade.
+fn ring_sources(mobys: &rc_game::moby_runtime::MobyTable, eye: Vec3, out: &mut Vec<Source>) {
+    for (id, m) in mobys.mobys.iter().enumerate() {
+        if m.state >= 0xfd { continue; }
+        let Some(pts) = rc_game::moby_update::classes::units::fire_ring_points(mobys, id) else { continue };
+        for j in [2, 7, 12] {
+            let (a, b) = (pts[j], pts[j + 1]);
+            let fade = a[3].min(b[3]).clamp(0.0, 1.0);
+            let pos = game_to_bevy([(a[0] + b[0]) * 0.5, (a[1] + b[1]) * 0.5, (a[2] + b[2]) * 0.5 + 0.2]);
+            if fade <= 0.02 || !pos.is_finite() || pos.distance_squared(eye) > MAX_DISTANCE * MAX_DISTANCE { continue; }
+            let Some((colour, power)) = sprite_source([255, 110, 30], (88.0 * fade) as u8, 0.6, true) else { continue };
+            out.push(Source { pos, radius: (0.6 * SPRITE_REACH).clamp(MIN_RADIUS, MAX_RADIUS), colour, power, tag: Tag::Moby(m.o_class) });
+        }
+    }
+}
+
 /// This frame's lights into [`MAIN`] (Enhanced only).
 fn collect(
     g: Res<GraphicsSettings>,
@@ -450,7 +468,10 @@ fn collect(
     let mut sources = Vec::new();
     let mut by_type = [0.0; 256];
     if let Some(sim) = &sim { particle_sources(&sim.sys.pool, eye, &mut sources, &mut by_type); }
-    if let Some(p) = &play { moby_sources(&p.game.mobys.mobys, eye, &mut sources); }
+    if let Some(p) = &play {
+        moby_sources(&p.game.mobys.mobys, eye, &mut sources);
+        ring_sources(&p.game.mobys, eye, &mut sources);
+    }
     let max = st.max;
     let shown = st.tracker.update(sources, eye, max, time.delta_secs());
     let now = time.elapsed_secs_f64();
