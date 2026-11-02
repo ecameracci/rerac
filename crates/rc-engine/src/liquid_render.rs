@@ -28,6 +28,11 @@
 //!   at `fix2`) against each other, which reads as rolling waves; here every layer drifts at [`ICE_DRIFT`] of its
 //!   speed. The opaque layers keep the game's own darker green-blue colour and pattern, with only a faint sky sheen
 //!   and a sharp glint (`ICE`); the added pass, the white streaks, stays the game's draw over them.
+//! * **tfrag liquids** ([`TFRAG_LIQUIDS`]: Orxon's goo, level geometry under a still texture): drawn by the tfrag
+//!   pass itself (`tfrag.wgsl` `goo_look`, the batch flagged in its LOD uniform, [`follow_tfrag_liquids`]): the
+//!   texture is not drawn: its look (olive mottling, dark-rimmed yellow "eyes", neon squiggles and crescents) is
+//!   redrawn procedurally around its mean colour ([`pack_mean`]) under the vertex colours and made alive: the eyes
+//!   swell and pop into neon rings, the squiggles drift, an uneven noise swell rolls under it all.
 //!
 //! A translucent grid is a fog or cloud layer, never a liquid ([`layer_verdict`]: Oltanis's 1260, mud-brown at FIX
 //! 0x40, is the haze at the bottom of the world), so it stays Original whatever its colour.
@@ -302,6 +307,39 @@ pub const ICE_DRIFT: f32 = 0.05;
 /// other than ice keep it Original).
 pub fn hoven_ice(water_on: bool) -> bool { water_on && enabled() && forced().is_none_or(|k| k == LiquidKind::Ice) }
 
+/// **Tfrag liquids** (level, tfrag texture index): level geometry the game draws as a still liquid, its texture never
+/// animated (docs/plan/world_animation.md: no tfrag texture animation). Orxon's goo (tex 12, the orange bubbles under
+/// green vertex colours, flat, ~189 000 square units under the whole level). Water Enhanced draws its mean colour
+/// under the vertex colours, its look redrawn procedurally and alive, instead of the texture (`tfrag.wgsl` `goo_look`);
+/// Original is the game's draw.
+pub const TFRAG_LIQUIDS: [(u32, i32); 1] = [(10, 12)];
+
+/// Whether tfrag texture `tex` of `level` is one of the [`TFRAG_LIQUIDS`].
+pub fn tfrag_liquid(level: u32, tex: i32) -> bool { TFRAG_LIQUIDS.contains(&(level, tex)) }
+
+/// A tfrag liquid's base colour for `tfrag.wgsl` `goo_mean` (its texture is not drawn): the mean of the RGBA texels'
+/// colour (display bytes), packed r + 256 g + 65536 b into one f32 lane (exact below 2^24).
+pub fn pack_mean(rgba: &[u8]) -> f32 {
+    let n = (rgba.len() / 4).max(1) as u64;
+    let mut s = [0u64; 3];
+    for p in rgba.as_chunks::<4>().0 {
+        for (k, v) in s.iter_mut().enumerate() { *v += u64::from(p[k]); }
+    }
+    let [r, g, b] = s.map(|v| ((v + n / 2) / n).min(255) as f32);
+    r + 256.0 * g + 65536.0 * b
+}
+
+/// Every frame: a [`TFRAG_LIQUIDS`] batch's look (`lod.tex.z`, the batch marked by `lod.tex.w` at the spawn,
+/// crate::tfrag_render) follows Water Enhanced and the switches (`RC_LIQUID_FX=0` or a forced kind other than sludge
+/// keep it Original).
+pub fn follow_tfrag_liquids(gfx: Res<crate::graphics::GraphicsSettings>, mut materials: ResMut<Assets<crate::tfrag_render::TfragMaterial>>) {
+    let on = if gfx.water.on() && enabled() && forced().is_none_or(|k| k == LiquidKind::Sludge) { 1.0 } else { 0.0 };
+    let stale: Vec<_> = materials.iter().filter(|(_, m)| m.lod.tex.w > 0.5 && m.lod.tex.z != on).map(|(id, _)| id).collect();
+    for id in stale {
+        if let Some(mut m) = materials.get_mut(id) { m.lod.tex.z = on; }
+    }
+}
+
 /// An ice layer's ST scroll at tick `counter`: the game's speed (ST per second, rc_game::water::sea `HovenData`) times
 /// [`ICE_DRIFT`], wrapped to one tile (the textures repeat).
 pub fn hoven_scroll(speed: [f32; 2], counter: u64) -> [f32; 2] {
@@ -464,6 +502,7 @@ pub fn build(app: &mut App) {
     keep_look_module(app);
     app.add_plugins(MaterialPlugin::<LiquidMaterial>::default())
         .init_resource::<LiquidDraw>()
+        .add_systems(Update, follow_tfrag_liquids)
         .add_systems(crate::level_switch::LevelUnload, crate::level_switch::reset::<LiquidDraw>);
 }
 
@@ -654,6 +693,22 @@ mod tests {
         let look = include_str!("../assets/shaders/liquid_look.wgsl");
         let line = format!("const ICE: vec2<f32> = vec2<f32>({:?}, {:?});", ICE.x, ICE.y);
         assert!(look.contains(&line), "{line}");
+    }
+
+    #[test]
+    fn orxons_goo_is_the_one_tfrag_liquid() {
+        // Orxon's tex 12 only; the same index elsewhere, and Orxon's other textures (its grass 16), stay Original.
+        assert!(tfrag_liquid(10, 12));
+        assert!(!tfrag_liquid(10, 16) && !tfrag_liquid(1, 12) && !tfrag_liquid(13, 12));
+        // The shader's branch: `lod.tex.z` set only on a marked batch (`lod.tex.w`).
+        let tfrag = include_str!("../assets/shaders/tfrag.wgsl");
+        assert!(tfrag.contains("if (lod.tex.z > 0.5) {"));
+        // The mean colour round-trips through `goo_mean`'s unpacking.
+        let v = pack_mean(&[200, 150, 30, 128, 174, 148, 38, 128]);
+        assert_eq!(v, 187.0 + 256.0 * 149.0 + 65536.0 * 34.0);
+        let b = (v / 65536.0).floor();
+        let g = ((v - b * 65536.0) / 256.0).floor();
+        assert_eq!([v - b * 65536.0 - g * 256.0, g, b], [187.0, 149.0, 34.0]);
     }
 
     #[test]

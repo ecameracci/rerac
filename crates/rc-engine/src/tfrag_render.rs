@@ -399,8 +399,14 @@ pub fn spawn_tfrags_on(
             info!("tfrag tex {tex_index} {skey:?}: texel alpha {texel_alpha:?}, vertex alpha {vertex_alpha:?}: draws {passes:?}");
         }
         let mut lod = lod_base;
-        // MXL = ty - 1: GS LOD = log2(1/Q) + K, level = nearest, clamped to 0..MXL (K comes per vertex).
-        lod.tex = Vec4::new(0.0, mxl as f32, 0.0, 0.0);
+        // MXL = ty - 1: GS LOD = log2(1/Q) + K, level = nearest, clamped to 0..MXL (K comes per vertex). w = 1: a
+        // liquid of crate::liquid_render::TFRAG_LIQUIDS (its look is on while z = 1, `follow_tfrag_liquids`), x its
+        // texture's mean colour (`pack_mean`).
+        let liquid = crate::liquid_render::tfrag_liquid(level.water.level, tex_index)
+            .then(|| usize::try_from(tex_index).ok().and_then(|i| level.tfrag_lod.mips.get(i)?.as_ref()?.first()))
+            .flatten()
+            .map(|l| crate::liquid_render::pack_mean(&l.rgba));
+        lod.tex = Vec4::new(liquid.unwrap_or(0.0), mxl as f32, 0.0, if liquid.is_some() { 1.0 } else { 0.0 });
         lod.misc.z /= lod_scale;
         let mesh = meshes.add(
             Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD)
