@@ -485,7 +485,7 @@ fn place(
     mut cams: MirrorCams,
     mut images: ResMut<Assets<Image>>,
     mut buffers: ResMut<Assets<ShaderBuffer>>,
-    mut water_mats: ResMut<Assets<crate::water_render::WaterMaterial>>,
+    water_mats: Option<ResMut<Assets<crate::water_render::WaterMaterial>>>,
     sea_mats: Option<ResMut<Assets<crate::sea_water::SeaWaterMaterial>>>,
     mut inset: Query<&mut Visibility>,
 ) {
@@ -545,8 +545,10 @@ fn place(
     if size != m.size {
         if let Some(mut img) = images.get_mut(&m.image) { img.resize(Extent3d { width: size.x, height: size.y, depth_or_array_layers: 1 }); }
         m.size = size;
-        let ids: Vec<_> = water_mats.ids().collect();
-        for id in ids { water_mats.get_mut(id); }
+        if let Some(mut water_mats) = water_mats {
+            let ids: Vec<_> = water_mats.ids().collect();
+            for id in ids { water_mats.get_mut(id); }
+        }
         if let Some(mut sea_mats) = sea_mats {
             let ids: Vec<_> = sea_mats.ids().collect();
             for id in ids { sea_mats.get_mut(id); }
