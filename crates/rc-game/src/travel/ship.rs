@@ -13,7 +13,7 @@
 //! | 0x2a1e54 | flag on: `try_set_help_message(2, 0x53e4)` ("△ Enter ship"); △ (0x13cae4 & 0x10) with the lease: level 10 with the hero in the Clank body (0x1413f4 == 1) → state 0x2a, mode \|= 0x41, `DialogStreamStart(9)`; else `PromptRelease(2)` (Lombyte `OpenShipMenu`), 0x15f630 = 1, 0x13e058 = 0 | [`update`] (`Interact::try_prompt`, `Prompt::release`) |
 //! | 0x2a2360 (level13 `0x298cb0`) | the adoption of a placed ship: 0x160540 = 1; the current ship hidden (`0x2a2450`); level 13: the landing spot 0x13e090 = (464.66, 580.68, 316.72), yaw 0x13e0a8 = 2.77; 0x13e056 = class − 0x213; 0x13e030 = it, +0x74 = `ShipUpdate`, mode &= ~3, +0x94 (collision) = class +0x10; `fun_00212ed8(m, 1, 0)`; 0x13e060..0x13e068 = its pvar words 0..2 (the fly-away set-up). Callers: Gemlik's director 1353 after the escape, and `InitLevelRenderGlobals` on level 13 with ship 2 and 0x160540 set (the placed class `0x160550` = ship 2's 533, instead of creating one) | [`adopt`], [`adopt_table`] |
 //! | 0x2a2450 / 0x2a2480 | ship mode \|= 3 / &= ~3, +0x94 (collision) 0 / class +0x10 | `cinematic::EngineRequest::ShipHidden` (existing) |
-//! | 0x2a2130 | the shadow: `fun_001fa820(32, bsphere/1024, &a)` (0x2222e8): `FastBSphereCheck(32, sphere)` 0x2221f0 ≥ 0 (not beyond 32 units of view depth, not behind, inside the side planes), then a = clamp(`vftoi0`(32·1024 − (c.z − r)·1024) >> 7, 0, 0x80) (the check's vf3.y: full up to 16 units of the sphere's near depth, 0 at 32); in the fly-away (mode 6, sub 3) past `ticks(150)`: a −= (tick − 150)·4, nothing at ≤ 0; one `FastDrawQuadReal`, FX 0, ALPHA 0x44, corners `rows·0x1bdd50[ship][k] + bsphere/1024` at z = the ship's z + 0.1 (mode 6: `GroundHeight(0.5, pos, 0)` + 0.1), RGBA `(a >> 1) << 24 \| 0x808080`, ST 0x1bdd30 | [`shadow_quads`] (the view: the last drawn frame's `BSphereView`; without one, a linear fade over the 32 units [L]) |
+//! | 0x2a2130 | the shadow: `fun_001fa820(32, bsphere/1024, &a)` (0x2222e8): `FastBSphereCheck(32, sphere)` 0x2221f0 ≥ 0 (not beyond 32 units of view depth, not behind, inside the side planes), then a = clamp(`vftoi0`(32·1024 − (c.z − r)·1024) >> 7, 0, 0x80) (the check's vf3.y: full up to 16 units of the sphere's near depth, 0 at 32); in the fly-away (mode 6, sub 3) past `ticks(150)`: a −= (tick − 150)·4, nothing at ≤ 0; one `FastDrawQuadReal`, FX 0, ALPHA 0x44, corners `rows·0x1bdd50[ship][k] + bsphere/1024` at z = the ship's z + 0.1 (mode 6: `GroundHeight(0.5, pos, 0)` + 0.1), RGBA `(a >> 1) << 24 \| 0x808080`, ST 0x1bdd30 | [`shadow_quads`] (the view: the last drawn frame's `BSphereView`; without one, a linear fade over the 32 units [L]); [`register_shadow`]'s `GroundHeight` skips the hidden real ship under a mode-6 actor [P] |
 //! | 0x2a2ab8 | the flames: per flame i < `gp−0x6680[ship]` (8 / 2 / 2): intensity = +0xbc + (+0xb2 ≠ 0 ? `randi(+0xb2)` : 0) (drawn at render time: the rand is the frame's), RGBA `intensity << 24 \| (533 ? 0x308000 : 0x2058b0)`, corners `rows·(c_k·intensity·size/40 + p_i) + bsphere/1024` (p_i, size = table 0x1bde30 / 0x1bdeb0 / 0x1bded0 by ship, c_k = 0x1bdef0), FX 5, ALPHA 0x48, ST 0x1bde10 | [`flame_quads`] (the rand in `draw_callbacks::run_frame`) |
 //! | 0x2a2d28 | the trail: per sample pair of the ring (0x13e0f0 / 0x13e2f0, head 0x13e080, count 0x13e084) two ribbons per side; FX 0x13 (FX 0 in the flight, mode 6 sub 4), ALPHA 0x48 | [`trail_quads`] |
 //! | 0x2a3eb8 | the exhaust: 6 puffs, `PartType02Spawn(rows·0x1be0e0[ship][i] + pos, v1 = (randf(±dt), randf(±dt), z + randf(±dt/4), 0.4), v2 = v1 with w 0.6, 0x24c0c0c0, 0x14c0c0c0, ticks(4), ticks(4), ticks(4) + randi(ticks(4)), −1)` | [`exhaust`] |
@@ -200,10 +200,14 @@ fn dist3(a: [f32; 3], b: [f32; 3]) -> f32 { ((a[0] - b[0]).powi(2) + (a[1] - b[1
 /// `RegisterDrawCallback(0x2a2130, ship)` with its quad (draw only; the ground height is read now, as the draw would).
 pub fn register_shadow(w: &mut World, id: MobyId) {
     let mode6 = w.svc.game_mode == 6;
+    // [P] The line skips the real ship that `EnterShipMode` hid (mode |= 1, its collision kept) under the take-off /
+    // landing actor: the vertical line down the actor's centre runs along the parked hull's centre seam, which it hit
+    // on some ticks (z = its top) and missed on others (the pad), and the quad jumped between the two.
+    let real = w.svc.travel.moby.filter(|&r| r != id && w.m(r).mode & 1 != 0);
     let ground = mode6.then(|| {
         let p = w.m(id).position;
         let v = [p[0], p[1], p[2], p[3]].map(crate::ps2v::Pf::f);
-        w.ground_height(crate::ps2v::Pf::f(0.5), v, 0).to_f32()
+        w.ground_height_ignoring(crate::ps2v::Pf::f(0.5), v, 0, real).to_f32()
     });
     let g = globals(w);
     // The fly-away's fade of the shadow: game mode 6, sub 3, the sub tick 0x13e054.
