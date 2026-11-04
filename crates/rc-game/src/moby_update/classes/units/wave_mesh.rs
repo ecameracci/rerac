@@ -58,7 +58,8 @@ pub const DEFS: [Def; 8] = [
 ];
 pub const CLASSES: [[i16; 1]; 8] = [[1408], [1409], [1565], [1567], [1405], [1406], [1407], [1426]];
 
-const FX: usize = 0x2d;
+/// The strips' FX texture.
+pub const FX: usize = 0x2d;
 const ALPHA: u32 = 0x40;
 const WAVELENGTH: f32 = 8.0;
 const AMP: f32 = 0.1;
@@ -72,6 +73,9 @@ pub struct Strip {
     pub pts: Vec<[f32; 3]>,
     pub st: Vec<[f32; 2]>,
 }
+
+/// A strip at rest in the world ([`Meshes::at_rest`]): points and ST.
+pub type RestStrip = (Vec<[f32; 3]>, Vec<[f32; 2]>);
 
 /// The level's strips, by [`DEFS`] index (empty for another level's classes; set by the engine at the level load).
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -99,7 +103,21 @@ impl Meshes {
         }
         Some(Arc::new(Meshes { defs }))
     }
+
+    /// The strips of [`DEFS`]`[k]` at rest for a moby at `at` (scaled about it, without the wave's rise of at most
+    /// [`AMP`]): points and stored ST, one triangle strip each (the engine's Water Enhanced surface).
+    pub fn at_rest(&self, k: usize, at: [f32; 3]) -> Vec<RestStrip> {
+        let Some(d) = DEFS.get(k) else { return Vec::new() };
+        let place = |v: &[f32; 3]| [d.scale * v[0] + at[0], d.scale * v[1] + at[1], d.scale * v[2] + at[2]];
+        self.defs.get(k).map_or_else(Vec::new, |s| s.iter().map(|s| (s.pts.iter().map(place).collect(), s.st.clone())).collect())
+    }
 }
+
+/// The [`DEFS`] index of `class` on `level`.
+pub fn def_of_class(level: u32, class: i32) -> Option<usize> { DEFS.iter().position(|d| d.level == level && i32::from(d.class) == class) }
+
+/// Whether the draw `f` of `level` is one of [`DEFS`]' draws.
+pub fn is_draw(level: u32, f: u32) -> bool { DEFS.iter().any(|d| d.level == level && d.draw == f) }
 
 fn def_of(level: u32, f: u32) -> Option<usize> { DEFS.iter().position(|d| d.level == level && (d.update == f || d.draw == f)) }
 

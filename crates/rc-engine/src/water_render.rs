@@ -79,6 +79,7 @@ use bevy::shader::ShaderRef;
 use rc_formats::level_overlay::{LevelOverlay, Relocation};
 use rc_formats::water::{self as wf, StripAnim, StripClass, StripDescriptor, SUB_STRIP_LEN};
 use rc_game::moby_update::classes::draw_callbacks::Callback;
+use rc_game::moby_update::classes::units::wave_mesh;
 use rc_game::ps2v::Pf;
 use rc_game::rng::{Rng, LEVEL_SEED};
 use rc_game::water::world::LevelWaterData;
@@ -133,6 +134,9 @@ pub struct LevelWater {
     pub fx: crate::fx_draw::LevelFx,
     /// The flow chutes' splines (Water Enhanced's chute sheets: crate::chute_water).
     pub chutes: Vec<crate::chute_water::ChuteSpline>,
+    /// The wave meshes' instances (Quartu's and the Fleet's water, `rc_game` `units::wave_mesh`): their `DEFS` index
+    /// and position (Water Enhanced's surfaces, [`WaveSheet`]).
+    pub waves: Vec<(usize, [f32; 3])>,
     /// The level index (for [`SURFACE_LIFT`]).
     pub level: u32,
 }
@@ -175,7 +179,8 @@ pub fn load(root: &Path, index: u32, gameplay: &[u8]) -> Result<LevelWater> {
         if !order.contains(&slot) { order.push(slot); }
     }
     let chutes = crate::chute_water::chutes(gameplay, index);
-    Ok(LevelWater { strips, data, order, fire_fields, fx, chutes, level: index })
+    let waves = instances.iter().filter_map(|m| Some((wave_mesh::def_of_class(index, m.o_class)?, m.position))).collect();
+    Ok(LevelWater { strips, data, order, fire_fields, fx, chutes, waves, level: index })
 }
 
 /// Static uniform of one water draw.
@@ -183,7 +188,8 @@ pub fn load(root: &Path, index: u32, gameplay: &[u8]) -> Result<LevelWater> {
 pub struct WaterParams {
     /// x = FIX / 128, y = kind (0/1 strip layer, 2 ripple water, 3 ripple env, 4 chute), z = an even absorption
     /// (Enhanced; crate::sea_water::clarity; 0 here) or a chute's flow speed, w = the Enhanced surface lift
-    /// ([`SURFACE_LIFT`]; ripple water) or 1: Pokitaru's ocean (kind 0, crate::ocean_water).
+    /// ([`SURFACE_LIFT`]; ripple water), 1: Pokitaru's ocean (kind 0, crate::ocean_water) or −1: a tank without shore
+    /// foam (kind 0, [`WaveSheet`]).
     pub misc: Vec4,
     /// x = callback slot (record in `frame`), y = first word of the patch's `ripple` record, z = offset of its
     /// water UVs in the record (words), w = the ocean's sky colour (crate::ocean_water::SKY).
@@ -300,9 +306,13 @@ fn follow_look(
     level: Res<crate::Level>,
     state: Option<ResMut<WaterState>>,
     mut materials: ResMut<Assets<WaterMaterial>>,
+    mut waves: Query<&mut Visibility, With<WaveSheet>>,
 ) {
     let Some(mut st) = state else { return };
     let st = &mut *st;
+    // The wave mesh surfaces only on Enhanced (crate::fx_draw draws the game's quads on Original).
+    let shown = if st.takes_wave_meshes(g.water.on()) { Visibility::Inherited } else { Visibility::Hidden };
+    for mut v in &mut waves { v.set_if_neq(shown); }
     let tex = level.0.particles.textures.as_ref();
     // w: the swell's scale (crate::water_waves; the slope only on this water).
     let sun = key.map_or(Vec3::Y, |k| k.to_light).extend(crate::water_waves::scale());
@@ -413,11 +423,29 @@ pub struct WaterState {
     clear_fx: std::collections::HashMap<i32, bool>,
     /// crate::liquid_render::patch_kind by FX index (not clear water), found on first use.
     liquid_fx: std::collections::HashMap<i32, f32>,
+    /// Water Enhanced's wave mesh surfaces ([`WaveSheet`]): each strip's entity and points.
+    wave_sheets: Vec<(Entity, Vec<[f32; 3]>)>,
 }
+
+/// **Port-only (Water Enhanced): the wave meshes as water.** Quartu's and the Fleet's water (`rc_game`
+/// `units::wave_mesh`) is not the water module's: their draw callbacks hand crate::fx_draw two passes of quads (FX
+/// 0x2d at alpha 0x40, ST counter-scrolled) over the pools' floors, where the level draws the room upside down under
+/// the surface as its reflection. When FX 0x2d is clear water ([`clear_water`]), each strip is also a kind-0 draw here
+/// (the strips' rest shape, z blend 1, no scroll or wobble: the Enhanced look draws its own waves): shown on Water
+/// Enhanced, when crate::fx_draw leaves the quads out ([`WaterState::takes_wave_meshes`]); hidden on Original.
+#[derive(Component)]
+struct WaveSheet;
+
+/// Water Enhanced's wave mesh tint: twice the moby's ambient (0x40, `wave_mesh::update`), the quads' vertex colour,
+/// as the game draws the strips twice (at 0x40 the deep water came out at about half the Original's blue).
+const WAVE_RGBA: u32 = 0x0080_8080;
 
 impl WaterState {
     /// The [`WaterRings`] buffer (crate::sea_water's seas share the rings).
     pub fn rings_buffer(&self) -> Handle<ShaderBuffer> { self.rings_buf.clone() }
+
+    /// Whether the wave meshes' quads are left to this plugin's surfaces ([`WaveSheet`]) with Water `on`.
+    pub fn takes_wave_meshes(&self, on: bool) -> bool { on && !self.wave_sheets.is_empty() }
 
     /// The flat regions of this frame's Enhanced water (crate::water_mirror): the clear strips at their z blend and
     /// the drawn clear ripple patches (`sim`: the moby system's module, else the `RC_PLAY=0` one).
@@ -429,6 +457,7 @@ impl WaterState {
                 out.extend(crate::water_mirror::flat_region(s.desc.vertices.iter().map(|v| [v[0], v[1], v[2] * w + v[3] * (1.0 - w)])));
             }
         }
+        for (_, pts) in &self.wave_sheets { out.extend(crate::water_mirror::flat_region(pts.iter().copied())); }
         let Some(sim) = sim.or(self.fallback.as_ref()) else { return };
         for (pd, pa) in self.patches.iter().zip(&sim.patches) {
             if !pd.as_ref().is_some_and(|pd| pd.visible && clear(pd.fx[0])) { continue; }
@@ -552,7 +581,7 @@ fn setup(
     mirror: Res<crate::water_mirror::WaterMirror>,
 ) {
     let lw = &level.0.water;
-    if lw.order.is_empty() && lw.chutes.is_empty() { return; }
+    if lw.order.is_empty() && lw.chutes.is_empty() && lw.waves.is_empty() { return; }
     let Some(tex) = level.0.particles.textures.as_ref() else {
         eprintln!("water: no FX textures, not drawn");
         return;
@@ -575,7 +604,13 @@ fn setup(
     let module = lw.data.as_ref().and_then(|d| d.module.clone());
     // The two per-frame buffers, sized for every slot / patch the setup below can create (a slot per strip
     // layer, two per patch). Contents are written once the layout is known.
-    let n_slots: usize = lw.strips.iter().map(|c| c.strips.len() * 2).sum::<usize>() + records.len() * 2;
+    let wave_strips: Vec<wave_mesh::RestStrip> = match lw.fx.wave_meshes.as_ref() {
+        Some(w) if tex.fx_textures.get(wave_mesh::FX).and_then(Option::as_ref).is_some_and(clear_water) => {
+            lw.waves.iter().flat_map(|&(k, at)| w.at_rest(k, at)).filter(|(p, _)| p.len() >= 3).collect()
+        }
+        _ => Vec::new(),
+    };
+    let n_slots: usize = lw.strips.iter().map(|c| c.strips.len() * 2).sum::<usize>() + records.len() * 2 + wave_strips.len();
     let n_patches = records.len();
     let mut frame_bytes = vec![0u8; n_slots.max(1) * FRAME_RECORD];
     let ripple_bytes = vec![0u8; n_patches.max(1) * RIPPLE_WORDS * 4];
@@ -685,7 +720,8 @@ fn setup(
                 || coll_line(coll, [p[0], p[1], p[2] + 6.0], [p[0], p[1], p[2] - 4.0], QueryFlags(2)).is_some_and(|o| o.surface_id() == 0)
         };
         let floor = |a: [f32; 3], b: [f32; 3]| coll_line(coll, a, b, QueryFlags(0x24)).map(|o| o.point[2]);
-        // No clear water of the level's own (Quartu): its chute is a dry metal slide, drawn bare.
+        // No clear water of the water module's (Quartu: its tanks are wave meshes, [`WaveSheet`]): its chute is a dry
+        // metal slide, drawn bare.
         let found = fx.and_then(|i| Some((fx_image(&mut fx_images, &mut images, tex, i)?, i)));
         for (k, c) in lw.chutes.iter().enumerate() {
             let Some((img, fx)) = found.clone() else {
@@ -710,6 +746,27 @@ fn setup(
         }
         let starts: Vec<[i32; 3]> = lw.chutes.iter().map(|c| c.points[0].map(|x| x.round() as i32)).collect();
         println!("water: chute sheets (Water Enhanced) {} chutes from {starts:?}, quads {chute_rows:?}, fx {}", lw.chutes.len(), fx.map_or("none (no sheets)".to_string(), |i| i.to_string()));
+    }
+    // Water Enhanced's wave mesh surfaces ([`WaveSheet`]), after every game draw: the strips at rest, z blend 1.
+    let mut wave_sheets = Vec::new();
+    if let Some(img) = (!wave_strips.is_empty()).then(|| fx_image(&mut fx_images, &mut images, tex, wave_mesh::FX as i32)).flatten() {
+        for (k, (pts, st)) in wave_strips.into_iter().enumerate() {
+            let mesh = Mesh::new(PrimitiveTopology::TriangleStrip, RenderAssetUsages::RENDER_WORLD)
+                .with_inserted_attribute(ATTRIBUTE_WATER_Z1, pts.iter().map(|p| p[2]).collect::<Vec<f32>>())
+                .with_inserted_attribute(ATTRIBUTE_WATER_UV, st.iter().map(|q| [q[0], q[1], q[0], q[1]]).collect::<Vec<_>>())
+                .with_inserted_attribute(ATTRIBUTE_WATER_TAG, VertexAttributeValues::Uint32x2(pts.iter().map(|p| [WAVE_RGBA, ww::wobble_hash(p[0], p[1]) & 7]).collect()))
+                .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, pts.clone());
+            write_frame(&mut frame_bytes, slot, 1.0, [0.0; 2], &[[0.0; 2]; 8]);
+            // misc.w = −1: a tank, no shore foam (water.wgsl).
+            let m = new_mat(&mut materials, img.clone(), lifted_params(0x40, 0, slot, 0, -1.0), slot, wave_mesh::FX as i32);
+            let e = spawn(&mut commands, meshes.add(mesh), m, Visibility::Hidden, format!("wave mesh strip {k} (Water Enhanced)"));
+            commands.entity(e).insert(WaveSheet);
+            wave_sheets.push((e, pts));
+            slot += 1;
+        }
+    }
+    if !lw.waves.is_empty() {
+        println!("water: wave meshes {:?}: {} strips as Water Enhanced surfaces (fx {:#x} {})", lw.waves, wave_sheets.len(), wave_mesh::FX, if wave_sheets.is_empty() { "not clear water: quads only" } else { "clear water" });
     }
     let data = lw.data.as_ref();
     println!(
@@ -747,6 +804,7 @@ fn setup(
         rings_bytes,
         clear_fx: Default::default(),
         liquid_fx: Default::default(),
+        wave_sheets,
     });
 }
 

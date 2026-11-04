@@ -39,6 +39,8 @@
 // A ripple water draw may sit params.misc.w over the game's height (water_render::SURFACE_LIFT), on Enhanced only.
 // Pokitaru's ocean (params.misc.w = 1 on a kind 0 draw, crate::ocean_water) takes its own constants (OCEAN_*) and, for a
 // reflection that meets nothing, the sky in the scene copy along the ray or its sky colour (params.ids.w) instead of the fog.
+// A tank (params.misc.w = −1 on a kind 0 draw: Quartu's and the Fleet's wave meshes, water_render `WaveSheet`) has no
+// shore foam: its walls stand straight in the water, and the thin water against them drew a dotted white rim.
 // A liquid of another kind (look.misc.x = 2: Gemlik's acid) draws liquid_look.wgsl's look instead (crate::liquid_render).
 //
 // The swell (crate::water_waves; look.sun.w = its scale, 0: none): on the vertices tagged SWELL_TAG (crate::sea_water's
@@ -57,7 +59,7 @@ struct WaterFog {
 
 struct WaterParams {
     // x = FIX / 128, y = kind, z = an even absorption, a chute's flow speed or the ocean's wall distance ahead, w = the
-    // Enhanced surface lift (game units; ripple water only) or 1: Pokitaru's ocean (kind 0).
+    // Enhanced surface lift (game units; ripple water only), 1: Pokitaru's ocean or −1: a tank (kind 0).
     misc: vec4<f32>,
     // x = frame slot, y = ripple record's first word, z = water UV offset in the record, w = the ocean's sky (RGB).
     ids: vec4<u32>,
@@ -641,7 +643,8 @@ fn fragment(in: WaterVertexOutput) -> @location(0) vec4<f32> {
     if (chute) { return vec4<f32>(col, in.fade); }
     // Foam along the shore (thin water over a rising bed), broken up by drifting noise.
     let foam_n = smoothstep(0.1, 0.5, gnoise(wp.xz * 3.0 + vec2<f32>(t_now * 0.2, -t_now * 0.15)) + 0.35);
-    let foam = (1.0 - smoothstep(0.05, 0.45, thickness)) * smoothstep(0.02, 0.1, thickness) * smoothstep(0.02, 0.1, rise) * foam_n;
+    let tank = kind == 0u && params.misc.w < -0.5;
+    let foam = (1.0 - smoothstep(0.05, 0.45, thickness)) * smoothstep(0.02, 0.1, thickness) * smoothstep(0.02, 0.1, rise) * foam_n * select(1.0, 0.0, tank);
     col = mix(col, vec3<f32>(0.92, 0.96, 1.0), foam * select(0.55, OCEAN_FOAM, ocean) * (1.0 - far));
     // The fog over all of it, as on the game's fogged strip: unfogged, a far sea's reflection of the lit sky ends in a
     // hard line where the grid stops drawing its blocks (Batalia: 400 units out, past the grid fog's far end).

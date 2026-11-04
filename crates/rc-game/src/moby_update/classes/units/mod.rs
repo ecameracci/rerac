@@ -1492,6 +1492,9 @@ pub fn take_hero_light(w: &mut World, id: MobyId) {
 // ---------------------------------------------------------------------------------------------------
 // Draw callbacks and the registry lookups of the unit ports.
 
+/// Whether the draw callback unit row `i` is a [`wave_mesh`] draw (Quartu's and the Fleet's water).
+pub fn is_wave_mesh(i: u16) -> bool { PORTS.get(i as usize).is_some_and(|u| wave_mesh::is_draw(u.level, u.func)) }
+
 /// The row of the unit whose reference update is `func` of level `level` (as the `Callback::UnitGlow` payload).
 pub fn row(level: u32, func: u32) -> Option<u16> { PORTS.iter().position(|u| (u.level, u.func) == (level, func)).map(|i| i as u16) }
 

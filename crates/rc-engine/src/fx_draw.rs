@@ -847,8 +847,11 @@ fn draw_list1(
     scene: Option<Res<crate::scene_render::SceneRuntime>>,
     attach: Option<Res<crate::moby_attach::MobyAttach>>,
     gfx: Option<Res<crate::graphics::GraphicsSettings>>,
+    water: Option<Res<crate::water_render::WaterState>>,
 ) {
     let Some(cam_t) = cams.iter().next() else { return };
+    // Water Enhanced draws the wave meshes as water (crate::water_render `WaveSheet`): their quads are left out.
+    let waves_taken = water.as_deref().is_some_and(|w| w.takes_wave_meshes(gfx.as_deref().is_some_and(|g| g.water.on())));
     let counter = play.as_deref().map(|p| p.game.counter);
     let fog = fog.map(|f| f.uniform).unwrap_or_else(|| TfragFog::new(&level.0.fog));
     if counter == state.drawn && counter.is_some() { return; }
@@ -904,6 +907,7 @@ fn draw_list1(
                     }
                     // A census unit port's quads (the laser fences 838, …).
                     Callback::UnitQuads(i) => {
+                        if waves_taken && rc_game::moby_update::classes::units::is_wave_mesh(i) { continue; }
                         // Particles Enhanced: a ground fire ring burns as a flame curtain in place of its glow band (module doc).
                         if gfx.as_deref().is_some_and(|g| g.particles.lights()) {
                             if let Some(pts) = rc_game::moby_update::classes::units::fire_ring_points(&p.game.mobys, id) {
