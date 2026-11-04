@@ -51,7 +51,7 @@ use bevy::mesh::{Indices, MeshTag, MeshVertexAttribute, MeshVertexBufferLayoutRe
 use bevy::pbr::{MaterialPipeline, MaterialPipelineKey};
 use bevy::prelude::*;
 use bevy::render::render_resource::{
-    AsBindGroup, Extent3d, RenderPipelineDescriptor, ShaderType, SpecializedMeshPipelineError, TextureDimension, TextureFormat,
+    AsBindGroup, DepthBiasState, Extent3d, RenderPipelineDescriptor, ShaderType, SpecializedMeshPipelineError, TextureDimension, TextureFormat,
 };
 use bevy::render::storage::ShaderBuffer;
 use bevy::shader::ShaderRef;
@@ -168,6 +168,15 @@ impl From<&TieMaterial> for GsPass {
     fn from(m: &TieMaterial) -> Self { m.pass }
 }
 
+/// The tie pass's depth bias (reverse Z: positive is nearer; the world pipeline only, not the sun's shadow maps).
+/// Some ties lie exactly on a tfrag face: Kalebo III's skirting tie (class 2006, instance 357) on tfrag 1672 in the
+/// plane x = 211.5, gap 0 (2026-11-04 play test, marker 1). The game draws the ties after the tfrags with ZTST GEQUAL,
+/// so on equal Z the tie wins; here the two reach the plane by other vertices and arithmetic (instance matrix × class
+/// position against tfrag world positions) and the winner flipped by whole triangles with the view (z-fighting). A
+/// constant of 64 depth ULPs (about 1e-5 of the view distance) lets the tie win as in the game. No slope term: it
+/// differs per face, so a tie's own faces parted at their shared edges (dotted seams down a pillar, tried 2026-11-04).
+pub const TIE_DEPTH_BIAS: DepthBiasState = DepthBiasState { constant: 64, slope_scale: 0.0, clamp: 0.0 };
+
 impl Material for TieMaterial {
     fn vertex_shader() -> ShaderRef { SHADER_PATH.into() }
     fn fragment_shader() -> ShaderRef { SHADER_PATH.into() }
@@ -187,6 +196,7 @@ impl Material for TieMaterial {
             key.bind_group_data.specialize_shadow(descriptor, "tie");
         } else {
             key.bind_group_data.specialize_world(descriptor);
+            if let Some(ds) = descriptor.depth_stencil.as_mut() { ds.bias = TIE_DEPTH_BIAS; }
         }
         descriptor.vertex.buffers = vec![layout.0.get_layout(&[
             Mesh::ATTRIBUTE_POSITION.at_shader_location(0),
