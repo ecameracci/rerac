@@ -1264,6 +1264,7 @@ fn spawn_mobys(
         anim_index,
         draws,
         shown,
+        cast_only: vec![false; n_inst],
         lods,
         last_lod: lod_bytes,
         lod_on,
@@ -1385,6 +1386,8 @@ pub struct MobyOcclusion {
     anim_index: Vec<Option<usize>>,
     draws: Vec<InstanceDraws>,
     shown: Vec<Option<Shown>>,
+    /// Per instance: `shown` only casts this frame (`FLAG_SHADOW_ONLY`, culled for the camera): not drawn for +0x31.
+    cast_only: Vec<bool>,
     lods: Handle<ShaderBuffer>,
     last_lod: Vec<u8>,
     lod_on: bool,
@@ -1512,6 +1515,7 @@ pub fn update_moby_occlusion(
             _ => (0x80, 0, 0, [[0.0; 3]; 3]),
         };
         moby_lod::write_lod_record(rec, alpha, flags, shine, moby_lod::glow_word(mode, look.glow), &e);
+        s.cast_only[ii] = cast_only;
         // The class's texture scroll (`FUN_00263d90`).
         let at = ii * RECORD_SIZE;
         if let Some(r) = s.records.get_mut(at..at + RECORD_SIZE) {
@@ -2329,9 +2333,11 @@ impl MobyOcclusion {
 
 impl MobyOcclusion {
     /// +0x31 of static instance `ii` for the moby loop: MobyProc drew it this frame (not hidden by the moby
-    /// loop, occlusion and the draw-distance / near / frustum culls passed). Spawn-hidden instances
-    /// (crate::moby_spawn) are the caller's to exclude.
-    pub fn drawn(&self, ii: usize) -> bool { self.shown.get(ii).is_some_and(|s| s.is_some()) }
+    /// loop, occlusion and the draw-distance / near / frustum culls passed); one culled for the camera and kept only to
+    /// cast the sun's shadow (G-REN-038) is not. Spawn-hidden instances (crate::moby_spawn) are the caller's to exclude.
+    pub fn drawn(&self, ii: usize) -> bool {
+        self.shown.get(ii).is_some_and(|s| s.is_some()) && !self.cast_only.get(ii).copied().unwrap_or(false)
+    }
 
     /// Forgets the group instance `ii` shows, for a caller that made all of its entities hidden (a spawn-hidden
     /// instance revealed): the next [`update_moby_occlusion`] switches on exactly the group (and metal) it picks.
