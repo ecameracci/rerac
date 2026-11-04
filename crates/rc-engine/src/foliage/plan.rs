@@ -6,8 +6,9 @@
 //!   tie triangle (`rc_formats::tie::tie_triangles`, crate::foliage `build_input`: turf-topped tie pads),
 //!   area-weighted at [`Density::clumps`] per square unit, on every level but the stations ([`NO_FOLIAGE`]). A point
 //!   is kept when its triangle faces up ([`faces_up`]), the ground there is grass ground ([`grass_ground`]: a turf
-//!   texture, [`is_turf`]: enough grass texels and an even grain, whose level-0 texel average under the point reads as
-//!   grass ([`is_grass`]) both on its own and times the baked vertex colour, the GS MODULATE of tfrag.wgsl, opaque:
+//!   texture, [`is_turf`]: enough grass texels and an even grain, not listed in [`NOT_TURF`], whose level-0 texel
+//!   average under the point reads as grass ([`is_grass`]) both on its own and times the baked vertex colour, the GS
+//!   MODULATE of tfrag.wgsl, opaque:
 //!   the baked light alone turns sand, paving and grey metal green on Aridia, Blarg, Pokitaru or Oltanis), no other
 //!   opaque tfrag that is not grass ground lies just over it (a path or a decal: [`Grid::covered`]), and a `coll_line`
 //!   from [`RAY_ABOVE`] above to [`RAY_BELOW`] below first meets walkable collision within [`GROUND_TOLERANCE`] of the
@@ -106,6 +107,29 @@ pub const LEVEL_GROUND: [LevelGround; 1] = [LevelGround {
 }];
 
 pub fn level_ground(level: u32) -> Option<&'static LevelGround> { LEVEL_GROUND.iter().find(|g| g.level == level) }
+
+/// A level texture as the level numbers it: a tfrag one (index into `tfrag_lod.mips`) or a tie one (the tie texture
+/// table, `LevelTieClass::texture_table_index`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LevelTex {
+    Tfrag(u32),
+    Tie(usize),
+}
+
+/// Textures that pass as turf ([`is_turf`]) but are not ground: even green-grey or mint paint whose colour turf also
+/// has (Kalebo's desk top, hue 143°, mean [74, 119, 91], and its machine paint, 154°, [49, 63, 57]; Rilgar's lawn
+/// texture 138 is 139°, Umbris' 131°), so no colour rule tells them apart. [`PlanInput::not_turf`] holds them.
+pub const NOT_TURF: [(u32, LevelTex, &str); 6] = [
+    (16, LevelTex::Tfrag(40), "Kalebo III: the Gadgetron offices' mint desk tops (2026-11-04 play test, marker 2)"),
+    (16, LevelTex::Tfrag(36), "Kalebo III: the screens set into those desk tops"),
+    (16, LevelTex::Tie(23), "Kalebo III: a bright teal glow panel of tie class 2008, mean [0, 174, 123]"),
+    (16, LevelTex::Tie(52), "Kalebo III: the dark green-grey machine paint of tie class 2166 (the antenna caps by the sea)"),
+    (16, LevelTex::Tie(55), "Kalebo III: the same paint, class 2166"),
+    (16, LevelTex::Tie(58), "Kalebo III: the same paint, class 2169"),
+];
+
+/// Texture `tex` on level `level` is listed in [`NOT_TURF`].
+pub fn not_turf(level: u32, tex: LevelTex) -> bool { NOT_TURF.iter().any(|e| e.0 == level && e.1 == tex) }
 
 /// The option's numbers on level `level`: [`LevelGround::density`] of the clumps and copies.
 pub fn level_density(level: u32, d: &Density) -> Density {
@@ -314,6 +338,8 @@ pub struct PlanInput {
     pub textures: Vec<Option<Tex>>,
     pub collision: Option<Collision>,
     pub plants: Vec<PlantSource>,
+    /// Indices into `textures` that are never turf ([`NOT_TURF`], resolved by crate::foliage `build_input`).
+    pub not_turf: Vec<u32>,
 }
 
 /// A grass point: its kind, root on the drawn ground, yaw, height, width factor (a fern: its spread), rank (0..1, the
@@ -517,7 +543,9 @@ impl Grid {
         let turf = input
             .textures
             .iter()
-            .map(|t| match t.as_ref().map(texture_stats) {
+            .enumerate()
+            .map(|(i, t)| match t.as_ref().map(texture_stats) {
+                _ if input.not_turf.contains(&(i as u32)) => Turf::No,
                 Some(s) if is_turf(&s) => Turf::Green,
                 Some(s) if muted && is_muted_turf(&s) => Turf::Muted,
                 _ => Turf::No,
@@ -800,7 +828,7 @@ mod tests {
         let green = Tex { width: 1, height: 1, rgba: vec![60, 120, 40, 0xff] };
         let ground = Tri { p: [[0.0, 0.0, 0.8], [4.0, 0.0, 0.8], [0.0, 4.0, 0.8]], ..t };
         let high = Tri { p: [[0.0, 0.0, 2.0], [4.0, 0.0, 2.0], [0.0, 4.0, 2.0]], ..t };
-        let input = |cover: Tri, tex: Tex| PlanInput { level: 1, tris: vec![ground, cover], textures: vec![Some(tex)], collision: None, plants: vec![] };
+        let input = |cover: Tri, tex: Tex| PlanInput { level: 1, tris: vec![ground, cover], textures: vec![Some(tex)], collision: None, plants: vec![], not_turf: vec![] };
         let p = [1.0, 1.0, 0.8];
         let i = input(t, grey);
         assert!(Grid::new(&i).covered(&i, 0, p));
@@ -859,7 +887,7 @@ mod tests {
         let (l, m) = (texture_stats(&tex(leaves)), texture_stats(&tex(mud)));
         assert!(is_muted_turf(&l) && !is_turf(&l) && !is_muted_turf(&m) && l.lean_share == 1.0 && m.lean_share == 0.0);
         // Only Umbris takes muted turf, and grows a sparse share of the option's grass.
-        let input = |level| PlanInput { level, tris: vec![], textures: vec![Some(tex(leaves))], collision: None, plants: vec![] };
+        let input = |level| PlanInput { level, tris: vec![], textures: vec![Some(tex(leaves))], collision: None, plants: vec![], not_turf: vec![] };
         assert_eq!(Grid::new(&input(7)).turf(0), Turf::Muted);
         assert_eq!(Grid::new(&input(1)).turf(0), Turf::No);
         let (m, l) = (density(Foliage::Moderate).unwrap(), density(Foliage::Lush).unwrap());
@@ -873,9 +901,19 @@ mod tests {
     fn station_levels() {
         for l in [6, 13, 17] { assert!(no_foliage(l).is_some(), "level {l}"); }
         for l in [1, 2, 3, 5, 8, 11, 14, 16] { assert!(no_foliage(l).is_none(), "level {l}"); }
+        // Kalebo's desk tops and machine paint are turf by colour alone; listed, they grow nothing, and only there.
+        for rgb in [[74u8, 119, 91], [49, 63, 57]] {
+            let paint = || Tex { width: 1, height: 1, rgba: vec![rgb[0], rgb[1], rgb[2], 0xff] };
+            assert!(is_turf(&texture_stats(&paint())));
+            let at = |not_turf: Vec<u32>| Grid::new(&PlanInput { level: 16, tris: vec![], textures: vec![Some(paint())], collision: None, plants: vec![], not_turf }).turf(0);
+            assert_eq!((at(vec![0]), at(vec![])), (Turf::No, Turf::Green));
+        }
+        assert!(not_turf(16, LevelTex::Tfrag(40)) && not_turf(16, LevelTex::Tie(52)));
+        assert!(!not_turf(16, LevelTex::Tie(40)) && !not_turf(1, LevelTex::Tfrag(40)) && !not_turf(16, LevelTex::Tfrag(26)));
+        for (l, ..) in NOT_TURF { assert!(no_foliage(l).is_none(), "level {l}"); }
         let green = Tex { width: 1, height: 1, rgba: vec![60, 120, 40, 0xff] };
         let flat = Tri { p: [[0.0, 0.0, 0.0], [10.0, 0.0, 0.0], [0.0, 10.0, 0.0]], uv: [[0.0; 2]; 3], col: [[0x80; 4]; 3], tex: 0 };
-        let p = plan(&PlanInput { level: 6, tris: vec![flat], textures: vec![Some(green)], collision: None, plants: vec![] }, &density(Foliage::Lush).unwrap());
+        let p = plan(&PlanInput { level: 6, tris: vec![flat], textures: vec![Some(green)], collision: None, plants: vec![], not_turf: vec![] }, &density(Foliage::Lush).unwrap());
         assert!(p.grass.is_empty() && p.stats.candidates == 0 && p.stats.no_foliage.is_some());
     }
 
@@ -883,7 +921,7 @@ mod tests {
     fn placement_is_deterministic() {
         let green = || Tex { width: 2, height: 2, rgba: [60u8, 120, 40, 0xff].repeat(4) };
         let flat = Tri { p: [[0.0, 0.0, 0.0], [10.0, 0.0, 0.0], [0.0, 10.0, 0.0]], uv: [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], col: [[0x80; 4]; 3], tex: 0 };
-        let input = PlanInput { level: 4, tris: vec![flat; 3], textures: vec![Some(green())], collision: None, plants: vec![] };
+        let input = PlanInput { level: 4, tris: vec![flat; 3], textures: vec![Some(green())], collision: None, plants: vec![], not_turf: vec![] };
         let d = density(Foliage::Moderate).unwrap();
         let (a, b) = (plan(&input, &d), plan(&input, &d));
         // No collision mesh: every grassy candidate is dropped at the ground check, the same ones each time.

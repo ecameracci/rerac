@@ -44,7 +44,7 @@ use bevy::prelude::*;
 use bevy::render::render_resource::{AsBindGroup, Extent3d, RenderPipelineDescriptor, ShaderType, SpecializedMeshPipelineError, TextureDimension, TextureFormat};
 use bevy::render::storage::ShaderBuffer;
 use bevy::shader::ShaderRef;
-use plan::{Density, Kind, Plan, PlanInput, PlantSource, Rng, Tex, Tri};
+use plan::{Density, Kind, LevelTex, Plan, PlanInput, PlantSource, Rng, Tex, Tri};
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
@@ -296,6 +296,7 @@ fn build_input(level: &LoadedLevel) -> PlanInput {
         .iter()
         .map(|m| m.as_ref().and_then(|l| l.first()).map(|t| Tex { width: t.width, height: t.height, rgba: t.rgba.clone() }))
         .collect();
+    let tfrag_textures = textures.len();
     // The ties' LOD-0 triangles in world space (a tie can be ground: Batalia's turf-topped pads), their textures after
     // the tfrags' and their colours the instance's `LightTies` slots (crate::tie_render, as drawn at full detail).
     let ties = &level.ties;
@@ -332,7 +333,13 @@ fn build_input(level: &LoadedLevel) -> PlanInput {
             Some(PlantSource { class: ci, instance: ii as u32, origin: [m[3][0], m[3][1], m[3][2]], lin: [0, 1, 2].map(|c| [m[c][0], m[c][1], m[c][2]]) })
         })
         .collect();
-    PlanInput { level: crate::level_load::level_index(), tris, textures, collision: level.collision.clone(), plants }
+    let lvl = crate::level_load::level_index();
+    // The listed textures by their place here: the tfrags' own first, then the ties' in `tie_tex`.
+    let not_turf = (0..tfrag_textures as u32)
+        .filter(|&i| plan::not_turf(lvl, LevelTex::Tfrag(i)))
+        .chain(tie_tex.iter().filter(|(&ti, _)| plan::not_turf(lvl, LevelTex::Tie(ti))).map(|(_, &i)| i))
+        .collect();
+    PlanInput { level: lvl, tris, textures, collision: level.collision.clone(), plants, not_turf }
 }
 
 /// The option into the drawn plants (module docs): Original despawns them; another value plans (once its job is done
