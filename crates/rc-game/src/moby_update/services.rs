@@ -1744,10 +1744,13 @@ impl<'a> World<'a> {
 
     /// `GroundHeight(up, pos, fl)` 0x26e618: `CollLine_Fix((x, y, z + up), (x, y, 0.01), fl | 2)`; the hit z,
     /// else 0.
-    pub fn ground_height(&self, up: Pf, pos: V4, fl: u32) -> Pf {
+    pub fn ground_height(&self, up: Pf, pos: V4, fl: u32) -> Pf { self.ground_height_ignoring(up, pos, fl, None) }
+
+    /// [`Self::ground_height`] with the line's `ignore` moby (the game passes none).
+    pub fn ground_height_ignoring(&self, up: Pf, pos: V4, fl: u32, ignore: Option<MobyId>) -> Pf {
         let a = [pos[0], pos[1], pos[2] + up, pos[3]];
         let b = [pos[0], pos[1], Pf::b(0x3c23_d70a), pos[3]];
-        self.line(a, b, fl | 2, None).map(|h| h.point[2]).unwrap_or(Pf::ZERO)
+        self.line(a, b, fl | 2, ignore).map(|h| h.point[2]).unwrap_or(Pf::ZERO)
     }
 
     /// `PlayClassSound(idx, flags, moby)` 0x2a1618 (`sound_class` = the moby's class) or 0x2a16c0 (another
