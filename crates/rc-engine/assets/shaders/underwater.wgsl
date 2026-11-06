@@ -36,6 +36,8 @@ const SCATTER_REACH: f32 = 30.0;
 const LIT_FLOOR: f32 = 0.4;
 const FLOOR_FILL: f32 = 0.5;
 const DOWN_DIM: f32 = 0.3;
+// The caustics on the surfaces facing away from the sun (triplanar), relative to those it lights.
+const WALL_CAUSTICS: f32 = 0.5;
 
 fn depth_at(p: vec2<i32>) -> f32 {
     let lo = vec2<i32>(view.viewport.xy);
@@ -163,6 +165,15 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
         let footprint = ts * 2.0 / (view.clip_from_view[1][1] * view.viewport.w) / max(abs(dot(n, dir)), 0.15);
         let fade = exp(-depth_below * 0.06) * (1.0 - smoothstep(25.0, 60.0, ts));
         caust = caustics(q.xz, t, footprint) * facing * fade;
+        // The surfaces the sun's pattern leaves out (walls, slopes facing away: the far side of a flooded tube, session
+        // 2026-11-06_15-02-26 marker 3) get a softer pattern on their own plane (triplanar on the world position), so
+        // it does not streak; the light that reaches them is scattered, hence about half.
+        if (facing < 1.0) {
+            var w = pow(abs(n), vec3<f32>(4.0));
+            w /= max(w.x + w.y + w.z, 1e-4);
+            let side = caustics(wp.zy, t, footprint) * w.x + caustics(wp.xz + 5.3, t, footprint) * w.y + caustics(wp.xy + 2.9, t, footprint) * w.z;
+            caust += side * (1.0 - facing) * WALL_CAUSTICS * fade;
+        }
         col += (col * 2.0 + uw.water.rgb * 0.5 + vec3<f32>(0.02, 0.04, 0.05)) * caust * s * k;
     }
 
