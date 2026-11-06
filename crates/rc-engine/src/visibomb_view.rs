@@ -13,7 +13,7 @@
 //! * **The occlusion** (`UpdateOcclusion`): 0x15f608 = 1, everything visible that frame ([`all_visible`], read by
 //!   `crate::occlusion`).
 //! * **The range static** (`0x302438`, the range limiter 832's draw on list 2): its quads into the HUD's static layer
-//!   ([`statics`]).
+//!   ([`statics`]); port-only, a frame wider than 4:3 gets the grid repeated out to its edges ([`widen`]).
 //!
 //! * **The far distances** (`0x2cb338`, back at `0x2cb458(m, 1)`): the tie cap 0x160fe0 and the moby cap 0x15fff0 at 144
 //!   units ([`SHORT_FAR`], read by `crate::tie_lod` and `crate::moby_lod`; they matter in the orbit after the blast).
@@ -34,6 +34,7 @@ use bevy::render::extract_component::ExtractComponent;
 use bevy::render::render_resource::ShaderType;
 use bevy::shader::ShaderRef;
 use rc_game::fog_zones::FogGlobals;
+use rc_game::menus::screen_static::StaticDraw;
 use rc_game::moby_update::classes::visibomb::{self, FogWrite, Globals};
 
 /// The fog globals `0x2cb338` saved (the missile's pvars +0x30..+0x42) and the last fog write applied.
@@ -182,12 +183,35 @@ fn sky(play: Option<Res<Play>>, mut cams: Query<(&mut Camera, &mut RenderLayers)
     }
 }
 
-/// The range static's quads (the frame of the tick that just ran) into the static layer.
-fn statics(play: Option<Res<Play>>, mut hook: ResMut<Hud2dHook>) {
+/// The range static's quads (the frame of the tick that just ran) into the static layer, widened to the frame.
+fn statics(play: Option<Res<Play>>, frame: Res<crate::display::GameFrame>, mut hook: ResMut<Hud2dHook>) {
     let Some(p) = play.as_deref() else { return };
     let g = &p.svc.visibomb;
     if g.static_at != Some(last_tick(p)) { return; }
-    for s in &g.static_quads { hook.statics[(s.pass as usize).min(2)].push(crate::menu_render::static_prim(s, 0, 0)); }
+    for s in widen(&g.static_quads, crate::display::side_extra(frame.ratio())) {
+        hook.statics[(s.pass as usize).min(2)].push(crate::menu_render::static_prim(&s, 0, 0));
+    }
+}
+
+/// Port-only: `0x302438`'s grid covers the 512-wide screen only (17 columns from x −16, 544 wide); a wide frame's side
+/// margins (`extra` HUD pixels each side, crate::display::side_extra) get copies of the whole grid shifted by its
+/// width, cut to the quads that reach the frame: the noise fills the frame with no new `rand` draw (the game's stream).
+pub fn widen(quads: &[StaticDraw], extra: i32) -> Vec<StaticDraw> {
+    let mut out = quads.to_vec();
+    let (Some(x0), Some(x1)) = (quads.iter().map(|q| q.x).min(), quads.iter().map(|q| q.x + q.w).max()) else { return out };
+    let (span, w) = (x1 - x0, rc_game::hud::SCREEN_W);
+    if extra <= 0 || span <= 0 { return out; }
+    let mut k = 1;
+    while x0 - (k - 1) * span > -extra || x1 + (k - 1) * span < w + extra {
+        for q in quads {
+            let l = StaticDraw { x: q.x - k * span, ..*q };
+            if l.x + l.w > -extra { out.push(l); }
+            let r = StaticDraw { x: q.x + k * span, ..*q };
+            if r.x < w + extra { out.push(r); }
+        }
+        k += 1;
+    }
+    out
 }
 
 #[cfg(test)]
@@ -218,6 +242,22 @@ mod tests {
         level.near_dist = 5.0;
         apply_fog(&g, &mut level, &mut uw, &mut swap);
         assert_eq!(level.near_dist, 5.0);
+    }
+
+    /// The 17-column grid from x −16 (32-pixel quads) at 16:9's 85-pixel margins: 3 more columns each side (to −112 and
+    /// 624), copies of the grid's columns 14..16 and 0..2; 4:3 keeps the grid as it is.
+    #[test]
+    fn static_widens_to_the_frame() {
+        use rc_game::menus::screen_static::StaticTex;
+        let q = |x, u| StaticDraw { tex: StaticTex::Fx(0x1e), x, y: -16, w: 32, h: 32, u, v: 0, tw: 32, th: 32, rgba: 0, additive: false, pass: 2 };
+        let grid: Vec<StaticDraw> = (0..17).map(|i| q(i * 32 - 16, i)).collect();
+        assert_eq!(widen(&grid, 0).len(), 17);
+        let extra = crate::display::side_extra(16.0 / 9.0);
+        assert_eq!(extra, 85);
+        let mut xs: Vec<(i32, i32)> = widen(&grid, extra).iter().map(|d| (d.x, d.u)).collect();
+        xs.sort();
+        assert_eq!(xs.len(), 23);
+        assert_eq!((xs[0], xs[2], xs[3], xs[20], xs[22]), ((-112, 14), (-48, 16), (-16, 0), (528, 0), (592, 2)));
     }
 
     #[test]
