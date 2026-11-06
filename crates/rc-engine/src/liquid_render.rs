@@ -315,8 +315,9 @@ pub fn hoven_ice(water_on: bool) -> bool { water_on && enabled() && forced().is_
 /// under the vertex colours, its look redrawn procedurally and alive, instead of the texture (`tfrag.wgsl` `goo_look`);
 /// Original is the game's draw. Quartu's green pools (tex 10, mottled green under green to teal vertex colours, flat at
 /// z 28.97 and 32.85: the giant Clank arena and the yard round the factory dome; session 2026-11-06_10-48-49 markers 1
-/// and 2) keep their texture and swirl ([`TfragLook::Swirl`]).
-pub const TFRAG_LIQUIDS: [(u32, i32, TfragLook); 2] = [(10, 12, TfragLook::Goo), (15, 10, TfragLook::Swirl)];
+/// and 2) keep their texture and swirl ([`TfragLook::Swirl`]), as does the same green liquid on the Fleet (tex 57, flat
+/// at z 153.56 under the laser grid; session 2026-11-06_15-02-26 marker 5).
+pub const TFRAG_LIQUIDS: [(u32, i32, TfragLook); 3] = [(10, 12, TfragLook::Goo), (15, 10, TfragLook::Swirl), (17, 57, TfragLook::Swirl)];
 
 /// A tfrag liquid's look in `tfrag.wgsl` (`lod.tex.w`, its value).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -719,6 +720,7 @@ mod tests {
         // Orxon's tex 12 (goo) and Quartu's tex 10 (swirl) only; the same indices elsewhere, and Orxon's other textures
         // (its grass 16), stay Original.
         assert_eq!((tfrag_liquid_look(10, 12), tfrag_liquid_look(15, 10)), (Some(TfragLook::Goo), Some(TfragLook::Swirl)));
+        assert_eq!(tfrag_liquid_look(17, 57), Some(TfragLook::Swirl));
         assert!(!tfrag_liquid(10, 16) && !tfrag_liquid(1, 12) && !tfrag_liquid(13, 12) && !tfrag_liquid(10, 10) && !tfrag_liquid(15, 12));
         // `lod.tex.w` selects the look in tfrag.wgsl (1 goo, 2 swirl).
         assert_eq!((TfragLook::Goo as i32, TfragLook::Swirl as i32), (1, 2));
