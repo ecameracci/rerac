@@ -1750,7 +1750,6 @@ fn caster_order(play: Option<Res<Play>>, shadows: Option<Res<crate::shadow_rende
 /// changed rows / ambient / light word), hide, anim state and snapshot.
 fn drive_statics(p: &mut Play, lv: &crate::level_load::LoadedLevel, occl: &mut MobyOcclusion, mut anim: Option<&mut MobyAnim>) {
     promote_statics(p);
-    let cam = p.game.camera.out.pos;
     let table = &p.game.mobys;
     let lighting = lv.mobys.lighting.as_ref();
     for &(id, ii, k) in &p.driven {
@@ -1778,7 +1777,7 @@ fn drive_statics(p: &mut Play, lv: &crate::level_load::LoadedLevel, occl: &mut M
         // resolved it per instance) and writes 0x7f80 for a creature revived or moved elsewhere, a thrown crate, …
         occl.set_occlusion_word(ii, m.occlusion);
         let scroll = p.svc.class_scroll.get(&m.o_class).copied().unwrap_or((0, 0));
-        occl.look(ii, moby_render::MobyLook { alpha: m.alpha, mode: m.mode, glow: m.glow, shine_distance: m.b73, draw_dist: Some(m.draw_dist), late: None, scroll, extend: m.mode & 2 != 0 || rc_game::moby_update::scheduler::in_update_range(m, cam) });
+        occl.look(ii, moby_render::MobyLook { alpha: m.alpha, mode: m.mode, glow: m.glow, shine_distance: m.b73, draw_dist: Some(m.draw_dist), late: None, scroll });
         if let (Some(a), Some(k)) = (anim.as_deref_mut(), k) {
             a.drive(k, m.anim, p.svc.snapshots.get(id).and_then(|s| s.as_ref()), &m.joint_mods);
         }
@@ -2856,7 +2855,6 @@ fn upload_dynamic(
     let first = table.first_dynamic;
     let d = &mut p.dynamic;
     let ship = p.ship.map(|s| s.0);
-    let cam_pos = p.game.camera.out.pos;
     let (mut rec_changed, mut pal_changed) = (false, false);
     let (mut live, mut drawn) = (0, 0);
     let pal_bytes = d.pal_slots as usize * 64;
@@ -2883,9 +2881,8 @@ fn upload_dynamic(
             };
             let sphere = crate::moby_lod::world_sphere(&inp, crate::moby_lod::seq_sphere(&m.anim[ci], &mo.anim, c.bsphere));
             let v = crate::moby_lod::view_centre(sphere, eye, &rows);
-            // [P] Farther under Draw distance (moby_lod::moby_proc_drawn) when the game updates it anyway; +0x31 stays the game's.
-            let extend = mo.mode & 2 != 0 || rc_game::moby_update::scheduler::in_update_range(mo, cam_pos);
-            let (pick, game_drawn) = crate::moby_lod::moby_proc_drawn(v, sphere[3], &inp, tans, extend);
+            // [P] Farther under Draw distance (moby_lod::moby_proc_drawn); +0x31 stays the game's.
+            let (pick, game_drawn) = crate::moby_lod::moby_proc_drawn(v, sphere[3], &inp, tans);
             pick.ok().map(|p| {
                 let e = if p.shine > 0 { crate::moby_lod::shine_basis(sphere, eye, &rows, &inp.rows) } else { [[0.0; 3]; 3] };
                 (ci, p.alpha, p.fading, p.shine, e, game_drawn)

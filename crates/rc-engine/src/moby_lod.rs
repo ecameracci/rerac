@@ -142,15 +142,15 @@ static DRAW_SCALE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::
 pub fn set_draw_scale(s: f32) { DRAW_SCALE.store(s.to_bits(), std::sync::atomic::Ordering::Relaxed); }
 
 /// [P] What the renderer draws, beside the game's own MobyProc: `(pick, game_drawn)`. With Draw distance above Original
-/// and `extend` (the game updates the moby this tick whether it is drawn or not, so drawing it farther never shows a
-/// frozen moby), the pick takes the draw distance × the factor and fades over the last 16 units × the factor (G-REN-050);
+/// the pick takes the draw distance × the factor and fades over the last 16 units × the factor (G-REN-050);
 /// `game_drawn` is the game's own result (MobyProc's +0x31, the activity rule's input), so game state is unchanged.
-/// The Visibomb's view keeps the game's.
-pub fn moby_proc_drawn(v: [f32; 3], r: f32, inp: &ProcInput, tans: (f32, f32), extend: bool) -> (Result<ProcPick, Cull>, bool) {
+/// A moby the game does not update out there (past its update distance and not drawn by the game) shows its
+/// last-updated pose until it is updated again. The Visibomb's view keeps the game's.
+pub fn moby_proc_drawn(v: [f32; 3], r: f32, inp: &ProcInput, tans: (f32, f32)) -> (Result<ProcPick, Cull>, bool) {
     let s = f32::from_bits(DRAW_SCALE.load(std::sync::atomic::Ordering::Relaxed));
     let short = crate::visibomb_view::SHORT_FAR.load(std::sync::atomic::Ordering::Relaxed);
     let game = moby_proc_view(v, r, inp, tans);
-    if !extend || short || s <= 1.0 { let drawn = game.is_ok(); return (game, drawn); }
+    if short || s <= 1.0 { let drawn = game.is_ok(); return (game, drawn); }
     (moby_proc_scaled(v, r, inp, tans, s), game.is_ok())
 }
 
@@ -328,7 +328,7 @@ mod tests {
     }
 
     /// Draw distance ×4 (G-REN-050): a 64-unit moby is whole to 192 units, fades over 192..256, then culls; ×1 is the
-    /// game's; the game's own result (extend off) is unchanged.
+    /// game's; at the default ×1 `moby_proc_drawn` is the game's own result.
     #[test]
     fn draw_distance_scaled() {
         let k = 1024.0;
@@ -344,7 +344,7 @@ mod tests {
         assert_eq!(at(256.0 + 0.01), Err(Cull::DrawDistance));
         // The cap scales with it: 500 × 4.
         assert!(moby_proc_scaled([0.0, 0.0, 1900.0 * k], 0.0, &inp(0x7fff, 0xff, 0), tans, 4.0).is_ok());
-        let (pick, game) = moby_proc_drawn([0.0, 0.0, 70.0 * k], 0.0, &i, tans, false);
+        let (pick, game) = moby_proc_drawn([0.0, 0.0, 70.0 * k], 0.0, &i, tans);
         assert_eq!((pick, game), (Err(Cull::DrawDistance), false));
     }
 

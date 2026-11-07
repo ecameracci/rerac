@@ -1254,7 +1254,7 @@ fn spawn_mobys(
         instances: inst_buffer.clone(),
         driven_hidden: vec![false; n_inst],
         records_dirty: false,
-        look: m.placed.iter().map(|p| p.map_or(MobyLook { alpha: 0x80, mode: 0, glow: 0, shine_distance: 0, draw_dist: None, late: None, scroll: (0, 0), extend: true }, |p| MobyLook::of_class(&m.classes[p.class]))).collect(),
+        look: m.placed.iter().map(|p| p.map_or(MobyLook { alpha: 0x80, mode: 0, glow: 0, shine_distance: 0, draw_dist: None, late: None, scroll: (0, 0) }, |p| MobyLook::of_class(&m.classes[p.class]))).collect(),
         moved: vec![false; n_inst],
         lit_by_point: vec![false; n_inst],
         class_parts: parts.into_iter().map(|(ci, (high, low, _))| (ci, [high.0, low])).collect(),
@@ -1340,10 +1340,6 @@ pub struct MobyLook {
     /// The class's texture scroll (`rc_game::moby_update::Services::class_scroll`: s, t in 1/4096), written into the
     /// instance's record ([`set_uv_scroll`]).
     pub scroll: (i16, i16),
-    /// [P] The game updates this moby whatever is drawn (mode 2: never run; else update distance 0xff or the camera
-    /// within it, `scheduler::in_update_range`): drawing it past its draw distance under Draw distance above Original
-    /// shows it live, not frozen ([`moby_lod::moby_proc_drawn`]). Undriven statics: true.
-    pub extend: bool,
 }
 
 impl MobyLook {
@@ -1361,7 +1357,6 @@ impl MobyLook {
             draw_dist: None,
             late: None,
             scroll: (0, 0),
-            extend: true,
         }
     }
 }
@@ -1488,7 +1483,7 @@ pub fn update_moby_occlusion(
         } else if let Some((sphere, eye, rows)) = view_sphere {
             let v = moby_lod::view_centre(sphere, eye, &rows);
             let result = if s.lod_on {
-                let (pick, game_drawn) = moby_lod::moby_proc_drawn(v, sphere[3], &inp, tans, look.extend);
+                let (pick, game_drawn) = moby_lod::moby_proc_drawn(v, sphere[3], &inp, tans);
                 beyond_game = pick.is_ok() && !game_drawn;
                 pick
             } else {
