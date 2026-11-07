@@ -79,7 +79,7 @@ use bevy::shader::ShaderRef;
 use rc_formats::level_overlay::{LevelOverlay, Relocation};
 use rc_formats::water::{self as wf, StripAnim, StripClass, StripDescriptor, SUB_STRIP_LEN};
 use rc_game::moby_update::classes::draw_callbacks::Callback;
-use rc_game::moby_update::classes::units::wave_mesh;
+use rc_game::moby_update::classes::units::{veldin_pool, wave_mesh};
 use rc_game::ps2v::Pf;
 use rc_game::rng::{Rng, LEVEL_SEED};
 use rc_game::water::world::LevelWaterData;
@@ -307,12 +307,19 @@ fn follow_look(
     state: Option<ResMut<WaterState>>,
     mut materials: ResMut<Assets<WaterMaterial>>,
     mut waves: Query<&mut Visibility, With<WaveSheet>>,
+    mut pools: Query<&mut Visibility, (With<PoolSheet>, Without<WaveSheet>)>,
 ) {
     let Some(mut st) = state else { return };
     let st = &mut *st;
     // The wave mesh surfaces only on Enhanced (crate::fx_draw draws the game's quads on Original).
     let shown = if st.takes_wave_meshes(g.water.on()) { Visibility::Inherited } else { Visibility::Hidden };
     for mut v in &mut waves { v.set_if_neq(shown); }
+    // The pool surfaces on Enhanced, each while a pool drew its mesh ([`draw`]).
+    let on = st.takes_veldin_pools(g.water.on());
+    for p in &st.pool_sheets {
+        let Ok(mut v) = pools.get_mut(p.entity) else { continue };
+        v.set_if_neq(if on && p.dz.is_some() { Visibility::Inherited } else { Visibility::Hidden });
+    }
     let tex = level.0.particles.textures.as_ref();
     // w: the swell's scale (crate::water_waves; the slope only on this water).
     let sun = key.map_or(Vec3::Y, |k| k.to_light).extend(crate::water_waves::scale());
@@ -425,7 +432,32 @@ pub struct WaterState {
     liquid_fx: std::collections::HashMap<i32, f32>,
     /// Water Enhanced's wave mesh surfaces ([`WaveSheet`]): each strip's entity and points.
     wave_sheets: Vec<(Entity, Vec<[f32; 3]>)>,
+    /// Water Enhanced's Hydrodisplacer pool surfaces ([`PoolSheet`]), by mesh.
+    pool_sheets: Vec<PoolSurface>,
 }
+
+/// **Port-only (Water Enhanced): Veldin 2's Hydrodisplacer pools as water.** The pools' water (`rc_game`
+/// `units::veldin_pool`, class 1402) is one of three meshes a pool's draw callback hands crate::fx_draw as quads (FX
+/// 0x2b, colour 0x50 grey, s scrolled), moved by the pool's height as the Hydrodisplacer drains and fills it. When FX
+/// 0x2b is clear water ([`clear_water`]), each mesh is also a kind-0 draw here (triangles, z1 one unit under the mesh,
+/// so the frame's z blend `1 + dz` sets the height; the s scroll in the frame record), shown on Water Enhanced while a
+/// pool registered that mesh's draw this tick, when crate::fx_draw leaves the quads out
+/// ([`WaterState::takes_veldin_pools`]); hidden on Original.
+#[derive(Component)]
+struct PoolSheet;
+
+/// One [`PoolSheet`]: its mesh (`veldin_pool` pvar +0x14), entity, frame slot, triangle points at the mesh's own
+/// height, and this tick's height over it (None: no pool drew the mesh).
+struct PoolSurface {
+    mesh: usize,
+    entity: Entity,
+    slot: u32,
+    pts: Vec<[f32; 3]>,
+    dz: Option<f32>,
+}
+
+/// Water Enhanced's pool tint: the quads' vertex colour (0x50 grey, `veldin_pool::RGBA`), drawn once.
+const POOL_RGBA: u32 = 0x0050_5050;
 
 /// **Port-only (Water Enhanced): the wave meshes as water.** Quartu's and the Fleet's water (`rc_game`
 /// `units::wave_mesh`) is not the water module's: their draw callbacks hand crate::fx_draw two passes of quads (FX
@@ -447,6 +479,9 @@ impl WaterState {
     /// Whether the wave meshes' quads are left to this plugin's surfaces ([`WaveSheet`]) with Water `on`.
     pub fn takes_wave_meshes(&self, on: bool) -> bool { on && !self.wave_sheets.is_empty() }
 
+    /// Whether the Hydrodisplacer pools' quads are left to this plugin's surfaces ([`PoolSheet`]) with Water `on`.
+    pub fn takes_veldin_pools(&self, on: bool) -> bool { on && !self.pool_sheets.is_empty() }
+
     /// The flat regions of this frame's Enhanced water (crate::water_mirror): the clear strips at their z blend and
     /// the drawn clear ripple patches (`sim`: the moby system's module, else the `RC_PLAY=0` one).
     pub fn flat_surfaces(&self, sim: Option<&RippleSim>, out: &mut Vec<crate::water_mirror::FlatWater>) {
@@ -458,6 +493,10 @@ impl WaterState {
             }
         }
         for (_, pts) in &self.wave_sheets { out.extend(crate::water_mirror::flat_region(pts.iter().copied())); }
+        for p in &self.pool_sheets {
+            let Some(dz) = p.dz else { continue };
+            out.extend(crate::water_mirror::flat_region(p.pts.iter().map(|v| [v[0], v[1], v[2] + dz])));
+        }
         let Some(sim) = sim.or(self.fallback.as_ref()) else { return };
         for (pd, pa) in self.patches.iter().zip(&sim.patches) {
             if !pd.as_ref().is_some_and(|pd| pd.visible && clear(pd.fx[0])) { continue; }
@@ -581,7 +620,7 @@ fn setup(
     mirror: Res<crate::water_mirror::WaterMirror>,
 ) {
     let lw = &level.0.water;
-    if lw.order.is_empty() && lw.chutes.is_empty() && lw.waves.is_empty() { return; }
+    if lw.order.is_empty() && lw.chutes.is_empty() && lw.waves.is_empty() && lw.fx.veldin_pools.is_none() { return; }
     let Some(tex) = level.0.particles.textures.as_ref() else {
         eprintln!("water: no FX textures, not drawn");
         return;
@@ -610,7 +649,9 @@ fn setup(
         }
         _ => Vec::new(),
     };
-    let n_slots: usize = lw.strips.iter().map(|c| c.strips.len() * 2).sum::<usize>() + records.len() * 2 + wave_strips.len();
+    let pool_meshes = lw.fx.veldin_pools.clone().filter(|_| tex.fx_textures.get(veldin_pool::FX).and_then(Option::as_ref).is_some_and(clear_water));
+    let n_pools = pool_meshes.as_ref().map_or(0, |p| p.meshes.len());
+    let n_slots: usize = lw.strips.iter().map(|c| c.strips.len() * 2).sum::<usize>() + records.len() * 2 + wave_strips.len() + n_pools;
     let n_patches = records.len();
     let mut frame_bytes = vec![0u8; n_slots.max(1) * FRAME_RECORD];
     let ripple_bytes = vec![0u8; n_patches.max(1) * RIPPLE_WORDS * 4];
@@ -768,6 +809,31 @@ fn setup(
     if !lw.waves.is_empty() {
         println!("water: wave meshes {:?}: {} strips as Water Enhanced surfaces (fx {:#x} {})", lw.waves, wave_sheets.len(), wave_mesh::FX, if wave_sheets.is_empty() { "not clear water: quads only" } else { "clear water" });
     }
+    // Water Enhanced's Hydrodisplacer pool surfaces ([`PoolSheet`]): each mesh at its own height, z1 one unit under it.
+    let mut pool_sheets = Vec::new();
+    if let Some((pm, img)) = pool_meshes.as_ref().and_then(|pm| Some((pm, fx_image(&mut fx_images, &mut images, tex, veldin_pool::FX as i32)?))) {
+        for (k, m) in pm.meshes.iter().enumerate() {
+            let tris: Vec<(u16, u16)> = m.quads.iter().flat_map(|q| [q[0], q[1], q[2], q[2], q[1], q[3]]).collect();
+            let pts: Vec<[f32; 3]> = tris.iter().filter_map(|&(v, _)| m.verts.get(v as usize).copied()).collect();
+            let st: Vec<[f32; 2]> = tris.iter().filter_map(|&(_, s)| m.st.get(s as usize).copied()).collect();
+            if pts.len() != tris.len() || st.len() != tris.len() || pts.is_empty() { continue; }
+            let mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD)
+                .with_inserted_attribute(ATTRIBUTE_WATER_Z1, pts.iter().map(|p| p[2] - 1.0).collect::<Vec<f32>>())
+                .with_inserted_attribute(ATTRIBUTE_WATER_UV, st.iter().map(|q| [q[0], q[1], q[0], q[1]]).collect::<Vec<_>>())
+                .with_inserted_attribute(ATTRIBUTE_WATER_TAG, VertexAttributeValues::Uint32x2(pts.iter().map(|_| [POOL_RGBA, 0]).collect()))
+                .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, pts.clone());
+            write_frame(&mut frame_bytes, slot, 1.0, [0.0; 2], &[[0.0; 2]; 8]);
+            // misc.w = −1: a tank, no shore foam (water.wgsl).
+            let mat = new_mat(&mut materials, img.clone(), lifted_params(0x80, 0, slot, 0, -1.0), slot, veldin_pool::FX as i32);
+            let e = spawn(&mut commands, meshes.add(mesh), mat, Visibility::Hidden, format!("pool mesh {k} (Water Enhanced)"));
+            commands.entity(e).insert(PoolSheet);
+            pool_sheets.push(PoolSurface { mesh: k, entity: e, slot, pts, dz: None });
+            slot += 1;
+        }
+    }
+    if lw.fx.veldin_pools.is_some() {
+        println!("water: pool meshes: {} as Water Enhanced surfaces (fx {:#x} {})", pool_sheets.len(), veldin_pool::FX, if pool_sheets.is_empty() { "not clear water: quads only" } else { "clear water" });
+    }
     let data = lw.data.as_ref();
     println!(
         "water: draw order {:?}; strips {:?}; ripple patches {} of {} (module {}, 751 zones {:?}, managers {:?}); {} draws",
@@ -805,6 +871,7 @@ fn setup(
         clear_fx: Default::default(),
         liquid_fx: Default::default(),
         wave_sheets,
+        pool_sheets,
     });
 }
 
@@ -912,6 +979,20 @@ pub fn draw(
         if c.anim == StripAnim::BobAfterDraw1225 { c.w = ww::bob(st.counter); }
     }
     st.fallback = fallback;
+    // The pool surfaces ([`PoolSheet`]): the height and scroll of the pool that registered each mesh's draw this tick.
+    if !st.pool_sheets.is_empty() {
+        for p in &mut st.pool_sheets { p.dz = None; }
+        if let Some(p) = play.as_deref() {
+            for &(cb, id) in &p.svc.draw_callbacks.list1 {
+                let Callback::UnitQuads(i) = cb else { continue };
+                if !rc_game::moby_update::classes::units::is_veldin_pool(i) { continue; }
+                let Some((k, dz, scroll)) = veldin_pool::surface(&p.game.mobys, &p.svc, id) else { continue };
+                let Some(s) = st.pool_sheets.iter_mut().find(|s| s.mesh == k) else { continue };
+                s.dz = Some(dz);
+                write_frame(&mut st.frame_bytes, s.slot, 1.0 + dz, [scroll, 0.0], &[[0.0; 2]; 8]);
+            }
+        }
+    }
     crate::asset_write::set_buffer(&mut buffers, &st.frame, &st.frame_bytes);
 }
 
