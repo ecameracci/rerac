@@ -536,6 +536,73 @@ fn goo_look(rgb: vec3<f32>, world: vec3<f32>, xz: vec2<f32>, t: f32) -> vec3<f32
     return col + vec3<f32>(1.0, 1.0, 0.8) * spec;
 }
 
+#ifdef TFRAG_LIQUID
+// The swirl's flow on the plane (world units a second): the curl of two drifting noise layers (eddies of about 8 and 3
+// units), so it turns without sources or sinks and no part of the pool thins out or piles up.
+fn swirl_flow(q: vec2<f32>, t: f32) -> vec2<f32> {
+    let e = 0.35;
+    let f = vec2<f32>(t * 0.013, -t * 0.009);
+    let n = goo_noise(q * 0.12 + f) + 0.45 * goo_noise(q * 0.31 - f * 1.7 + vec2<f32>(7.1, 2.3));
+    let nx = goo_noise((q + vec2<f32>(e, 0.0)) * 0.12 + f) + 0.45 * goo_noise((q + vec2<f32>(e, 0.0)) * 0.31 - f * 1.7 + vec2<f32>(7.1, 2.3));
+    let ny = goo_noise((q + vec2<f32>(0.0, e)) * 0.12 + f) + 0.45 * goo_noise((q + vec2<f32>(0.0, e)) * 0.31 - f * 1.7 + vec2<f32>(7.1, 2.3));
+    return vec2<f32>(ny - n, -(nx - n)) / e * 9.0;
+}
+
+// World units a tile of the pool's texture covers in [`swirl_look`]: one scale for the whole pool. The game's maps
+// differ triangle by triangle (Quartu's tex 10: 1.7 to 4.9 units a tile, turned and sheared; the Fleet's tex 57: 2.2 by
+// 2.9), so the texture moved through each triangle's own map slid apart at the edges (seams, session
+// 2026-11-06_15-02-26 marker 6). The mottling has no direction, so the world plane draws it the same.
+const SWIRL_TILE: f32 = 2.5;
+
+// The pool's texture on the world plane `q` (Bevy xz) moved by `d` world units, at `k` times its tile density.
+fn swirl_sample(in: TfragVertexOutput, q: vec2<f32>, d: vec2<f32>, k: f32) -> vec3<f32> {
+    let s = k / SWIRL_TILE;
+    // Wrapped here (the batch's sampler may clamp); the footprint comes from the unwrapped plane.
+    let st = fract((q - d) * s);
+    let duv = vec4<f32>(dpdx(q) * s, dpdy(q) * s);
+    return sample_world(st, log2(in.depth / lod.misc.z) + in.k + log2(k), lod.tex.y, duv).rgb;
+}
+
+// Quartu's and the Fleet's green pools (crate::liquid_render::TfragLook::Swirl, `lod.tex.w` = 2): the game's texture
+// (on the world plane at one scale, [`SWIRL_TILE`]) and vertex colours, carried by a slow swirling flow ([`swirl_flow`]; two copies half a cycle apart, each moved along the flow
+// for a 7-second cycle and faded out before it stretches, so the texture keeps its look while it turns); a finer
+// copy flowing the other way multiplies in at a third of its contrast (detail under the texture's own texels); a gentle
+// swell (`goo_swell`, about 5 units) shades it under a light from above, with a sheen of the fog colour by Fresnel and
+// a soft highlight. The mean colour is the Original's.
+fn swirl_look(in: TfragVertexOutput, t: f32) -> vec3<f32> {
+    // The world plane, not the ST plane: the pools are flat, and it runs on unbroken across the triangles.
+    let q = in.world.xz;
+    let flow = swirl_flow(q, t);
+    let cycle = t / 7.0;
+    let p0 = fract(cycle);
+    let p1 = fract(cycle + 0.5);
+    let a = swirl_sample(in, q, flow * p0 * 1.6, 1.0);
+    let b = swirl_sample(in, q, flow * p1 * 1.6 + vec2<f32>(3.7, 2.1), 1.0);
+    var col = mix(a, b, abs(2.0 * p0 - 1.0));
+    // The blend of two copies flattens the mottling a little: back to the texture's contrast round its mean.
+    let mean = goo_mean();
+    col = max(mean + (col - mean) * 1.25, vec3<f32>(0.0));
+    let fine = swirl_sample(in, q, -flow * fract(cycle * 1.3) * 0.8 + vec2<f32>(1.3, 4.9), 2.7);
+    let lum = dot(fine, vec3<f32>(0.3, 0.59, 0.11)) / max(dot(mean, vec3<f32>(0.3, 0.59, 0.11)), 0.02);
+    col *= mix(1.0, clamp(lum, 0.5, 1.6), 0.33);
+    col *= in.color.rgb;
+    let e = 0.1;
+    let qs = q * 1.4;
+    let h0 = goo_swell(qs, t * 0.7);
+    let g = vec2<f32>(goo_swell(qs + vec2<f32>(e, 0.0), t * 0.7) - h0, goo_swell(qs + vec2<f32>(0.0, e), t * 0.7) - h0) / e * 0.2;
+    let n = normalize(vec3<f32>(-g.x, 1.0, -g.y));
+    let l = normalize(vec3<f32>(0.35, 1.0, 0.25));
+    let to_eye = normalize(view.world_position - in.world);
+    col *= clamp(1.0 + 1.4 * (dot(n, l) - l.y), 0.75, 1.25);
+    let r = reflect(-to_eye, n);
+    let sky = fog.color.rgb * mix(0.6, 1.4, clamp(r.y, 0.0, 1.0));
+    let fres = 0.03 + 0.97 * pow(1.0 - max(dot(n, to_eye), 0.0), 5.0);
+    col = mix(col, sky, clamp(fres * 0.35, 0.0, 0.3));
+    let nh = max(dot(n, normalize(l + to_eye)), 0.0);
+    return col + vec3<f32>(0.85, 1.0, 0.8) * (pow(nh, 60.0) * 0.1 * (0.5 + smoothstep(0.2, 0.8, h0)));
+}
+#endif
+
 @fragment
 fn fragment(in: TfragVertexOutput) -> @location(0) vec4<f32> {
     let duv = vec4<f32>(dpdx(in.uv), dpdy(in.uv));
@@ -545,8 +612,12 @@ fn fragment(in: TfragVertexOutput) -> @location(0) vec4<f32> {
 #ifdef TFRAG_LIQUID
     // The liquid's own pipeline (crate::tfrag_render::TfragKey): the world position and the pattern's plane from its
     // vertex outputs (crate::tfrag_render::liquid_st_map).
-    let base = min(goo_mean() * in.color.rgb, vec3<f32>(1.0));
-    rgb = min(goo_look(base, in.world, in.plane, globals.time), vec3<f32>(1.0));
+    if (lod.tex.w > 1.5) {
+        rgb = min(swirl_look(in, globals.time), vec3<f32>(1.0));
+    } else {
+        let base = min(goo_mean() * in.color.rgb, vec3<f32>(1.0));
+        rgb = min(goo_look(base, in.world, in.plane, globals.time), vec3<f32>(1.0));
+    }
 #endif
     if (fog.color.w > 0.5) {
         rgb = mix(fog.color.rgb, rgb, in.fog);

@@ -452,14 +452,15 @@ pub fn spawn_tfrags_on(
             info!("tfrag tex {tex_index} {skey:?}: texel alpha {texel_alpha:?}, vertex alpha {vertex_alpha:?}: draws {passes:?}");
         }
         let mut lod = lod_base;
-        // MXL = ty - 1: GS LOD = log2(1/Q) + K, level = nearest, clamped to 0..MXL (K comes per vertex). w = 1: a
-        // liquid of crate::liquid_render::TFRAG_LIQUIDS (its look is on while z = 1, `follow_tfrag_liquids`), x its
-        // texture's mean colour (`pack_mean`).
-        let liquid = crate::liquid_render::tfrag_liquid(level.water.level, tex_index)
-            .then(|| usize::try_from(tex_index).ok().and_then(|i| level.tfrag_lod.mips.get(i)?.as_ref()?.first()))
-            .flatten()
-            .map(|l| crate::liquid_render::pack_mean(&l.rgba));
-        lod.tex = Vec4::new(liquid.unwrap_or(0.0), mxl as f32, 0.0, if liquid.is_some() { 1.0 } else { 0.0 });
+        // MXL = ty - 1: GS LOD = log2(1/Q) + K, level = nearest, clamped to 0..MXL (K comes per vertex). w ≠ 0: a
+        // liquid of crate::liquid_render::TFRAG_LIQUIDS, its look (`TfragLook`: 1 goo, 2 swirl; on while z = 1,
+        // `follow_tfrag_liquids`), x its texture's mean colour (`pack_mean`).
+        let liquid = crate::liquid_render::tfrag_liquid_look(level.water.level, tex_index).and_then(|look| {
+            let mip = usize::try_from(tex_index).ok().and_then(|i| level.tfrag_lod.mips.get(i)?.as_ref()?.first())?;
+            Some((crate::liquid_render::pack_mean(&mip.rgba), look as i32 as f32))
+        });
+        let (mean, look) = liquid.unwrap_or((0.0, 0.0));
+        lod.tex = Vec4::new(mean, mxl as f32, 0.0, look);
         lod.misc.z /= lod_scale;
         let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD)
             .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, b.positions)

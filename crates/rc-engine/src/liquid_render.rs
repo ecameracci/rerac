@@ -32,7 +32,9 @@
 //!   pass itself (`tfrag.wgsl` `goo_look`, the batch flagged in its LOD uniform, [`follow_tfrag_liquids`]): the
 //!   texture is not drawn: its look (olive mottling, dark-rimmed yellow "eyes", neon squiggles and crescents) is
 //!   redrawn procedurally around its mean colour ([`pack_mean`]) under the vertex colours and made alive: the eyes
-//!   swell and pop into neon rings, the squiggles drift, an uneven noise swell rolls under it all.
+//!   swell and pop into neon rings, the squiggles drift, an uneven noise swell rolls under it all. Quartu's green pools
+//!   keep their texture instead (`tfrag.wgsl` `swirl_look`, [`TfragLook::Swirl`]): it swirls on a slow flow, with a
+//!   finer flowing copy for detail and a gentle swell.
 //!
 //! A translucent grid is a fog or cloud layer, never a liquid ([`layer_verdict`]: Oltanis's 1260, mud-brown at FIX
 //! 0x40, is the haze at the bottom of the world), so it stays Original whatever its colour.
@@ -311,11 +313,29 @@ pub fn hoven_ice(water_on: bool) -> bool { water_on && enabled() && forced().is_
 /// animated (docs/plan/world_animation.md: no tfrag texture animation). Orxon's goo (tex 12, the orange bubbles under
 /// green vertex colours, flat, ~189 000 square units under the whole level). Water Enhanced draws its mean colour
 /// under the vertex colours, its look redrawn procedurally and alive, instead of the texture (`tfrag.wgsl` `goo_look`);
-/// Original is the game's draw.
-pub const TFRAG_LIQUIDS: [(u32, i32); 1] = [(10, 12)];
+/// Original is the game's draw. Quartu's green pools (tex 10, mottled green under green to teal vertex colours, flat at
+/// z 28.97 and 32.85: the giant Clank arena and the yard round the factory dome; session 2026-11-06_10-48-49 markers 1
+/// and 2) keep their texture and swirl ([`TfragLook::Swirl`]), as does the same green liquid on the Fleet (tex 57, flat
+/// at z 153.56 under the laser grid; session 2026-11-06_15-02-26 marker 5).
+pub const TFRAG_LIQUIDS: [(u32, i32, TfragLook); 3] = [(10, 12, TfragLook::Goo), (15, 10, TfragLook::Swirl), (17, 57, TfragLook::Swirl)];
+
+/// A tfrag liquid's look in `tfrag.wgsl` (`lod.tex.w`, its value).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TfragLook {
+    /// `goo_look`: the texture redrawn procedurally around its mean colour (Orxon).
+    Goo = 1,
+    /// `swirl_look`: the game's texture carried by a slow swirling flow, a finer flowing copy of it for detail, a
+    /// gentle swell and a sheen of the fog colour (Quartu).
+    Swirl = 2,
+}
+
+/// The look of tfrag texture `tex` of `level` when it is one of the [`TFRAG_LIQUIDS`].
+pub fn tfrag_liquid_look(level: u32, tex: i32) -> Option<TfragLook> {
+    TFRAG_LIQUIDS.iter().find(|l| (l.0, l.1) == (level, tex)).map(|l| l.2)
+}
 
 /// Whether tfrag texture `tex` of `level` is one of the [`TFRAG_LIQUIDS`].
-pub fn tfrag_liquid(level: u32, tex: i32) -> bool { TFRAG_LIQUIDS.contains(&(level, tex)) }
+pub fn tfrag_liquid(level: u32, tex: i32) -> bool { tfrag_liquid_look(level, tex).is_some() }
 
 /// A tfrag liquid's base colour for `tfrag.wgsl` `goo_mean` (its texture is not drawn): the mean of the RGBA texels'
 /// colour (display bytes), packed r + 256 g + 65536 b into one f32 lane (exact below 2^24).
@@ -696,14 +716,19 @@ mod tests {
     }
 
     #[test]
-    fn orxons_goo_is_the_one_tfrag_liquid() {
-        // Orxon's tex 12 only; the same index elsewhere, and Orxon's other textures (its grass 16), stay Original.
-        assert!(tfrag_liquid(10, 12));
-        assert!(!tfrag_liquid(10, 16) && !tfrag_liquid(1, 12) && !tfrag_liquid(13, 12));
+    fn orxons_goo_and_quartus_pools_are_the_tfrag_liquids() {
+        // Orxon's tex 12 (goo) and Quartu's tex 10 (swirl) only; the same indices elsewhere, and Orxon's other textures
+        // (its grass 16), stay Original.
+        assert_eq!((tfrag_liquid_look(10, 12), tfrag_liquid_look(15, 10)), (Some(TfragLook::Goo), Some(TfragLook::Swirl)));
+        assert_eq!(tfrag_liquid_look(17, 57), Some(TfragLook::Swirl));
+        assert!(!tfrag_liquid(10, 16) && !tfrag_liquid(1, 12) && !tfrag_liquid(13, 12) && !tfrag_liquid(10, 10) && !tfrag_liquid(15, 12));
+        // `lod.tex.w` selects the look in tfrag.wgsl (1 goo, 2 swirl).
+        assert_eq!((TfragLook::Goo as i32, TfragLook::Swirl as i32), (1, 2));
         // The look is its own pipeline variant (crate::tfrag_render::TfragKey: `lod.tex.z`, set only on a marked
         // batch, `lod.tex.w`): Original's tfrag shader has none of it.
         let tfrag = include_str!("../assets/shaders/tfrag.wgsl");
         assert!(tfrag.contains("#ifdef TFRAG_LIQUID") && tfrag.contains("goo_look(base, in.world, in.plane, globals.time)"));
+        assert!(tfrag.contains("lod.tex.w > 1.5") && tfrag.contains("swirl_look("));
         // The mean colour round-trips through `goo_mean`'s unpacking.
         let v = pack_mean(&[200, 150, 30, 128, 174, 148, 38, 128]);
         assert_eq!(v, 187.0 + 256.0 * 149.0 + 65536.0 * 34.0);

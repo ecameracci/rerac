@@ -12,7 +12,8 @@
 //!    floor loses is filled by half the water's colour, so the floor fades toward it rather than to black.
 //! 3. **Caustics** on the surfaces below the plane: two warped noise layers, sampled where the sun's direction bent
 //!    into the water ([`refract_down`]) meets the plane, faded by depth, by facing, and where a layer's cells shrink
-//!    below a pixel (no aliasing in the distance).
+//!    below a pixel (no aliasing in the distance). The surfaces facing away get a softer triplanar pattern instead
+//!    (`WALL_CAUSTICS`), so a flooded tube's far side is not bare.
 //! 4. **Light shafts:** [`SHAFT_TAPS`] taps along the in-water ray, each lit by a coarse layer of the same pattern
 //!    projected up to the plane along the sun, so the shafts slant with the sun and drift with the caustics.
 //! 5. **Absorption and in-scatter** along the in-water part ([`transmittance`] with [`ABSORB_SIGMA`]: red goes
