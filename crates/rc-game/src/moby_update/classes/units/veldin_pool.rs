@@ -56,7 +56,8 @@ const SCROLL_RATE: f32 = 0.05;
 /// Global flag 0x13d406.
 const SWAP_FLAG: usize = 0x7e;
 const RGBA: u32 = 0x4050_5050;
-const FX: usize = 0x2b;
+/// The surfaces' FX texture (gp−0x48dc).
+pub const FX: usize = 0x2b;
 /// The meshes' tables (vertices, quads, ST) and quad counts, in mesh order.
 const TABLES: [(u32, u32, u32, usize); 3] = [
     (0x1d_b030, 0x1d_b240, 0x1d_b3a0, 22),
@@ -201,4 +202,13 @@ pub fn fx_quads(table: &MobyTable, svc: &Services, id: MobyId) -> Option<FxQuads
         Some(FxQuad { corners: corners.try_into().ok()?, st: st.try_into().ok()?, rgba: [RGBA; 4] })
     }).collect();
     Some(FxQuads { fx: FX, additive: false, subtract: false, quads })
+}
+
+/// Pool `id`'s surface as its draw callback places it: the mesh, the height over the mesh's own (the pool's z − pvar
+/// +0x00) and the texture's s scroll (the engine's Water Enhanced surface, `rc-engine` water_render `PoolSheet`).
+pub fn surface(table: &MobyTable, svc: &Services, id: MobyId) -> Option<(usize, f32, f32)> {
+    let m = table.mobys.get(id)?;
+    if m.pvars.len() < LEN { return None; }
+    let mesh = usize::try_from(p::i32(&m.pvars, MESH)).ok().filter(|&k| k < DRAW_FNS.len())?;
+    Some((mesh, m.position[2] - p::ff(&m.pvars, FULL), f32::from_bits(svc.units.word(SCROLL_WORD))))
 }
