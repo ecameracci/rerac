@@ -405,7 +405,7 @@ pub const SHAFT_LEVELS: [(bool, &str); 19] = [
     (false, "Quartu: night, indoor factory"),
     (true, "Kalebo III: daylight"),
     (true, "Drek's fleet: the sun in its sky"),
-    (true, "Veldin: daylight"),
+    (false, "Veldin finale: dark red sky, no visible sun"),
 ];
 
 /// [`SHAFT_LEVELS`]' choice for a level (none past the table).
@@ -741,9 +741,10 @@ mod tests {
 
     #[test]
     fn shafts_follow_the_level_table() {
-        // The play-test's list: Aridia, Rilgar, Nebula G34, Umbris, Batalia, Orxon, Hoven, Oltanis, Quartu.
+        // The play-test's list: Aridia, Rilgar, Nebula G34, Umbris, Batalia, Orxon, Hoven, Oltanis, Quartu; and the
+        // Veldin finale (play session 2026-11-07_08-30-02).
         let off: Vec<u32> = (0..SHAFT_LEVELS.len() as u32).filter(|&l| !shafts_on_level(l)).collect();
-        assert_eq!(off, [2, 5, 6, 7, 8, 10, 12, 14, 15]);
+        assert_eq!(off, [2, 5, 6, 7, 8, 10, 12, 14, 15, 18]);
         assert!(shafts_on_level(1) && shafts_on_level(3) && shafts_on_level(13) && shafts_on_level(16));
         assert!(!shafts_on_level(19) && !shafts_on_level(u32::MAX));
         assert!(SHAFT_LEVELS.iter().all(|l| !l.1.is_empty()));

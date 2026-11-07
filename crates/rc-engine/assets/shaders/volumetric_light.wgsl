@@ -30,7 +30,8 @@ struct VolParams {
     sea: vec4<f32>,
     // crate::volumetric_light::VolumetricLight::hero: Ratchet's bounding sphere (world; w 0: none).
     hero: vec4<f32>,
-    // crate::volumetric_light::flatten: the share taken out, the surroundings' radius (target pixels).
+    // crate::volumetric_light::flatten: the share taken out, the surroundings' radius (target pixels); the
+    // shadow taps' spread (shadow-map texels, crate::volumetric_light::SPREAD).
     flat: vec4<f32>,
     // The history's view and eye (w: 1 while valid).
     prev_clip_from_world: mat4x4<f32>,
@@ -91,7 +92,7 @@ fn shadow_weight(len: f32) -> f32 {
 // 1 lit, 0 shadowed: one comparison tap (bilinear) in the cascade holding view depth `z`; lit outside the cascades,
 // and where the light reaches `world` through Ratchet's sphere and the map's occluder lies within it (his shadow, not
 // the shade he stands in: crate::volumetric_light::VolumetricLight::hero).
-fn sun_visibility(world: vec3<f32>, z: f32) -> f32 {
+fn sun_visibility(world: vec3<f32>, z: f32, spread: vec2<f32>) -> f32 {
     var cascade = -1;
     let count = i32(vol.tint.w);
     for (var i = 0; i < count; i += 1) {
@@ -100,7 +101,7 @@ fn sun_visibility(world: vec3<f32>, z: f32) -> f32 {
     if (cascade < 0) { return 1.0; }
     let c = sun.clip_from_world[cascade] * vec4<f32>(world, 1.0);
     let ndc = c.xyz / c.w;
-    let uv = ndc.xy * vec2<f32>(0.5, -0.5) + 0.5;
+    let uv = ndc.xy * vec2<f32>(0.5, -0.5) + 0.5 + spread / vec2<f32>(textureDimensions(shadow_map));
     if (any(uv < vec2<f32>(0.0)) || any(uv > vec2<f32>(1.0))) { return 1.0; }
     let vis = textureSampleCompareLevel(shadow_map, shadow_compare, uv, cascade, ndc.z);
     let r = vol.hero.w;
@@ -170,7 +171,11 @@ fn march(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
         let u = (f32(i) + jitter) / f32(n);
         let t = len * u * u;
         let dt = len * 2.0 * u / f32(n);
-        let vis = sun_visibility(eye + ray * t, t * forward);
+        // crate::volumetric_light::SPREAD: the tap moved within a disc of the shadow map, a new direction and radius
+        // each step and frame, so the map's texel edges blur into soft beams instead of stair steps.
+        let a = 6.2831853 * fract(jitter * 7.0 + f32(i) * 0.381966);
+        let spread = vec2<f32>(cos(a), sin(a)) * vol.flat.z * sqrt(fract(jitter + f32(i) * 0.618034));
+        let vis = sun_visibility(eye + ray * t, t * forward, spread);
         let s = vis * exp(-sigma * t) * sigma * dt;
         if (vis >= 0.5) {
             if (shadow >= 0.0) {

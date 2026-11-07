@@ -9,8 +9,8 @@
 //!    [`LENGTH`] units ([`SKY_LENGTH`] toward the sky, so it does not wash out), in [`STEPS`] steps packed toward the
 //!    camera ([`step`]) from a per-pixel dithered start that moves every frame ([`jitter`]: interleaved gradient
 //!    noise plus the golden ratio per frame, so no fixed screen pattern survives step 2). Each step looks the sun's
-//!    cascades up (crate::sun_shadow `SunCascades`, one comparison tap; lit where the occluder is Ratchet,
-//!    [`VolumetricLight::hero`]): a lit step adds `σ·T·dt` of a uniform thin medium ([`DENSITY`] σ, extinction
+//!    cascades up (crate::sun_shadow `SunCascades`, one comparison tap moved within [`SPREAD`] texels; lit where the
+//!    occluder is Ratchet, [`VolumetricLight::hero`]): a lit step adds `σ·T·dt` of a uniform thin medium ([`DENSITY`] σ, extinction
 //!    `T = exp(−σt)`), weighted by the shadow around it ([`Shafts`]: in full
 //!    within [`EDGE`] of a long shadow along the ray, [`OPEN`] in lit air far from one, so a shaded space with a lit
 //!    opening gets bold beams and open daylight stays clear), and the sum by the Henyey-Greenstein phase ([`phase`],
@@ -43,9 +43,12 @@
 //! The flattening was tuned on Kerwan's spawn, Rilgar's bay and Hoven's start (the camera in shade under a lit
 //! level: without it a grey veil over the whole distance), keeping the beams of Kerwan's first tunnel.
 //!
+//! The strength ([`INTENSITY`], [`KNEE`]), [`STEPS`] and [`SPREAD`] were retuned on Veldin marker 7 of session
+//! 2026-11-06_15-02-26 (beams over a dark cliff: too bright, stair-stepped), checked on Kerwan's tunnel and Eudora.
+//!
 //! Dev switches: `RC_VOLUMETRIC=0` off; a number scales the strength (`2`: twice as bright).
-//! `RC_VOLUMETRIC_TUNE=steps,density,g,length,sky,open,edge,shade,after_lit,flatten,flat_radius,iso,knee,blend` overrides the
-//! constants (an empty field keeps one); `RC_VOLUMETRIC_DEBUG=<gain>` shows the shafts alone, times the gain.
+//! `RC_VOLUMETRIC_TUNE=steps,density,g,length,sky,open,edge,shade,after_lit,flatten,flat_radius,iso,knee,blend,spread`
+//! overrides the constants (an empty field keeps one); `RC_VOLUMETRIC_DEBUG=<gain>` shows the shafts alone, times the gain.
 
 use crate::fx_view::{depth_defs, depth_entry, Fullscreen, FxView, Pipelines};
 use crate::game_camera::GameFog;
@@ -75,8 +78,8 @@ use std::sync::OnceLock;
 
 const SHADER_PATH: &str = "shaders/volumetric_light.wgsl";
 const SCATTER_FORMAT: TextureFormat = TextureFormat::Rgba16Float;
-/// Steps along each ray.
-const STEPS: u32 = 24;
+/// Steps along each ray: at 24 the steps' own spacing showed as fine hatching across the beams (Veldin).
+const STEPS: u32 = 48;
 /// The longest ray (world units), well inside the shadow range (crate::sun_shadow `MAX_DISTANCE`).
 const LENGTH: f32 = 48.0;
 /// The ray toward the sky (no surface).
@@ -86,7 +89,7 @@ const DENSITY: f32 = 0.02;
 /// The Henyey-Greenstein asymmetry: > 0 scatters forward (mild, so the shafts also show seen from the side).
 const G: f32 = 0.3;
 /// The in-scattered light's brightness at full strength.
-const INTENSITY: f32 = 2.0;
+const INTENSITY: f32 = 1.6;
 /// [`Shafts`]' weight of lit air far from shadow; the distance (world units) over which it rises to 1 near one; the
 /// length along the ray (world units) from which a shadow counts in full; the weight of a shadow behind lit air while
 /// the camera is in sunlight.
@@ -109,11 +112,16 @@ const DEFAULT_COLOR: Vec3 = Vec3::ONE;
 /// the light (Gemlik).
 const ISO: f32 = 0.5;
 /// [`soft_cap`]'s knee: the most luminance the shafts add, approached smoothly.
-const KNEE: f32 = 0.25;
+const KNEE: f32 = 0.18;
 /// This frame's weight in the temporal accumulation (about `1 / BLEND` frames averaged).
 const BLEND: f32 = 0.1;
 /// A camera move in one frame (world units) past which the history is dropped (a cut).
 const CUT: f32 = 4.0;
+/// The radius (shadow-map texels) of the disc each march step's shadow tap is moved within, a new spot each step
+/// and frame: one tap per step keeps the map's texel edges, which stretched along the sun read as stair-stepped
+/// beams (Veldin marker 7 of session 2026-11-06_15-02-26); spread, the temporal pass and the composite blur average
+/// them into soft ones.
+const SPREAD: f32 = 2.0;
 /// The golden ratio's fraction: [`jitter`]'s per-frame step.
 const GOLDEN: f32 = 0.618_034;
 
@@ -353,12 +361,12 @@ fn env_scale() -> f32 {
 }
 
 /// The march's steps, density, phase g, longest ray, sky ray, [`ShaftShape`] (open, edge, shade, after_lit),
-/// [`flatten`]'s share and radius, [`ISO`], [`KNEE`] and [`BLEND`]: the constants, or `RC_VOLUMETRIC_TUNE=` up to
-/// fourteen numbers (an empty field keeps the constant).
-fn tune() -> [f32; 14] {
-    static TUNE: OnceLock<[f32; 14]> = OnceLock::new();
+/// [`flatten`]'s share and radius, [`ISO`], [`KNEE`], [`BLEND`] and [`SPREAD`]: the constants, or
+/// `RC_VOLUMETRIC_TUNE=` up to fifteen numbers (an empty field keeps the constant).
+fn tune() -> [f32; 15] {
+    static TUNE: OnceLock<[f32; 15]> = OnceLock::new();
     *TUNE.get_or_init(|| {
-        let mut v = [STEPS as f32, DENSITY, G, LENGTH, SKY_LENGTH, OPEN, EDGE, SHADE, AFTER_LIT, FLATTEN, FLAT_RADIUS, ISO, KNEE, BLEND];
+        let mut v = [STEPS as f32, DENSITY, G, LENGTH, SKY_LENGTH, OPEN, EDGE, SHADE, AFTER_LIT, FLATTEN, FLAT_RADIUS, ISO, KNEE, BLEND, SPREAD];
         if let Ok(s) = std::env::var("RC_VOLUMETRIC_TUNE") {
             for (slot, f) in v.iter_mut().zip(s.split(',')) {
                 if let Ok(x) = f.trim().parse::<f32>() { *slot = x; }
@@ -414,7 +422,7 @@ struct VolParams {
     sea: Vec4,
     /// [`VolumetricLight::hero`].
     hero: Vec4,
-    /// [`flatten`]'s share, the surroundings' radius in target pixels.
+    /// [`flatten`]'s share, the surroundings' radius in target pixels, [`SPREAD`].
     flat: Vec4,
     /// The history's view (the temporal pass's reprojection).
     prev_clip_from_world: Mat4,
@@ -556,7 +564,7 @@ fn volumetric_pass(
     let Some((sun, count)) = SunCascades::of([light], entity) else { return };
     let (Some(mut fx), Some(size)) = (FxView::of(cam, ev), cam.physical_target_size) else { return };
     fx.extra = (-light.transform.forward().as_vec3()).extend(0.0);
-    let [steps, density, g, length, sky, open, edge, shade, after_lit, flat, flat_radius, iso, knee, blend] = tune();
+    let [steps, density, g, length, sky, open, edge, shade, after_lit, flat, flat_radius, iso, knee, blend, spread] = tune();
     let prev = scatter.prev;
     let params = VolParams {
         tint: (vol.tint * vol.strength).extend(count as f32),
@@ -565,7 +573,7 @@ fn volumetric_pass(
         shape: Vec4::new(open, edge.max(1.0), shade.max(1e-3), after_lit),
         sea: sea.and_then(|s| s.0).map_or(Vec4::ZERO, |y| Vec4::new(y, 1.0, 0.0, 0.0)),
         hero: vol.hero,
-        flat: Vec4::new(flat.clamp(0.0, 1.0), flat_radius.max(0.0) * size.y.div_ceil(2) as f32, 0.0, 0.0),
+        flat: Vec4::new(flat.clamp(0.0, 1.0), flat_radius.max(0.0) * size.y.div_ceil(2) as f32, spread.max(0.0), 0.0),
         prev_clip_from_world: prev.map_or(Mat4::IDENTITY, |p| p.clip_from_world),
         prev_eye: prev.map_or(Vec4::ZERO, |p| p.eye.extend(1.0)),
         temporal: Vec4::new(blend.clamp(0.01, 1.0), (scatter.frame % 4096) as f32, iso.clamp(0.0, 1.0), knee.max(1e-4)),
