@@ -271,8 +271,12 @@ pub fn build_active_list(table: &MobyTable, cam: V4, groups: &Groups) -> (Vec<Mo
 }
 
 /// The per-moby activity test of `fun_0020d868` (without the group step).
-pub fn is_active(m: &Moby, cam: V4) -> bool {
-    if m.visible != 0 || m.update_dist == 0xff { return true; }
+pub fn is_active(m: &Moby, cam: V4) -> bool { m.visible != 0 || in_update_range(m, cam) }
+
+/// The activity test of `fun_0020d868` without the "drawn last frame" (+0x31) term: update distance 0xff, or the
+/// moby within its update distance of `cam`.
+pub fn in_update_range(m: &Moby, cam: V4) -> bool {
+    if m.update_dist == 0xff { return true; }
     let p = pv(m.position);
     let d = [p[0] - cam[0], p[1] - cam[1], p[2] - cam[2]];
     let sq = d.map(|x| x * x);

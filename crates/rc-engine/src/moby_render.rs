@@ -1254,7 +1254,7 @@ fn spawn_mobys(
         instances: inst_buffer.clone(),
         driven_hidden: vec![false; n_inst],
         records_dirty: false,
-        look: m.placed.iter().map(|p| p.map_or(MobyLook { alpha: 0x80, mode: 0, glow: 0, shine_distance: 0, draw_dist: None, late: None, scroll: (0, 0) }, |p| MobyLook::of_class(&m.classes[p.class]))).collect(),
+        look: m.placed.iter().map(|p| p.map_or(MobyLook { alpha: 0x80, mode: 0, glow: 0, shine_distance: 0, draw_dist: None, late: None, scroll: (0, 0), extend: true }, |p| MobyLook::of_class(&m.classes[p.class]))).collect(),
         moved: vec![false; n_inst],
         lit_by_point: vec![false; n_inst],
         class_parts: parts.into_iter().map(|(ci, (high, low, _))| (ci, [high.0, low])).collect(),
@@ -1265,6 +1265,7 @@ fn spawn_mobys(
         draws,
         shown,
         cast_only: vec![false; n_inst],
+        beyond_game: vec![false; n_inst],
         lods,
         last_lod: lod_bytes,
         lod_on,
@@ -1339,6 +1340,10 @@ pub struct MobyLook {
     /// The class's texture scroll (`rc_game::moby_update::Services::class_scroll`: s, t in 1/4096), written into the
     /// instance's record ([`set_uv_scroll`]).
     pub scroll: (i16, i16),
+    /// [P] The game updates this moby whatever is drawn (mode 2: never run; else update distance 0xff or the camera
+    /// within it, `scheduler::in_update_range`): drawing it past its draw distance under Draw distance above Original
+    /// shows it live, not frozen ([`moby_lod::moby_proc_drawn`]). Undriven statics: true.
+    pub extend: bool,
 }
 
 impl MobyLook {
@@ -1356,6 +1361,7 @@ impl MobyLook {
             draw_dist: None,
             late: None,
             scroll: (0, 0),
+            extend: true,
         }
     }
 }
@@ -1388,6 +1394,9 @@ pub struct MobyOcclusion {
     shown: Vec<Option<Shown>>,
     /// Per instance: `shown` only casts this frame (`FLAG_SHADOW_ONLY`, culled for the camera): not drawn for +0x31.
     cast_only: Vec<bool>,
+    /// Per instance: drawn only by the port's longer Draw distance (past the game's own, [`moby_lod::moby_proc_drawn`]): not
+    /// drawn for +0x31.
+    beyond_game: Vec<bool>,
     lods: Handle<ShaderBuffer>,
     last_lod: Vec<u8>,
     lod_on: bool,
@@ -1469,6 +1478,7 @@ pub fn update_moby_occlusion(
         });
         let shadow_only = Shown { group: GroupKey { low: false, blend: MobyBlend::pick(mode, false, inp.alpha) }, metal: false, late };
         let mut cast_only = false;
+        let mut beyond_game = false;
         let (want, pick, sphere) = if s.driven_hidden[ii] {
             (None, None, None)
         } else if mask.as_ref().is_some_and(|m| !s.bits[ii].visible(m)) {
@@ -1478,7 +1488,9 @@ pub fn update_moby_occlusion(
         } else if let Some((sphere, eye, rows)) = view_sphere {
             let v = moby_lod::view_centre(sphere, eye, &rows);
             let result = if s.lod_on {
-                moby_lod::moby_proc_view(v, sphere[3], &inp, tans)
+                let (pick, game_drawn) = moby_lod::moby_proc_drawn(v, sphere[3], &inp, tans, look.extend);
+                beyond_game = pick.is_ok() && !game_drawn;
+                pick
             } else {
                 Ok(ProcPick { low_lod: false, alpha: inp.alpha, fading: false, shine: moby_lod::shine_alpha(moby_lod::sphere_depth(v, sphere[3]), inp.shine_distance) })
             };
@@ -1516,6 +1528,7 @@ pub fn update_moby_occlusion(
         };
         moby_lod::write_lod_record(rec, alpha, flags, shine, moby_lod::glow_word(mode, look.glow), &e);
         s.cast_only[ii] = cast_only;
+        s.beyond_game[ii] = beyond_game;
         // The class's texture scroll (`FUN_00263d90`).
         let at = ii * RECORD_SIZE;
         if let Some(r) = s.records.get_mut(at..at + RECORD_SIZE) {
@@ -2336,7 +2349,7 @@ impl MobyOcclusion {
     /// loop, occlusion and the draw-distance / near / frustum culls passed); one culled for the camera and kept only to
     /// cast the sun's shadow (G-REN-038) is not. Spawn-hidden instances (crate::moby_spawn) are the caller's to exclude.
     pub fn drawn(&self, ii: usize) -> bool {
-        self.shown.get(ii).is_some_and(|s| s.is_some()) && !self.cast_only.get(ii).copied().unwrap_or(false)
+        self.shown.get(ii).is_some_and(|s| s.is_some()) && !self.cast_only.get(ii).copied().unwrap_or(false) && !self.beyond_game.get(ii).copied().unwrap_or(false)
     }
 
     /// Forgets the group instance `ii` shows, for a caller that made all of its entities hidden (a spawn-hidden

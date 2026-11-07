@@ -132,7 +132,7 @@ integer units each; depth is along the view axis):
 | Tfrag | `TfragProc`: culled when the sphere's near edge is past 512000 (0x160ec0, 500 units); no fade (pop) | 500·s (`tfrag_lod::DRAW_DISTANCE`); faded per pixel by depth over the last 16·s units (tfrag.wgsl `end_fade`) |
 | Tie | per instance, capped at 720 (0x160fe0), culled when the centre's depth passes it; no fade. The Visibomb view caps it at 144 | the distance ×s (the Visibomb's cap kept); faded per instance by the centre's depth over the last 16·s units (`tie_lod` x bits 16..23, tie.wgsl) |
 | Shrub | D = max(dd, 16), F + 24 for billboard classes, capped at 500 (0x1604a4); meshes fade over the last 8 units, billboards over the last 16 | D ×s, both fade bands ×s (shrub.wgsl, shrub_billboard.wgsl, `shrub_render::cull_shows`) |
-| Moby | MobyProc: cap 500 (0x15fff0), 16-unit fade | not scaled: the result is game state (G-REN-050) |
+| Moby | MobyProc: per moby +0x32 (the gameplay record's, 64 on the Veldin 2 props of the 2026-11-07 play test), cap 500 (0x15fff0), 16-unit fade | ×s and the fade band ×s for mobys the game updates anyway (in update range, 0xff, or never run); +0x31 keeps the game's result (`moby_lod::moby_proc_drawn`, G-REN-050) |
 | Particle | 32·m per record, capped at 500 (64 underwater), 16-unit fade | not scaled: `FLAG_DRAWN` is the simulation's (G-REN-051) |
 | Far plane | 745472 (728 units) | 728·s on the main camera (`GameProjection::draw_scale`); the sky's camera keeps its own |
 | Sea / liquid grids | no far cap in the port | end at the far plane (G-REN-052) |

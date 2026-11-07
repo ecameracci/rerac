@@ -1750,6 +1750,7 @@ fn caster_order(play: Option<Res<Play>>, shadows: Option<Res<crate::shadow_rende
 /// changed rows / ambient / light word), hide, anim state and snapshot.
 fn drive_statics(p: &mut Play, lv: &crate::level_load::LoadedLevel, occl: &mut MobyOcclusion, mut anim: Option<&mut MobyAnim>) {
     promote_statics(p);
+    let cam = p.game.camera.out.pos;
     let table = &p.game.mobys;
     let lighting = lv.mobys.lighting.as_ref();
     for &(id, ii, k) in &p.driven {
@@ -1777,7 +1778,7 @@ fn drive_statics(p: &mut Play, lv: &crate::level_load::LoadedLevel, occl: &mut M
         // resolved it per instance) and writes 0x7f80 for a creature revived or moved elsewhere, a thrown crate, …
         occl.set_occlusion_word(ii, m.occlusion);
         let scroll = p.svc.class_scroll.get(&m.o_class).copied().unwrap_or((0, 0));
-        occl.look(ii, moby_render::MobyLook { alpha: m.alpha, mode: m.mode, glow: m.glow, shine_distance: m.b73, draw_dist: Some(m.draw_dist), late: None, scroll });
+        occl.look(ii, moby_render::MobyLook { alpha: m.alpha, mode: m.mode, glow: m.glow, shine_distance: m.b73, draw_dist: Some(m.draw_dist), late: None, scroll, extend: m.mode & 2 != 0 || rc_game::moby_update::scheduler::in_update_range(m, cam) });
         if let (Some(a), Some(k)) = (anim.as_deref_mut(), k) {
             a.drive(k, m.anim, p.svc.snapshots.get(id).and_then(|s| s.as_ref()), &m.joint_mods);
         }
@@ -2855,6 +2856,7 @@ fn upload_dynamic(
     let first = table.first_dynamic;
     let d = &mut p.dynamic;
     let ship = p.ship.map(|s| s.0);
+    let cam_pos = p.game.camera.out.pos;
     let (mut rec_changed, mut pal_changed) = (false, false);
     let (mut live, mut drawn) = (0, 0);
     let pal_bytes = d.pal_slots as usize * 64;
@@ -2868,7 +2870,7 @@ fn upload_dynamic(
         // gate (+0x73) with its sphere-map basis.
         let pick = ci.and_then(|ci| {
             if mo.mode & 0x81 != 0 { return None; }
-            let Some((eye, rows)) = cam else { return Some((ci, mo.alpha, false, 0, [[0.0; 3]; 3])) };
+            let Some((eye, rows)) = cam else { return Some((ci, mo.alpha, false, 0, [[0.0; 3]; 3], true)) };
             let c = &m.classes[ci].class.header;
             let inp = crate::moby_lod::ProcInput {
                 position: pos3(mo),
@@ -2881,16 +2883,19 @@ fn upload_dynamic(
             };
             let sphere = crate::moby_lod::world_sphere(&inp, crate::moby_lod::seq_sphere(&m.anim[ci], &mo.anim, c.bsphere));
             let v = crate::moby_lod::view_centre(sphere, eye, &rows);
-            crate::moby_lod::moby_proc_view(v, sphere[3], &inp, tans).ok().map(|p| {
+            // [P] Farther under Draw distance (moby_lod::moby_proc_drawn) when the game updates it anyway; +0x31 stays the game's.
+            let extend = mo.mode & 2 != 0 || rc_game::moby_update::scheduler::in_update_range(mo, cam_pos);
+            let (pick, game_drawn) = crate::moby_lod::moby_proc_drawn(v, sphere[3], &inp, tans, extend);
+            pick.ok().map(|p| {
                 let e = if p.shine > 0 { crate::moby_lod::shine_basis(sphere, eye, &rows, &inp.rows) } else { [[0.0; 3]; 3] };
-                (ci, p.alpha, p.fading, p.shine, e)
+                (ci, p.alpha, p.fading, p.shine, e, game_drawn)
             })
         });
         let ci = pick.map(|p| p.0);
-        d.visible[slot] = ci.is_some() as u8;
+        d.visible[slot] = pick.is_some_and(|p| p.5) as u8;
         d.shown[slot] = ci;
         let model = moby_render::extra_model(rows3(&mo.rows), mo.scale, pos3(mo));
-        let look = pick.map(|(ci, alpha, fading, shine, e)| (&m.classes[ci], moby_render::SlotLook { model, alpha, fading, mode: mo.mode, glow: mo.glow, shine, e, late: deferred.contains(&id) || mo.mode & 0x800 != 0 }));
+        let look = pick.map(|(ci, alpha, fading, shine, e, _)| (&m.classes[ci], moby_render::SlotLook { model, alpha, fading, mode: mo.mode, glow: mo.glow, shine, e, late: deferred.contains(&id) || mo.mode & 0x800 != 0 }));
         d.extra.show_slot(commands, lv, slot as u32, look, meshes, images, materials, buffers);
         let Some(ci) = ci else { continue };
         drawn += 1;
