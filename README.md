@@ -20,8 +20,8 @@
 ## Please read first
 
 > [!IMPORTANT]
-> This repository is for developing ReRAC, not for playing it. Players will install and run the game through the
-> ReRAC Launcher, which has not been released yet. Follow the project at [re-rac.github.io](https://re-rac.github.io).
+> This repository is a fork of the main ReRAC project. The intention of this fork is to be a standalone version of
+> the upstream project with some enhancements that can be toggled on/off. 
 
 > [!WARNING]
 > You need your own copy of the game: no game assets are included here. ReRAC currently supports one disc, listed on
