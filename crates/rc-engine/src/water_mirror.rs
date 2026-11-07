@@ -28,7 +28,9 @@
 //! plane with its x axis turned back, a proper rotation, so the world is drawn with its own winding (no cull flip)
 //! and the picture comes out mirrored left to right: the water reads it at (−x, y). The world camera's projection is
 //! the main one with an oblique near plane on the water ([`GameProjection::clip`], [`crate::game_camera::oblique_near`], [`CLIP_BIAS`]
-//! under the surface), so nothing under the water is drawn; the sky's has none (it is at infinity). Neither takes
+//! under the surface), so nothing under the water is drawn (the mirrored eye is as far under it as the eye is over
+//! it: on Drek's Fleet's pool, under the walkway, which hid the rim's reflection while the clip failed past Draw
+//! distance ×1); the sky's has none (it is at infinity). Neither takes
 //! the sun's shadow cascades ([`no_sun_cascades`]).
 //!
 //! **What it draws** ([`keep_world_draws`], after Bevy's visibility check, on the mirror cameras only): the sky shells,
@@ -943,7 +945,14 @@ mod tests {
         let h = 2.0;
         let g = cam([0.0, 0.0, 8.0], [0.0, 25.0, 4.0]);
         let mv = mirror_view(g, h);
-        let base = GameProjection::default();
+        // Every Draw distance factor (crate::graphics `DrawDistance`): past ×1 the GS depth's constant turns negative
+        // and the far corner at NDC z = 0 fell behind the eye, so nothing was clipped (Drek's Fleet's pool).
+        for scale in [1.0, 1.5, 2.0, 4.0] {
+            oblique_case(h, mv, GameProjection { draw_scale: scale, ..GameProjection::default() });
+        }
+    }
+
+    fn oblique_case(h: f32, mv: Affine3A, base: GameProjection) {
         let p = GameProjection { clip: view_plane(mv, h), ..base };
         let (m0, m) = (base.get_clip_from_view(), p.get_clip_from_view());
         assert_eq!((m.row(0), m.row(1), m.row(3)), (m0.row(0), m0.row(1), m0.row(3)), "x, y and w unchanged");
@@ -955,7 +964,8 @@ mod tests {
         // Points on the mirror camera's axis (from (0, 0, −4) toward (0, 25, 0)) past the water: inside the depth
         // range, nearer = larger depth.
         let mut last = f32::MAX;
-        for d in [40.0f32, 50.0, 80.0, 150.0, 200.0] {
+        let far = base.far() * 0.95 / (1.0f32 + 0.16 * 0.16).sqrt();
+        for d in [40.0f32, 50.0, 80.0, 150.0, 200.0, far] {
             let w = game_to_bevy([0.0, d, -4.0 + d * 4.0 / 25.0]);
             let (n, c) = ndc(w);
             assert!(c.w > 0.0 && n.z > 0.0 && n.z <= 1.0, "depth {d}: {n}");

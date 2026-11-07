@@ -241,7 +241,7 @@ impl CameraProjection for GameProjection {
             Vec4::new(0.0, 0.0, (-a * s) as f32, -1.0),
             Vec4::new(0.0, 0.0, (b * s) as f32, 0.0),
         );
-        if self.clip == Vec4::ZERO { m } else { oblique_near(m, self.clip) }
+        if self.clip == Vec4::ZERO { m } else { oblique_near(m, self.clip, self.draw_far() / UNITS) }
     }
 
     fn get_clip_from_view_for_sub(&self, sub: &SubCameraView) -> Mat4 {
@@ -288,11 +288,16 @@ pub fn game_projection() -> Projection { Projection::custom(GameProjection::defa
 
 /// Lengyel's oblique near plane for this reverse-Z clip matrix: the near plane `w − z ≥ 0` becomes the view-space
 /// plane `c` (`c·v ≥ 0` kept) by row 2 = row 3 − λ·c, with λ putting the far plane `z = 0` through the frustum corner
-/// opposite `c` (`Q`, from the plane's clip-space signs). `m` as it is when that corner is not on the kept side.
-pub fn oblique_near(m: Mat4, c: Vec4) -> Mat4 {
+/// opposite `c` (`Q`, from the plane's clip-space signs) on the far plane `far` (view distance, game units). `m` as it
+/// is when that corner is not on the kept side. `Q` is taken at the far plane's own depth, not at NDC z = 0: the GS
+/// depth (`n/d` plus a constant) maps the far plane above 0, and past Draw distance ×1 that constant is negative, so
+/// z = 0 lay behind the eye, `Q.w` came out negative and nothing was clipped (Drek's Fleet's pool, 2026-11-06: the
+/// walkway under the water hid the rim's reflection).
+pub fn oblique_near(m: Mat4, c: Vec4, far: f32) -> Mat4 {
     let inv = m.inverse();
     let cc = inv.transpose() * c;
-    let q = inv * Vec4::new(cc.x.signum(), cc.y.signum(), 0.0, 1.0);
+    let f = m * Vec4::new(0.0, 0.0, -far, 1.0);
+    let q = inv * Vec4::new(cc.x.signum(), cc.y.signum(), f.z / f.w, 1.0);
     if q.w.abs() < 1e-12 { return m; }
     let q = q / q.w;
     let r3 = m.row(3);
