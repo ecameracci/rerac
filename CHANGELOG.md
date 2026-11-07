@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.5.3-alpha
+
+- Water Enhanced: Quartu's green pools swirl, and Quartu's and Drek's Fleet's water tanks and green pool take the Enhanced look.
+- Water Enhanced: the Hydrodisplacer pools on Veldin's finale take the Enhanced look.
+- Water Enhanced: the Fleet's pool reflects its rim at every Draw distance, and the walls under water facing away from the sun get soft light patterns too.
+- Lighting Enhanced: the light shafts are softer and smoother, and there are none under the Veldin finale's dark red sky.
+- Draw distance: characters and vehicles are drawn farther too, so Veldin's tanks no longer vanish in the distance.
+- The Visibomb's out-of-range static fills the whole screen in wide aspect ratios.
+- The ship's shadow no longer flickers while landing on Hoven.
+- Foliage: no grass on Kalebo III's desks and machines.
+- Kalebo III: the skirting along the walls no longer flickers into the wall behind it.
+
 ## v0.5.2-alpha
 
 - Particles Enhanced: Gemlik's stomper robots and Blarg's fire-wave robots (also on Orxon) burn a curtain of flickering flames instead of a flat glowing ring, lighting the ground around them.
