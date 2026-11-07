@@ -8,7 +8,7 @@
 //! | [`Hud`] | Original (the 512×416 HUD scaled up smoothly, as the TV showed it), Sharp pixels | crate::hud_render composite |
 //! | [`Textures`] | Original (the GS mip rule, one level per pixel), Smooth (blended levels), Sharp (the GPU's own choice, anisotropic) | the world shaders, through crate::game_camera's shared fog buffer |
 //! | [`Detail`] | Original (the game's LOD distances), Far (×2), Farther (×4), Maximum (the full model whenever it is drawn) | crate::tfrag_lod, crate::tie_lod, crate::moby_render, crate::shrub_render (drawing only: the game logic keeps its own decisions) |
-//! | [`DrawDistance`] | Original (the game's draw distances), Far (×1.5), Farther (×2), Maximum (×4), the new end faded | crate::tfrag_lod, crate::tie_lod, crate::shrub_render, crate::game_camera (the far plane); not mobys or particles (their drawn flags are game state) |
+//! | [`DrawDistance`] | Original (the game's draw distances), Far (×1.5), Farther (×2), Maximum (×4), the new end faded | crate::tfrag_lod, crate::tie_lod, crate::shrub_render, crate::moby_lod (their drawn flag stays the game's), crate::game_camera (the far plane); not particles (their drawn flag is game state) |
 //! | [`AmbientOcclusion`] | Original (none: the shade is the artists' baked vertex colours), On (screen-space occlusion from the depth buffer) | crate::ao_render |
 //! | [`Water`] | Original (the GS blend of the water textures), Enhanced (clear by depth, reflections, a sun glint, foam at the shore; under water: absorption, caustics, light shafts) | crate::water_render, crate::sea_water (the seas), crate::scene_copy, crate::underwater_render |
 //! | [`Particles`] | Original (sprites cut where they meet the world), Soft (faded by their depth in front of it), Enhanced (Soft, bright effects light the world, glowing stars, restyled rain and snow) | crate::particle_render, crate::scene_copy, crate::particle_lights, crate::sky_stars, crate::flight_render, crate::weather_render |
@@ -602,10 +602,12 @@ impl Plugin for GraphicsPlugin {
     }
 }
 
-/// The Draw distance factor onto the main camera's far plane (crate::game_camera `GameProjection::draw_scale`); the
+/// The Draw distance factor onto the main camera's far plane (crate::game_camera `GameProjection::draw_scale`) and the
+/// moby draw distance (crate::moby_lod, a static); the
 /// tfrag, tie and shrub systems and the shaders read the resource or the shared fog buffer.
 fn apply_draw_distance(g: Res<GraphicsSettings>, mut cams: Query<&mut Projection, With<crate::fly_cam::FlyCam>>) {
     let s = g.draw.scale();
+    crate::moby_lod::set_draw_scale(s);
     for mut p in &mut cams {
         if crate::game_camera::draw_scale(&p) != Some(s) { crate::game_camera::set_draw_scale(&mut p, s); }
     }

@@ -134,12 +134,33 @@ pub fn moby_proc(v: [f32; 3], r: f32, inp: &ProcInput) -> Result<ProcPick, Cull>
 
 /// MobyProc with the view's half-angle tangents `tans` (x, y; `UpdateViewContext` writes the frustum planes vf20 /
 /// vf22 from them: a flown ship's wider view, or the 16:9 frame, culls less at the sides).
-pub fn moby_proc_view(v: [f32; 3], r: f32, inp: &ProcInput, tans: (f32, f32)) -> Result<ProcPick, Cull> {
+pub fn moby_proc_view(v: [f32; 3], r: f32, inp: &ProcInput, tans: (f32, f32)) -> Result<ProcPick, Cull> { moby_proc_scaled(v, r, inp, tans, 1.0) }
+
+/// The Draw distance option's factor on the moby draw distance (crate::graphics; f32 bits, 1.0 = the game's).
+static DRAW_SCALE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0x3f80_0000);
+
+pub fn set_draw_scale(s: f32) { DRAW_SCALE.store(s.to_bits(), std::sync::atomic::Ordering::Relaxed); }
+
+/// [P] What the renderer draws, beside the game's own MobyProc: `(pick, game_drawn)`. With Draw distance above Original
+/// the pick takes the draw distance × the factor and fades over the last 16 units × the factor (G-REN-050);
+/// `game_drawn` is the game's own result (MobyProc's +0x31, the activity rule's input), so game state is unchanged.
+/// A moby the game does not update out there (past its update distance and not drawn by the game) shows its
+/// last-updated pose until it is updated again. The Visibomb's view keeps the game's.
+pub fn moby_proc_drawn(v: [f32; 3], r: f32, inp: &ProcInput, tans: (f32, f32)) -> (Result<ProcPick, Cull>, bool) {
+    let s = f32::from_bits(DRAW_SCALE.load(std::sync::atomic::Ordering::Relaxed));
+    let short = crate::visibomb_view::SHORT_FAR.load(std::sync::atomic::Ordering::Relaxed);
+    let game = moby_proc_view(v, r, inp, tans);
+    if short || s <= 1.0 { let drawn = game.is_ok(); return (game, drawn); }
+    (moby_proc_scaled(v, r, inp, tans, s), game.is_ok())
+}
+
+/// MobyProc with the draw distance × `scale` and its fade band × `scale` (1.0: the game's, bit for bit).
+fn moby_proc_scaled(v: [f32; 3], r: f32, inp: &ProcInput, tans: (f32, f32), scale: f32) -> Result<ProcPick, Cull> {
     // The cap 0x15fff0: 500, 0x90 in the Visibomb's view (crate::visibomb_view::SHORT_FAR).
     let cap = if crate::visibomb_view::SHORT_FAR.load(std::sync::atomic::Ordering::Relaxed) { crate::visibomb_view::SHORT_MOBY_CAP } else { DRAW_DISTANCE_CAP };
     let dd = inp.draw_distance.min(cap);
     // vf19.y = itof0(dd << 10) − r; vf1.xy = (vz + r, vz − r); vf3 = vf19 − vf1 (vf19.x = n).
-    let far = ((dd.wrapping_shl(10)) as f32 - r) - (v[2] - r);
+    let far = ((dd.wrapping_shl(10)) as f32 * scale - r) - (v[2] - r);
     let near = NEAR - (v[2] + r);
     if far.is_sign_negative() { return Err(Cull::DrawDistance); }
     if !near.is_sign_negative() { return Err(Cull::Near); }
@@ -150,7 +171,7 @@ pub fn moby_proc_view(v: [f32; 3], r: f32, inp: &ProcInput, tans: (f32, f32)) ->
     }
     let depth = ftoi0(v[2] - r);
     let low_lod = low_lod(depth, inp.lod_trans);
-    let fade = ((ftoi0(far) as u32) >> 7).min(0x80);
+    let fade = ((ftoi0(far / scale) as u32) >> 7).min(0x80);
     let alpha = ((fade * inp.alpha as u32) >> 7) as u8;
     Ok(ProcPick { low_lod, alpha, fading: fade < 0x80, shine: shine_alpha(depth, inp.shine_distance) })
 }
@@ -304,6 +325,27 @@ mod tests {
         assert!(moby_proc([0.0, 0.0, -5.0 * k], 6.0 * k, &i).is_ok());
         assert_eq!(moby_proc([40.0 * k, 0.0, 50.0 * k], 1.0 * k, &i), Err(Cull::Frustum));
         assert_eq!(moby_proc([0.0, 30.0 * k, 50.0 * k], 1.0 * k, &i), Err(Cull::Frustum));
+    }
+
+    /// Draw distance ×4 (G-REN-050): a 64-unit moby is whole to 192 units, fades over 192..256, then culls; ×1 is the
+    /// game's; at the default ×1 `moby_proc_drawn` is the game's own result.
+    #[test]
+    fn draw_distance_scaled() {
+        let k = 1024.0;
+        let tans = crate::game_camera::default_tans();
+        let i = inp(64, 0xff, 0);
+        for z in [10.0, 50.0, 56.0, 63.0, 64.0, 70.0] {
+            assert_eq!(moby_proc_scaled([0.0, 0.0, z * k], 1.0 * k, &i, tans, 1.0), moby_proc([0.0, 0.0, z * k], 1.0 * k, &i), "z {z}");
+        }
+        let at = |z: f32| moby_proc_scaled([0.0, 0.0, z * k], 0.0, &i, tans, 4.0);
+        assert_eq!(at(60.0).map(|p| (p.alpha, p.fading)), Ok((0x80, false)));
+        assert_eq!(at(192.0).map(|p| (p.alpha, p.fading)), Ok((0x80, false)));
+        assert_eq!(at(224.0).map(|p| (p.alpha, p.fading)), Ok((0x40, true)));
+        assert_eq!(at(256.0 + 0.01), Err(Cull::DrawDistance));
+        // The cap scales with it: 500 × 4.
+        assert!(moby_proc_scaled([0.0, 0.0, 1900.0 * k], 0.0, &inp(0x7fff, 0xff, 0), tans, 4.0).is_ok());
+        let (pick, game) = moby_proc_drawn([0.0, 0.0, 70.0 * k], 0.0, &i, tans);
+        assert_eq!((pick, game), (Err(Cull::DrawDistance), false));
     }
 
     #[test]
