@@ -75,6 +75,7 @@ pub fn load(root: &std::path::Path) -> anyhow::Result<TitleData> {
         for t in tfrags.iter_mut() { t.rgba = tfrag_light::light_tfrag(t, &bank, &table, None); }
     }
     let textures = texture::parse_textures(core, data, gs).context("title textures")?;
+    crate::texture_packs::register_level(core, data, gs);
     let tfrag_lod = crate::tfrag_lod::load(core, data, gs)?;
     let fog = crate::game_camera::LevelFog::parse(gameplay).context("title level settings")?;
     let background = crate::game_camera::level_background(gameplay).context("title level settings")?;
@@ -85,12 +86,14 @@ pub fn load(root: &std::path::Path) -> anyhow::Result<TitleData> {
     let shrubs = crate::shrub_render::load_shrubs(core, data, gs, gameplay, &textures).context("title shrubs")?;
     let sky = crate::sky_render::load(core, data, rc_game::sky_stars::TITLE_LEVEL).context("title sky")?;
     let occlusion = crate::occlusion::load(core, data, gameplay, &tfrags, &ties.instances, &mobys.instances).context("title occlusion words")?;
-    let particles = crate::particle_render::LevelParticles {
+    let mut particles = crate::particle_render::LevelParticles {
         textures: rc_formats::particle_tex::parse_particle_textures(core, &tw.index, data).map_err(|e| eprintln!("title world: particle textures: {e}")).ok(),
         owners: Vec::new(),
         level: u32::MAX,
         grid: None,
+        replacements: Vec::new(),
     };
+    particles.replacements = crate::particle_render::pack_files(core, data, particles.textures.as_ref());
     let zones = rc_formats::gameplay::parse_fog_zones(gameplay).unwrap_or_default();
     let scene = Scene::from_lump(&tw.scene, 0, Region::Ntsc).context("title scene chunks")?;
     let moby_class_order = core.moby_classes.iter().map(|e| e.o_class).collect();

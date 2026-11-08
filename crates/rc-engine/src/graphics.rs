@@ -7,7 +7,7 @@
 //! | Option | Values | Consumer |
 //! |---|---|---|
 //! | [`AntiAliasing`] | Original (the game's own softening passes: the AA blit and the display copy), Off, 2x / 4x / 8x multisampling | crate::aa_blit, crate::render_settings (the samples) |
-//! | [`Hud`] | Original (the 512×416 HUD scaled up smoothly, as the TV showed it), Sharp pixels | crate::hud_render composite |
+//! | [`Hud`] | Original (the 512×416 HUD scaled up smoothly, as the TV showed it), Sharp pixels, High resolution (drawn at the frame's resolution) | crate::hud_render composite |
 //! | [`Textures`] | Original (the GS mip rule, one level per pixel), Smooth (blended levels), Sharp (the GPU's own choice, anisotropic) | the world shaders, through crate::game_camera's shared fog buffer |
 //! | [`Detail`] | Original (the game's LOD distances), Far (×2), Farther (×4), Maximum (the full model whenever it is drawn) | crate::tfrag_lod, crate::tie_lod, crate::moby_render, crate::shrub_render (drawing only: the game logic keeps its own decisions) |
 //! | [`DrawDistance`] | Original (the game's draw distances), Far (×1.5), Farther (×2), Maximum (×4), the new end faded | crate::tfrag_lod, crate::tie_lod, crate::shrub_render, crate::moby_lod (their drawn flag stays the game's), crate::game_camera (the far plane); not particles (their drawn flag is game state) |
@@ -101,15 +101,19 @@ pub enum Hud {
     Original,
     /// Each game pixel a hard square (integer-looking pixel doubling).
     SharpPixels,
+    /// Port-only: drawn at the frame's own resolution (crate::hud_render: the layer's target is the frame's size, its
+    /// textures magnified with a bicubic filter), so text, icons and edges stay crisp at 1440p and 4K.
+    HighResolution,
 }
 
 impl GfxOption for Hud {
-    const ALL: &'static [Self] = &[Hud::Original, Hud::SharpPixels];
+    const ALL: &'static [Self] = &[Hud::Original, Hud::SharpPixels, Hud::HighResolution];
     const KEY: &'static str = "hud";
     fn key(self) -> &'static str {
         match self {
             Hud::Original => "original",
             Hud::SharpPixels => "sharp",
+            Hud::HighResolution => "high",
         }
     }
 }
@@ -572,7 +576,7 @@ impl GraphicsSettings {
         GraphicsSettings {
             // 4x: the best count every GPU offers (crate::render_settings clamps a count a device lacks).
             aa: pick(p, [AntiAliasing::Original, AntiAliasing::Off, AntiAliasing::X4, AntiAliasing::X4]),
-            hud: pick(p, [Hud::Original; 4]),
+            hud: pick(p, [Hud::Original, Hud::Original, Hud::HighResolution, Hud::HighResolution]),
             textures: pick(p, [Textures::Original, Textures::Smooth, Textures::Smooth, Textures::Sharp]),
             detail: pick(p, [Detail::Original, Detail::Original, Detail::Far, Detail::Farther]),
             draw: pick(p, [DrawDistance::Original, DrawDistance::Original, DrawDistance::Far, DrawDistance::Farther]),

@@ -40,6 +40,19 @@ ReRAC is in early, active development and is not yet playable from start to fini
 more of the game comes to life with each update. See the [status page](https://re-rac.github.io/status/) for what
 works today.
 
+## Texture packs
+
+ReRAC loads texture packs made for the PCSX2 emulator as they are, with no conversion.
+
+1. Find the `texture_packs` folder next to the game (`rerac.exe`). The game creates it on its first start.
+2. Put each pack in its own folder inside it. A pack's usual `SCUS-97199` folder (with `replacements` inside) works as
+   it is: `texture_packs\SCUS-97199\replacements\…`. Unzip a zipped pack first.
+3. Start the game, open **Main menu → Options → Mods** and turn the pack (listed as "… (texture pack)") on.
+   The HUD changes at once; the world, characters and effects change from the next level load.
+
+With several packs on, the first in folder-name order wins where two replace the same texture. Mods replace a texture
+before any pack does. What a pack can and cannot replace: `docs/plan/graphics_options.md`, "Texture packs".
+
 ## Building from source
 
 You need Rust, installed through [rustup](https://rustup.rs), and an image (`.iso`) of your own disc. macOS on Apple

@@ -156,6 +156,8 @@ pub fn load_level(root: &Path, index: u32) -> Result<LoadedLevel> {
 
     let t0 = Instant::now();
     let textures = texture::parse_textures(&core, &core_data, &gs_ram).context("decoding textures")?;
+    // The enabled texture packs' replacements, found by picture in crate::mod_textures (crate::texture_packs).
+    crate::texture_packs::register_level(&core, &core_data, &gs_ram);
     t.parse_textures = t0.elapsed();
     let tfrag_lod = crate::tfrag_lod::load(&core, &core_data, &gs_ram)?;
 

@@ -449,6 +449,7 @@ is mods.md and launcher_extractor.md Stage 3.
 | G-MOD-005 | **[deferred]** P3.4 data mods (gameplay instances, level settings, lifted ELF tables) | launcher_extractor.md Stage 3 | no | G-EXT-003 | Mods |
 | G-MOD-006 | **[deferred]** P3.5 scripting runtime (a new dependency; decision M3, lean Luau) | launcher_extractor.md Stage 3; mods.md §4 | no | G-MOD-001 | Mods |
 | G-MOD-007 | **[deferred]** Tier 2 exports marked "later": per-class tie / shrub meshes and tfrag chunks, `collision.gltf` | mods.md §2 table | no | — | Mods |
+| G-MOD-008 | PCSX2 texture packs: region-named replacements (`-r<w>x<h>-`, the HUD font glyphs), names from mipmapped draws that start below level 0, the streamed pictures, environment / metal maps and spaceship textures, and BC7 for the HUD and particle layers (CPU-built) | graphics_options.md "Texture packs"; `texture_packs.rs` | no | — | Mods |
 
 ## Tooling and tests (TOOL)
 

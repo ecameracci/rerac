@@ -2,10 +2,14 @@
 //! decodes (tfrag, tie, shrub and billboard, moby, sky) with `assets/textures/hash/<key>.dds` or `.png`, where `key`
 //! is [`key`] of the decoded image: the XXH3-64 of its RGBA8 bytes as `texture::decode_indexed8` returns them (alpha
 //! 0x80 → 0xff) in 16 hex digits, then `_<width>x<height>`. The same key holds wherever the texture appears (every
-//! level, the title world). The override is the same picture at a whole power-of-two scale (1..=16):
-//! * DDS: DXT5 (BC3) or uncompressed 32-bit RGBA (DX10 headers too), with or without mip levels; alpha raw as the GS
-//!   reads it (0x80 = opaque), as PCSX2 texture packs store it;
+//! level, the title world). The override is the same picture at a whole scale (1..=16):
+//! * DDS: BC2, BC3 or BC7 (sampled as they are), BC1 (decoded, opaque at 0x80) or uncompressed 32-bit RGBA (DX10
+//!   headers too), with or without mip levels; alpha raw as the GS reads it (0x80 = opaque), as PCSX2 texture packs
+//!   store it;
 //! * PNG: RGBA, alpha as `rerac-extract export` writes it (255 = opaque); the mip levels are generated.
+//!
+//! A PCSX2 texture pack's file (crate::texture_packs) is found by the same picture key after the level load registered
+//! the picture's PCSX2 names; the mods' own files win. Its PNGs keep their raw alpha.
 //!
 //! The renderers keep the original's texel alpha range (crate::gs_state's passes) and move the GS mip level so the
 //! replacement gives one texel per pixel of the frame ([`Hd::lod_scale`]); mobys and the sky sample with the
@@ -70,20 +74,26 @@ static LOOKED: AtomicUsize = AtomicUsize::new(0);
 
 /// The enabled mods' override of `t` with `sampler`, if one has it and it loads.
 pub fn find(t: &Texture, sampler: ImageSamplerDescriptor) -> Option<Hd> {
-    if !crate::mods::active() { return None; }
+    let (mods, packs) = (crate::mods::active(), crate::texture_packs::active());
+    if !mods && !packs { return None; }
     LOOKED.fetch_add(1, Ordering::Relaxed);
     let k = key(t);
-    let (path, dds) = match crate::mods::find_active(&format!("textures/hash/{k}.dds")) {
-        Some(p) => (p, true),
-        None => (crate::mods::find_active(&format!("textures/hash/{k}.png"))?, false),
-    };
+    let found = mods
+        .then(|| match crate::mods::find_active(&format!("textures/hash/{k}.dds")) {
+            Some(p) => Some((p, true, false)),
+            None => crate::mods::find_active(&format!("textures/hash/{k}.png")).map(|p| (p, false, false)),
+        })
+        .flatten()
+        // A PCSX2 pack's file for the picture (crate::texture_packs::register_level): raw alpha either way.
+        .or_else(|| crate::texture_packs::find_picture(&k).map(|p| { let dds = p.extension().is_some_and(|e| e.eq_ignore_ascii_case("dds")); (p, dds, true) }));
+    let (path, dds, raw) = found?;
     let bytes = std::fs::read(&path).map_err(|e| eprintln!("mods: {}: {e}", path.display())).ok()?;
-    let res = if dds { from_dds(&bytes) } else { from_png(&bytes) };
+    let res = if dds { from_dds(&bytes) } else { from_png(&bytes, raw) };
     let (mut image, w, levels) = res.map_err(|e| eprintln!("mods: {}: {e}", path.display())).ok()?;
     let h = image.texture_descriptor.size.height;
     let scale = w / t.width.max(1);
-    if !scale.is_power_of_two() || scale > 16 || w != t.width * scale || h != t.height * scale {
-        eprintln!("mods: {}: {w}x{h} is not {}x{} at a power-of-two scale", path.display(), t.width, t.height);
+    if scale == 0 || scale > 16 || w != t.width * scale || h != t.height * scale {
+        eprintln!("mods: {}: {w}x{h} is not {}x{} at a whole scale (1..16)", path.display(), t.width, t.height);
         return None;
     }
     image.sampler = ImageSampler::Descriptor(sampler);
@@ -112,25 +122,41 @@ fn from_dds(b: &[u8]) -> Result<(Image, u32, u32), String> {
     let levels = u(28)?.max(1).min(32 - w.max(h).leading_zeros());
     if w == 0 || h == 0 || w > 16384 || h > 16384 { return Err(format!("size {w}x{h}")); }
     let (four, bits) = (b.get(84..88).ok_or("truncated header")?, u(88)?);
+    // A 16-byte block format the GPU samples as it is (BC2, BC3, BC7: a texture pack's, crate::texture_packs), or None
+    // for 32-bit texels.
     let (mut data_at, mut kind) = (128usize, None);
-    if four == b"DXT5" {
-        kind = Some(true);
+    let bc1 = four == b"DXT1" || (four == b"DX10" && matches!(u(128)?, 71 | 72));
+    if bc1 {
+        // BC1 holds no alpha, and the GS's opaque is 0x80: decoded (crate::texture_packs), mips generated.
+        let (w, h, rgba) = crate::texture_packs::dds_rgba(b)?;
+        return Ok(with_mips(w, h, rgba));
+    }
+    if four == b"DXT5" || four == b"DXT4" {
+        kind = Some(Some(TextureFormat::Bc3RgbaUnorm));
+    } else if four == b"DXT3" || four == b"DXT2" {
+        kind = Some(Some(TextureFormat::Bc2RgbaUnorm));
     } else if four == b"DX10" {
         data_at = 148;
-        kind = match u(128)? { 77 => Some(true), 28 => Some(false), f => return Err(format!("DXGI format {f} (BC3 or RGBA8 only)")) };
+        kind = match u(128)? {
+            74 | 75 => Some(Some(TextureFormat::Bc2RgbaUnorm)),
+            77 | 78 => Some(Some(TextureFormat::Bc3RgbaUnorm)),
+            98 | 99 => Some(Some(TextureFormat::Bc7RgbaUnorm)),
+            28 | 29 => Some(None),
+            f => return Err(format!("DXGI format {f} (BC1, BC2, BC3, BC7 or RGBA8 only)")),
+        };
     } else if u(80)? & 0x40 != 0 && bits == 32 {
-        kind = Some(false);
+        kind = Some(None);
     }
-    let Some(bc3) = kind else { return Err(format!("pixel format {:?} (DXT5 or 32-bit RGBA only)", String::from_utf8_lossy(four))) };
+    let Some(block) = kind else { return Err(format!("pixel format {:?} (DXT1/3/5, BC7 or 32-bit RGBA only)", String::from_utf8_lossy(four))) };
     let level_size = |l: u32| -> usize {
         let (lw, lh) = ((w >> l).max(1) as usize, (h >> l).max(1) as usize);
-        if bc3 { lw.div_ceil(4) * lh.div_ceil(4) * 16 } else { lw * lh * 4 }
+        if block.is_some() { lw.div_ceil(4) * lh.div_ceil(4) * 16 } else { lw * lh * 4 }
     };
     let size: usize = (0..levels).map(level_size).sum();
     let data = b.get(data_at..data_at + size).ok_or("truncated data")?;
-    if bc3 {
-        if w % 4 != 0 || h % 4 != 0 { return Err(format!("BC3 size {w}x{h} is not a multiple of 4")); }
-        return Ok((image(w, h, levels, TextureFormat::Bc3RgbaUnorm, data.to_vec()), w, levels));
+    if let Some(format) = block {
+        if w % 4 != 0 || h % 4 != 0 { return Err(format!("block-compressed size {w}x{h} is not a multiple of 4")); }
+        return Ok((image(w, h, levels, format, data.to_vec()), w, levels));
     }
     let masks = if four == b"DX10" { [0xff, 0xff00, 0xff_0000, 0xff00_0000] } else { [u(92)?, u(96)?, u(100)?, u(104)?] };
     let mut rgba = Vec::with_capacity(size);
@@ -143,14 +169,24 @@ fn from_dds(b: &[u8]) -> Result<(Image, u32, u32), String> {
     Ok((image(w, h, levels, TextureFormat::Rgba8Unorm, rgba), w, levels))
 }
 
-/// (image, width, levels) of a PNG: alpha to the GS range, every mip level by 2×2 box filtering.
-fn from_png(b: &[u8]) -> Result<(Image, u32, u32), String> {
+/// (image, width, levels) of a PNG: alpha to the GS range (`raw`: already in it, a PCSX2 pack's), every mip level by
+/// 2×2 box filtering.
+fn from_png(b: &[u8], raw: bool) -> Result<(Image, u32, u32), String> {
     let img = Image::from_buffer(b, ImageType::Extension("png"), CompressedImageFormats::NONE, false, ImageSampler::Default, RenderAssetUsages::MAIN_WORLD)
         .map_err(|e| e.to_string())?;
     let img = if img.texture_descriptor.format == TextureFormat::Rgba8Unorm { img } else { img.convert(TextureFormat::Rgba8Unorm).ok_or("not convertible to RGBA8")? };
     let (w, h) = (img.texture_descriptor.size.width, img.texture_descriptor.size.height);
     let mut level = img.data.ok_or("no pixels")?;
-    for a in level.iter_mut().skip(3).step_by(4) { *a = ((*a as u16 + 1) >> 1) as u8; }
+    if raw {
+        crate::texture_packs::rgb_png_alpha(&mut level);
+    } else {
+        for a in level.iter_mut().skip(3).step_by(4) { *a = ((*a as u16 + 1) >> 1) as u8; }
+    }
+    Ok(with_mips(w, h, level))
+}
+
+/// (image, width, levels) of an RGBA8 level 0, every mip level by 2×2 box filtering.
+fn with_mips(w: u32, h: u32, mut level: Vec<u8>) -> (Image, u32, u32) {
     let mut data = level.clone();
     let (mut lw, mut lh, mut levels) = (w, h, 1);
     while lw > 1 || lh > 1 {
@@ -159,7 +195,7 @@ fn from_png(b: &[u8]) -> Result<(Image, u32, u32), String> {
         data.extend_from_slice(&level);
         (lw, lh, levels) = (nw, nh, levels + 1);
     }
-    Ok((image(w, h, levels, TextureFormat::Rgba8Unorm, data), w, levels))
+    (image(w, h, levels, TextureFormat::Rgba8Unorm, data), w, levels)
 }
 
 /// `rgba` (w × h) box-filtered to nw × nh (each w / 2, h / 2 or 1).
@@ -230,13 +266,16 @@ mod tests {
         // BGRA masks → RGBA, alpha kept raw.
         let (img, _, levels) = from_dds(&dds(1, 1, 1, b"RGBA", &[0x30, 0x20, 0x10, 0x80])).unwrap();
         assert_eq!((levels, img.data.unwrap()), (1, vec![0x10, 0x20, 0x30, 0x80]));
-        assert!(from_dds(&dds(1, 1, 1, b"DXT1", &[0u8; 8])).is_err());
+        // BC1 (a texture pack's): decoded, opaque at the GS's 0x80, mips generated; other formats refused.
+        let (img, _, levels) = from_dds(&dds(4, 4, 1, b"DXT1", &[0xff, 0xff, 0, 0, 0, 0, 0, 0])).unwrap();
+        assert_eq!((levels, img.texture_descriptor.format, &img.data.unwrap()[..4]), (3, TextureFormat::Rgba8Unorm, &[255u8, 255, 255, 0x80][..]));
+        assert!(from_dds(&dds(4, 4, 1, b"ATI2", &[0u8; 16])).is_err());
     }
 
     #[test]
     fn png_alpha_to_the_gs_range_with_mips() {
         let mut png = image_png(2, 2, &[[10, 20, 30, 255], [10, 20, 30, 255], [50, 60, 70, 0], [50, 60, 70, 128]]);
-        let (img, w, levels) = from_png(&std::mem::take(&mut png)).unwrap();
+        let (img, w, levels) = from_png(&std::mem::take(&mut png), false).unwrap();
         let d = img.data.unwrap();
         assert_eq!((w, levels, d.len()), (2, 2, 2 * 2 * 4 + 4));
         assert_eq!((d[3], d[11], d[15]), (0x80, 0, 0x40));
