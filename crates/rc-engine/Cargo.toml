@@ -30,6 +30,12 @@ rc-video = { path = "../rc-video" }
 anyhow.workspace = true
 # The mods' texture override keys (crate::mod_textures): XXH3-64, the hash PCSX2 texture packs use too.
 twox-hash = { version = "2.1", default-features = false, features = ["xxhash3_64", "std"] }
+# Fork-only Check for Update (crate::update): HTTPS to GitHub's release list and the release zip. `ureq` with rustls
+# (ring) and the webpki roots is the smallest pure-Rust client: no OpenSSL or system TLS, the same on every platform.
+# `serde_json` (the release list) and `flate2` (the zip's deflate) were already built for Bevy (bevy_gltf, png).
+ureq = { version = "3", default-features = false, features = ["rustls"] }
+serde_json = "1"
+flate2 = "1"
 
 # The save clock in the host's local time (crate::saves::clock_now: `localtime_r`; Windows calls kernel32 directly).
 [target.'cfg(unix)'.dependencies]

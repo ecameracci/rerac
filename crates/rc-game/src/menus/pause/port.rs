@@ -105,7 +105,7 @@ pub const ROW_STEP: i32 = 20;
 /// The frame mobys' stretch for page `page` ([`super::frame::FrameMobys::stretch`]): the list panel on the port pages.
 pub fn panel_stretch(page: u32) -> [Option<[i32; 2]>; super::frame::SLOTS] {
     let mut s = [None; super::frame::SLOTS];
-    if [PAGE, FRONT_PAGE, GMS_PAGE, GMS_PAGE_FRONT, super::mods::PAGE].contains(&page) { s[LIST_SLOT] = Some(LIST_ROWS); }
+    if [PAGE, FRONT_PAGE, GMS_PAGE, GMS_PAGE_FRONT, super::mods::PAGE, super::update::PAGE].contains(&page) { s[LIST_SLOT] = Some(LIST_ROWS); }
     s
 }
 
@@ -184,6 +184,12 @@ pub mod text {
     pub const MODS: i32 = -0x200;
     pub const MODS_NONE: i32 = -0x201;
     pub const MODS_WHERE: i32 = -0x202;
+    /// The main menu's Check for Update page (super::super::update).
+    pub const UPDATE_ENTRY: i32 = -0x400;
+    pub const UPDATE_CURRENT: i32 = -0x401;
+    pub const UPDATE_NEWEST: i32 = -0x402;
+    pub const UPDATE_ACTION: i32 = -0x403;
+    pub const BACK: i32 = -0x404;
     /// "On" / "Off", capitalised like the page's other values (the game's own 20314 / 20315, the Subtitles /
     /// HelpDesk toggle values, are lower case).
     pub const ON: i32 = -0x103;
@@ -301,6 +307,11 @@ If you like, you may change your options on the Port Options screen, under Contr
             MODS => b"Mods",
             MODS_NONE => b"No mods found",
             MODS_WHERE => b"Put mods in the mods folder beside the game",
+            UPDATE_ENTRY => b"Check for Update",
+            UPDATE_CURRENT => b"This version",
+            UPDATE_NEWEST => b"Newest",
+            UPDATE_ACTION => b"Update",
+            BACK => b"Back",
             VIBRATION => b"Vibration",
             VIBRATION_STRENGTH => b"Vibration strength",
             LOW => b"Low",
@@ -543,8 +554,9 @@ pub fn front_options_insert(list: &mut Vec<Item>, it: Item) {
     list.insert(at, it);
 }
 
-/// An Options entry the port inserted (Port Options, Mods): not in the disc list, so it has no `options_ss` picture.
-pub fn is_port_item(it: &Item) -> bool { it.label == text::ENTRY as i16 || it.label == text::MODS as i16 }
+/// An Options entry the port inserted (Port Options, Mods, Check for Update): not in the disc list, so it has no
+/// `options_ss` picture.
+pub fn is_port_item(it: &Item) -> bool { [text::ENTRY, text::MODS, text::UPDATE_ENTRY].contains(&(it.label as i32)) }
 
 /// The picture an Options list shows for its cursor: [`PICTURE`] on a port entry, else the disc entry's own (the
 /// cursor less the port entries above it, so Quit Game keeps its picture below Port Options).

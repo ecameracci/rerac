@@ -38,6 +38,7 @@ pub mod pages;
 pub mod planet_select;
 pub mod port;
 pub mod saves;
+pub mod update;
 
 use super::{scale_ticks, screen_static, text, text_plain, tween, MenuAssets, MenuDraw, MenuInput, MenuSound, Overlay};
 use crate::game_state::GameState;
@@ -364,6 +365,8 @@ pub enum Data {
     Port(port::PortList),
     /// Port-only: the main menu's "Mods" list ([`mods`]).
     Mods(mods::ModList),
+    /// Port-only: the main menu's "Check for Update" rows ([`update`]).
+    Update(update::UpdateRows),
     /// Port-only: the Gadgetron Movement System's controller list ([`port::GmsList`]).
     Gms(port::GmsList),
     /// The icon grids, the item preview and the 3D Ratchet of the Gadgets / Weapons pages ([`gadgets`]).
@@ -983,6 +986,7 @@ impl PageMenu {
             func::PICTURE_UPDATE => map_page::picture_update(self, w),
             port::UPDATE => port::update(self, w, inp, out),
             mods::UPDATE => mods::update(self, w, inp, out),
+            update::UPDATE => update::update(self, w, inp, out),
             port::GMS_UPDATE => port::gms_update(self, w, inp, out),
             gadgets::func::GRID_UPDATE => gadgets::grid_update(self, w, inp, gs, out),
             // `LoadHandGadget` 0x297d70: the models follow the page's copy of the saved items (engine side).
@@ -1205,6 +1209,7 @@ impl PageMenu {
             func::GALAXY_DRAW => planet_select::galaxy_draw(self, w, a, gs, env, out),
             port::DRAW => port::draw(self, w, a, out),
             mods::DRAW => mods::draw(self, w, a, out),
+            update::DRAW => update::draw(self, w, a, out),
             port::GMS_DRAW => port::gms_draw(self, w, a, out),
             gadgets::func::GRID_DRAW => gadgets::grid_draw(self, w, a, gs, env.vsync, out),
             gadgets::func::MODEL_DRAW => gadgets::model_draw(self, w, gs),
