@@ -555,12 +555,13 @@ fn sync_graphics_rows(menu: &mut PageMenu, g: &crate::graphics::GraphicsSettings
     menu.set_port_value(Setting::Lighting, g.lighting.index());
     menu.set_port_value(Setting::Foliage, g.foliage.index());
     menu.set_port_value(Setting::Upscaler, g.upscaler.index());
+    menu.set_port_value(Setting::Fur, g.fur.index());
 }
 
 /// The graphics rows back into the settings after the menu tick: a new preset sets every option; otherwise each row is
 /// read. A change is saved to the port settings file.
 fn read_graphics_rows(menu: &PageMenu, g: &mut crate::graphics::GraphicsSettings, before: &crate::graphics::GraphicsSettings, frame: u64) {
-    use crate::graphics::{AmbientOcclusion, AntiAliasing, Detail, DrawDistance, Foliage, GfxOption, Hud, Lighting, Particles, Preset, Textures, Upscaler, Water};
+    use crate::graphics::{AmbientOcclusion, AntiAliasing, Detail, DrawDistance, Foliage, Fur, GfxOption, Hud, Lighting, Particles, Preset, Textures, Upscaler, Water};
     let preset = menu.port_value(Setting::Preset).map(Preset::from_index);
     match preset {
         Some(p) if p != Preset::Custom && p != before.preset() => *g = before.with_preset(p),
@@ -576,6 +577,7 @@ fn read_graphics_rows(menu: &PageMenu, g: &mut crate::graphics::GraphicsSettings
             if let Some(v) = menu.port_value(Setting::Lighting) { g.lighting = Lighting::from_index(v); }
             if let Some(v) = menu.port_value(Setting::Foliage) { g.foliage = Foliage::from_index(v); }
             if let Some(v) = menu.port_value(Setting::Upscaler) { g.upscaler = Upscaler::from_index(v); }
+            if let Some(v) = menu.port_value(Setting::Fur) { g.fur = Fur::from_index(v); }
         }
     }
     if *g != *before {

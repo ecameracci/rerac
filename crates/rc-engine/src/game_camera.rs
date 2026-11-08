@@ -79,17 +79,29 @@ pub fn fog_buffer() -> Handle<bevy::render::storage::ShaderBuffer> { FOG_BUFFER.
 /// The fog (colour, params), then the graphics options the world shaders read (crate::graphics; every world material
 /// binds this buffer): `tex_mode.x` the texture option for `sample_world` (0 Original, 1 Smooth, 2 Sharp), `.y` the
 /// Detail distance factor (1 = the game's; the shrub and billboard fade distance), `.z` the Draw distance factor (1 =
-/// the game's; the shrub D and the tfrag / tie end fades).
+/// the game's; the shrub D and the tfrag / tie end fades). crate::metal writes its environment after these 48 bytes
+/// ([`FOG_PREFIX`]; `metal::write_env`).
 fn fog_bytes(f: &TfragFog, g: &crate::graphics::GraphicsSettings) -> Vec<u8> {
     use crate::graphics::GfxOption;
     let filter = [g.textures.index() as f32, g.detail.lod_scale(), g.draw.scale(), 0.0];
     f.color.to_array().iter().chain(&f.params.to_array()).chain(&filter).flat_map(|v| v.to_le_bytes()).collect()
 }
 
-/// Rewrites the shared fog buffer when the frame's fog or the texture option changes.
+/// The fog buffer's own bytes ([`fog_bytes`]); crate::metal's environment follows them.
+pub const FOG_PREFIX: usize = 48;
+
+/// Rewrites the shared fog buffer's [`FOG_PREFIX`] bytes when the frame's fog or the texture option changes.
 fn upload_fog(fog: Res<GameFog>, gfx: Res<crate::graphics::GraphicsSettings>, mut buffers: ResMut<Assets<bevy::render::storage::ShaderBuffer>>) {
     if !fog.is_changed() && !gfx.is_changed() { return; }
-    if let Some(h) = FOG_BUFFER.get() { crate::asset_write::set_buffer(&mut buffers, h, &fog_bytes(&fog.uniform, &gfx)); }
+    if let Some(h) = FOG_BUFFER.get() { write_fog_range(&mut buffers, h, 0, &fog_bytes(&fog.uniform, &gfx)); }
+}
+
+/// Writes `bytes` at `at` into the fog buffer `h`, keeping the rest (the fog and crate::metal's environment share it).
+pub fn write_fog_range(buffers: &mut Assets<bevy::render::storage::ShaderBuffer>, h: &Handle<bevy::render::storage::ShaderBuffer>, at: usize, bytes: &[u8]) {
+    let same = buffers.get(h).and_then(|b| b.data.as_deref()).is_some_and(|d| d.get(at..at + bytes.len()) == Some(bytes));
+    if same { return; }
+    let Some(mut b) = buffers.get_mut(h) else { return };
+    if let Some(d) = b.data.as_mut().filter(|d| d.len() >= at + bytes.len()) { d[at..at + bytes.len()].copy_from_slice(bytes); }
 }
 
 impl Plugin for GameCameraPlugin {
@@ -101,7 +113,9 @@ impl Plugin for GameCameraPlugin {
             if std::env::var("RC_FOG").is_ok_and(|v| v.trim() == "0") { " (disabled by RC_FOG=0)" } else { "" }
         );
         let fog = GameFog::new(self.fog, rc_game::fog_zones::PARTICLE_FAR12);
-        let buf = bevy::render::storage::ShaderBuffer::new(&fog_bytes(&fog.uniform, &crate::graphics::GraphicsSettings::default()), bevy::asset::RenderAssetUsages::default());
+        let mut bytes = fog_bytes(&fog.uniform, &crate::graphics::GraphicsSettings::default());
+        bytes.extend(crate::metal::MetalEnv::default().bytes());
+        let buf = bevy::render::storage::ShaderBuffer::new(&bytes, bevy::asset::RenderAssetUsages::default());
         let h = app.world_mut().resource_mut::<Assets<bevy::render::storage::ShaderBuffer>>().add(buf);
         let _ = FOG_BUFFER.set(h);
         app.insert_resource(fog).add_systems(Update, print_game_camera).add_systems(PostUpdate, upload_fog.before(bevy::asset::AssetEventSystems));

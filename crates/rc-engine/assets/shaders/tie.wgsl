@@ -31,16 +31,24 @@
     view_transformations::{position_world_to_clip, position_world_to_view},
 }
 #import rerac::world_lights::{WorldLight, NO_LIGHTS, InstanceLight, instance_light, instance_lit_packed}
+#ifdef WORLD_METAL
+#import bevy_pbr::mesh_view_bindings::view
+#import rerac::metal_look::{metal_normal, metal_shade}
+#endif
 
 struct TieFog {
     color: vec4<f32>,
     params: vec4<f32>,
     // x: the texture option (crate::graphics; sample_world). (The Draw distance end fade comes per instance.)
     tex_mode: vec4<f32>,
+#ifdef WORLD_METAL
+    // crate::metal::MetalEnv: to the sun, its colour, the sky probe (`metal_look.wgsl`).
+    metal: array<vec4<f32>, 27>,
+#endif
 }
 
 struct TieParams {
-    // x = near (32), y = MXL, z = 1: tint by LOD.
+    // x = near (32), y = MXL, z = 1: tint by LOD, w = the shine (crate::metal; > 0: WORLD_METAL).
     misc: vec4<f32>,
 }
 
@@ -118,6 +126,11 @@ struct TieVertexOutput {
     @location(5) @interpolate(flat) tint: u32,
     // The end fade (0 = drawn whole).
     @location(6) @interpolate(flat) fade: u32,
+#ifdef WORLD_METAL
+    // Shiny metal (crate::metal): the Bevy world position and the light slot's class normal in world axes.
+    @location(7) mworld: vec3<f32>,
+    @location(8) mnormal: vec3<f32>,
+#endif
 }
 
 // The end fade's dither (crate::graphics::end_fade_shown): pixel `p` is drawn at visibility `vis` (0..128).
@@ -290,6 +303,12 @@ fn vertex(v: TieVertex) -> TieVertexOutput {
     out.fade = (lod.x >> 16u) & 0xffu;
     out.k = f32(bitcast<i32>(v.info) >> 20u) / 16.0;
     out.tint = select(0u, vlod, params.misc.z > 0.5);
+#ifdef WORLD_METAL
+    out.mworld = world;
+    let np = (*inst).normals[v.info & 63u];
+    let cn = vec3<f32>(f32(bitcast<i32>(np.x << 16u) >> 16u), f32(bitcast<i32>(np.x) >> 16u), f32(bitcast<i32>(np.y << 16u) >> 16u)) / 32768.0;
+    out.mnormal = ((*inst).model * vec4<f32>(cn, 0.0)).xyz;
+#endif
     return out;
 }
 
@@ -304,6 +323,13 @@ fn fragment(in: TieVertexOutput) -> @location(0) vec4<f32> {
     let duv = vec4<f32>(dpdx(in.uv), dpdy(in.uv));
     let t = sample_world(in.uv, log2(in.depth / params.misc.x) + in.k, params.misc.y, duv);
     var rgb = min(t.rgb * in.color.rgb, vec3<f32>(1.0));
+#ifdef WORLD_METAL
+    // Shiny metal (crate::metal, Lighting Enhanced; `params.misc.w` its shine): before the fog.
+    let to_eye = normalize(view.world_position - in.mworld);
+    let mn = metal_normal(in.mnormal, in.mworld, to_eye);
+    let env = fog.metal;
+    rgb = min(metal_shade(rgb, in.color.rgb, mn, to_eye, params.misc.w, env), vec3<f32>(1.0));
+#endif
     if (fog.color.w > 0.5) {
         rgb = mix(fog.color.rgb, rgb, in.fog);
     }

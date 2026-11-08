@@ -91,6 +91,9 @@ pub const ATTRIBUTE_MOBY_SKIN: MeshVertexAttribute = MeshVertexAttribute::new("M
 /// Skin word x bit: the vertex is in a glow packet (index ≥ class byte 0xa for the high LOD, 0xb for the low one), whose
 /// colour MobyProc's glow list replaces with the moby's glow word (crate::moby_lod module doc, moby.wgsl).
 pub const SKIN_GLOW: u32 = 1 << 24;
+/// Skin word x bits 25..26: the texture's crate::metal shine level (0 not metal, 1..3 `metal::Shine`); moby.wgsl draws it as
+/// shiny metal while the fog buffer's metal flag is on (Lighting Enhanced). Bits nothing else reads.
+pub const SKIN_SHINE_SHIFT: u32 = 25;
 /// Per vertex: index of the (packet, vertex) in the class's high-LOD list (CPU colour table index).
 pub const ATTRIBUTE_MOBY_VID: MeshVertexAttribute = MeshVertexAttribute::new("MobyVid", 0x4d4f_4232, VertexFormat::Uint32);
 
@@ -793,6 +796,8 @@ struct Part {
     triangles: usize,
     /// The class casts a shadow (class byte 0x0f ≠ 0): drawn after the shadow pass ([`caster_pass`]).
     caster: bool,
+    /// The class's texture slot of the triangles (the first one's; −1 for the grey texture).
+    slot: i32,
 }
 
 /// A metal mesh: its texture (−2 chrome / −3 glass) and triangle count.
@@ -842,18 +847,22 @@ fn glow_from(class: &LevelMobyClass, low: bool) -> usize {
 /// covers the high LOD, and `RC_MOBY_CPU_LIGHT=1` keeps every instance on it).
 fn build_parts(class: &LevelMobyClass, lod: &[MobySubmesh], identity: bool, glow_from: usize, meshes: &mut Assets<Mesh>) -> (Vec<Part>, u8) {
     #[derive(Default)]
-    struct B { pos: Vec<[f32; 3]>, uv: Vec<[f32; 2]>, skin: Vec<[u32; 4]>, vid: Vec<u32>, idx: Vec<u32>, remap: HashMap<(usize, u32), u32>, alpha: Option<AlphaRange>, tris: usize }
+    struct B { pos: Vec<[f32; 3]>, uv: Vec<[f32; 2]>, skin: Vec<[u32; 4]>, vid: Vec<u32>, idx: Vec<u32>, remap: HashMap<(usize, u32), u32>, alpha: Option<AlphaRange>, tris: usize, slot: Option<i32> }
     let mults = moby_light::vertex_multipliers(lod);
     let mut base = 0u32;
     let vid_base: Vec<u32> = lod.iter().map(|s| { let b = base; base += s.vertices.len() as u32; b }).collect();
     let mut max_joint = 0u8;
     let mut by_tex: BTreeMap<(usize, bool), B> = BTreeMap::new();
+    let mut shines: HashMap<i32, u32> = HashMap::new();
     for (si, sub) in lod.iter().enumerate() {
         let glow = si >= glow_from;
         for t in &sub.triangles {
             let Some(tex) = part_texture(class, t.texture) else { continue };
+            // crate::metal: the texture slot's shine (Lighting Enhanced's shiny metal; the grey texture never shines).
+            let sh = if tex == GREY { 0 } else { *shines.entry(t.texture).or_insert_with(|| crate::metal::shine(crate::level_load::level_index(), crate::metal::MetalTex::Moby { class: class.o_class, slot: t.texture }).map_or(0, |s| s as u32)) };
             let b = by_tex.entry((tex, glow)).or_default();
             b.tris += 1;
+            b.slot.get_or_insert(t.texture);
             for vi in [t.a, t.b, t.c] {
                 let v = *b.remap.entry((si, vi)).or_insert_with(|| {
                     let vx = &sub.vertices[vi as usize];
@@ -867,7 +876,7 @@ fn build_parts(class: &LevelMobyClass, lod: &[MobySubmesh], identity: bool, glow
                     b.alpha = Some(b.alpha.map_or(AlphaRange::of([m[3]]), |r| r.union(AlphaRange::of([m[3]]))));
                     let count = if identity { 0 } else { sk.count as u32 };
                     b.skin.push([
-                        vx.normal_azimuth as u32 | (vx.normal_elevation as u32) << 8 | count << 16 | if glow { SKIN_GLOW } else { 0 },
+                        vx.normal_azimuth as u32 | (vx.normal_elevation as u32) << 8 | count << 16 | if glow { SKIN_GLOW } else { 0 } | sh << SKIN_SHINE_SHIFT,
                         sk.joints[0] as u32 | (sk.joints[1] as u32) << 8 | (sk.joints[2] as u32) << 16,
                         sk.weights[0] as u32 | (sk.weights[1] as u32) << 10 | (sk.weights[2] as u32) << 20,
                         u32::from_le_bytes(m),
@@ -888,7 +897,8 @@ fn build_parts(class: &LevelMobyClass, lod: &[MobySubmesh], identity: bool, glow
                 .with_inserted_attribute(ATTRIBUTE_MOBY_SKIN, VertexAttributeValues::Uint32x4(b.skin))
                 .with_inserted_attribute(ATTRIBUTE_MOBY_VID, VertexAttributeValues::Uint32(b.vid))
                 .with_inserted_indices(Indices::U32(b.idx));
-            Part { texture, glow, mesh: meshes.add(mesh), mult_alpha: b.alpha.unwrap_or(AlphaRange::OPAQUE), triangles: b.tris, caster: class.class.header.shadow != 0 }
+            let slot = b.slot.unwrap_or(-1);
+            Part { texture, glow, mesh: meshes.add(mesh), mult_alpha: b.alpha.unwrap_or(AlphaRange::OPAQUE), triangles: b.tris, caster: class.class.header.shadow != 0, slot }
         })
         .collect();
     (parts, max_joint)
@@ -936,6 +946,23 @@ fn build_metal_parts(class: &LevelMobyClass, meshes: &mut Assets<Mesh>) -> (Vec<
         })
         .collect();
     (parts, max_joint)
+}
+
+/// crate::fur's shell meshes of `class`'s furry parts (their texture slot in `fur::FUR_TEXTURES`, glow packets left out),
+/// each with its texture.
+fn fur_shells(level: &LoadedLevel, class: &LevelMobyClass, parts: &[Part], meshes: &Assets<Mesh>) -> Vec<(Mesh, usize)> {
+    let mut out = Vec::new();
+    for part in parts.iter().filter(|p| !p.glow && p.texture != GREY && crate::fur::is_fur_slot(class.o_class, p.slot)) {
+        let Some(tex) = level.textures.iter().find(|t| t.table == TextureTable::Moby && t.index == part.texture) else { continue };
+        let Some(shells) = meshes.get(&part.mesh).and_then(|m| crate::fur::shell_mesh(m, &tex.texture, &ATTRIBUTE_MOBY_SKIN)) else { continue };
+        if crate::fur::log_on() { println!("fur: class {} slot {} (moby texture {}): {} of {} triangles furry", class.o_class, part.slot, part.texture, shells.1, part.triangles); }
+        out.push((shells.0, part.texture));
+    }
+    if crate::fur::log_on() {
+        let slots: Vec<(i32, Option<usize>)> = (0..class.entry.textures.len() as i32).map(|s| (s, class.texture_table_index(s))).collect();
+        println!("fur: class {} texture slots (slot, moby texture): {slots:?}", class.o_class);
+    }
+    out
 }
 
 /// `game_to_bevy` as a matrix (columns = images of game x, y, z).
@@ -1061,6 +1088,10 @@ fn spawn_mobys(
         let high = build_parts(c, &c.class.high_lod, false, glow_from(c, false), meshes);
         let low = if lod_on && !c.class.low_lod.is_empty() { build_parts(c, &c.class.low_lod, c.class.header.low_lod_joint_count == 0, glow_from(c, true), meshes).0 } else { Vec::new() };
         let metal = build_metal_parts(c, meshes);
+        if crate::metal::log_on() {
+            let slots: Vec<(i32, usize)> = (0..c.entry.textures.len() as i32).filter_map(|s| Some((s, c.texture_table_index(s)?))).collect();
+            println!("metal: class {} texture slots (slot, moby texture): {slots:?}", c.o_class);
+        }
         st.meshes += high.0.len() + low.len() + metal.0.len();
         parts.insert(ci, (high, low, metal));
     }
@@ -1748,7 +1779,7 @@ mod tests {
     /// plain part are unchanged; a caster's Z-writing draws still move late.
     #[test]
     fn glow_parts_blend_their_soft_edge_on_display_bytes() {
-        let part = |glow, caster| Part { texture: 0, glow, mesh: Handle::default(), mult_alpha: AlphaRange::OPAQUE, triangles: 1, caster };
+        let part = |glow, caster| Part { texture: 0, glow, mesh: Handle::default(), mult_alpha: AlphaRange::OPAQUE, triangles: 1, caster, slot: 0 };
         let (lo, hi) = (GsPass::ColorOnlyLowAlpha { aref: 0x60 }, GsPass::OpaqueTested { aref: 0x60 });
         assert_eq!(part_pass(&part(true, false), lo), GsPass::EffectLowAlpha { aref: 0x60 });
         assert_eq!(part_pass(&part(true, false), hi), hi);
@@ -1878,6 +1909,9 @@ pub struct ExtraMobys {
     slot_late: HashMap<u32, bool>,
     /// [`ExtraMobys::set_gold`]: per (slot, class), the metal entities drawn with the first metal ad-gif's texture.
     gold: HashMap<(u32, i32), GoldParts>,
+    /// crate::fur: per class, its shell meshes (not yet assets: added when the option first spawns them) with the
+    /// texture of each, built with the class's parts.
+    fur: HashMap<i32, Vec<(Mesh, usize)>>,
 }
 
 /// The metal entities of one (slot, class) a gold weapon's patch reaches (with the pass each was spawned with), their own
@@ -1947,6 +1981,7 @@ impl ExtraMobys {
             slot_metal_shown: HashMap::new(),
             slot_late: HashMap::new(),
             gold: HashMap::new(),
+            fur: HashMap::new(),
         }
     }
 
@@ -1996,8 +2031,20 @@ impl ExtraMobys {
         images: &mut Assets<Image>,
         materials: &mut Assets<MobyMaterial>,
     ) -> (Vec<Entity>, Vec<Entity>) {
+        let fresh = !self.parts.contains_key(&class.o_class);
         let parts = self.parts.entry(class.o_class).or_insert_with(|| build_parts(class, &class.class.high_lod, false, glow_from(class, false), meshes).0).clone();
+        // crate::fur: the shells of the furry parts, from the meshes just built (their data leaves the main world once
+        // the render world has them).
+        if fresh && crate::fur::FUR_TEXTURES.iter().any(|f| f.0 == class.o_class) {
+            self.fur.insert(class.o_class, fur_shells(level, class, &parts, meshes));
+        }
         let out = self.cache.spawn(commands, level, &parts, MobyBlend::Plain, true, transform, slot, Visibility::Inherited, &format!("{name} class {}", class.o_class), images, materials);
+        // Registered under his first draw entity; crate::fur spawns them only while the Fur option is on.
+        for (mesh, texture) in self.fur.get(&class.o_class).into_iter().flatten() {
+            let (Some((image, _)), Some(&parent)) = (self.cache.images.get(texture), out.first()) else { continue };
+            let shell = crate::fur::FurShell { texture: image.clone(), instances: self.instances.clone(), palette: self.palette.clone(), normal_table: self.normal_table.clone(), lods: self.lods.clone() };
+            crate::fur::register(commands, mesh.clone(), shell, slot, parent);
+        }
         // The shine pass, its gate and basis written each frame by update_extra_metal.
         let mut metal = Vec::new();
         if moby_lod::metal_enabled() {
