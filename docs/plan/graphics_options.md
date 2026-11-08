@@ -282,17 +282,17 @@ and Lighting Enhanced already holds every sky and air effect (rays, shafts). A r
 Original / Enhanced pair with nothing between.
 
 **How:** a slab 140..250 units above the camera, ray-marched at half resolution over the sky's pixels only (depth 0)
-in 24 steps, between the opaque world (after the bounce light) and the transparent pass, so water, effects and the
+in 24 steps (up to 48 on the long, grazing paths through the slab), between the opaque world (after the bounce light) and the transparent pass, so water, effects and the
 HUD stay in front. The density is a tiling noise texture made at start (a coverage fbm, inverted-Worley billows, fine
 erosion; one tile per 1400 units, drifting with a wind, at the camera's world position, so the layer has parallax).
 Each step looks two steps toward the sun (Beer's law self-shadow, a Henyey-Greenstein forward phase, Beer-powder dark
-edges). The composite is `sky · (1 − α + ambient) + tint · sunlit`, a multiply then an add: the shaded parts are the
+edges); the fine erosion and the billows fade out from 500 to 1750 units, where their texels shrink below a pixel and alias. The composite (a 5-tap tent of the half-resolution target, which averages the march's jitter out) is `sky · (1 − α + ambient) + tint · sunlit`, a multiply then an add: the shaded parts are the
 sky's own colour, darker, the lit parts add the key light's hue pulled halfway to the fog's, so each level keeps its
 palette. The layer thins out toward the horizon and with distance (from 2000 units), where the game's painted far
 clouds stay.
 
 **Cost** (`RC_RENDER_DIAG=1`, render/clouds_march and render/clouds_composite; RTX A1000 Laptop, 1080p, Novalis
-looking over the city): march 0.21 ms, composite 0.13 ms on the GPU. A cell's detail fetches run only inside the
+looking over the city): march 0.23 ms, composite 0.16 ms on the GPU (2026-11-08, with the banding fix: 0.21 + 0.13 before it). The fix: the first build showed a regular 2-pixel hatching over the upper sky (the half-resolution jitter through coarse steps on grazing paths, and the fine noise aliasing far away). A cell's detail fetches run only inside the
 coverage map, and the light march only where there is cloud.
 
 | Level | Coverage | Why |

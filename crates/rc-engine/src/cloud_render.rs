@@ -6,14 +6,15 @@
 //! front):
 //! 1. **March** (half resolution, only where a sky pixel (depth 0) is among the four it covers): the view ray through
 //!    a slab [`BASE`]..[`BASE`] + [`THICKNESS`] units above the camera, to [`FAR`] at most, in the level's
-//!    [`Clouds::steps`] steps from an interleaved-gradient-noise start. The density is a coverage map (a tiling fbm,
+//!    [`Clouds::steps`] steps (up to twice that on the long, grazing paths) from an interleaved-gradient-noise start. The fine detail fades out with distance, where it would alias. The density is a coverage map (a tiling fbm,
 //!    [`noise_texture`] R, one tile per [`TILE`] units) eroded by billows (inverted Worley, G and A) and shaped by the
 //!    height in the slab (flat bases, rounded tops where the coverage is high). Each step looks [`LIGHT_STEPS`] steps
 //!    toward the sun for its self-shadow (Beer's law), with a Henyey-Greenstein phase (forward-scattering silver
 //!    linings) and an ambient that brightens toward the tops. The layer drifts with a wind ([`WIND`]) and its noise
 //!    coordinates are the camera's world position, so it has parallax as Ratchet moves. Into an RGBA16F target: R the
 //!    sunlit light, G the ambient (sky-lit) share, A the opacity, all premultiplied.
-//! 2. **Composite** (full resolution, sky pixels only): the frame becomes `sky · (1 − α + G) + tint · R`, drawn as a
+//! 2. **Composite** (full resolution, sky pixels only; a 5-tap tent of the half-resolution target averages the
+//!    jitter out, which would otherwise show as hatching): the frame becomes `sky · (1 − α + G) + tint · R`, drawn as a
 //!    multiply then an add (8-bit target; no dual-source blending). The shaded parts are the sky's own colour, darker,
 //!    and the lit parts add the sun's tint ([`Clouds::tint`]: the key light's hue pulled halfway to the fog's), so each
 //!    level keeps its palette and mood.

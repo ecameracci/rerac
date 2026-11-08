@@ -44,8 +44,8 @@ fn view_dir(coord: vec2<f32>) -> vec3<f32> {
     return normalize((view.world_from_view * vec4<f32>(dir_view, 0.0)).xyz);
 }
 
-// Density at a camera-relative point (0..1).
-fn density(p: vec3<f32>) -> f32 {
+// Density at a camera-relative point (0..1); `lod` 0 near .. 1 far fades the detail that would alias.
+fn density(p: vec3<f32>, lod: f32) -> f32 {
     let h = (p.y - cp.shape.x) / cp.shape.y;
     if (h <= 0.0 || h >= 1.0) { return 0.0; }
     let xz = (p.xz + cp.march.xy) * (cp.sun.w / NOISE_TEXELS);
@@ -58,12 +58,12 @@ fn density(p: vec3<f32>) -> f32 {
     let f = textureSampleLevel(tex, samp, xz * 9.3 - vec2<f32>(h * 0.37, h * 0.11), 0.0);
     let base = saturate((n.r - (1.0 - cov)) / max(cov, 0.05));
     // The coverage gathered into cells (the billows), each cell domed.
-    let shape = base * mix(0.35, 1.0, n.g * n.g) - 0.22 * (1.0 - b.a);
+    let shape = base * mix(0.35, 1.0, n.g * n.g) - 0.22 * (1.0 - b.a) * (1.0 - 0.6 * lod);
     // Flat bases, rounded tops: a cell is as tall as its shape.
     let top = sqrt(saturate(shape)) * 0.95;
     var d = saturate((top - h) * 6.0) * smoothstep(0.0, 0.06, h);
-    // Fine erosion, strongest at the edges and the base.
-    d -= (1.0 - f.a) * 0.45 * (1.0 - d) + f.b * 0.12;
+    // Fine erosion, strongest at the edges and the base, gone with distance (its texels shrink below a pixel).
+    d -= ((1.0 - f.a) * 0.45 * (1.0 - d) + f.b * 0.12) * (1.0 - lod);
     return saturate(d * 1.6);
 }
 
@@ -89,7 +89,8 @@ fn march(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     let t0 = base / dir.y;
     if (t0 >= far) { return vec4<f32>(0.0); }
     let t1 = min((base + thick) / dir.y, far);
-    let steps = i32(cp.march.z);
+    // Up to twice the steps on the long, grazing paths through the slab, where coarse steps band.
+    let steps = i32(cp.march.z * clamp((t1 - t0) / (thick * 3.0), 1.0, 2.0));
     let dt = (t1 - t0) / f32(steps);
     var t = t0 + dt * fx_noise(in.position.xy);
     let sun = normalize(cp.sun.xyz);
@@ -103,11 +104,12 @@ fn march(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     var amb = 0.0;
     for (var i = 0; i < steps; i += 1) {
         let p = dir * t;
-        let d = density(p);
+        let lod = smoothstep(far * 0.1, far * 0.35, t);
+        let d = density(p, lod);
         if (d > 0.002) {
             var od = 0.0;
             for (var j = 1; j <= lsteps; j += 1) {
-                od += max(density(p + sun * (lstep * f32(j))), 0.0);
+                od += max(density(p + sun * (lstep * f32(j)), lod), 0.0);
             }
             let to_sun = exp(-sigma * od * lstep);
             // Beer-powder: dark edges facing away from the sun.
@@ -130,9 +132,17 @@ fn march(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
 
 fn cloud_at(in: FullscreenVertexOutput) -> vec4<f32> {
     if (!is_sky(vec2<i32>(floor(in.position.xy)))) { return vec4<f32>(0.0); }
-    // The half-resolution target covers the whole target (texel k = full pixels 2k, 2k + 1).
+    // The half-resolution target covers the whole target (texel k = full pixels 2k, 2k + 1). A 5-tap tent of
+    // bilinear fetches (about 4×4 texels) averages the march's jitter out, which would otherwise show as hatching.
     let half = vec2<f32>(textureDimensions(tex));
-    return textureSampleLevel(tex, samp, in.position.xy * 0.5 / half, 0.0);
+    let uv = in.position.xy * 0.5 / half;
+    let o = 1.0 / half;
+    var c = textureSampleLevel(tex, samp, uv, 0.0) * 0.28;
+    c += textureSampleLevel(tex, samp, uv + vec2<f32>(o.x, o.y), 0.0) * 0.18;
+    c += textureSampleLevel(tex, samp, uv + vec2<f32>(-o.x, o.y), 0.0) * 0.18;
+    c += textureSampleLevel(tex, samp, uv + vec2<f32>(o.x, -o.y), 0.0) * 0.18;
+    c += textureSampleLevel(tex, samp, uv + vec2<f32>(-o.x, -o.y), 0.0) * 0.18;
+    return c;
 }
 
 // Multiply: 1 − α + ambient (the sky's own colour through the clouds and in their shade).
