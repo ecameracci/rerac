@@ -3,11 +3,12 @@
 //!
 //! **Why a copy.** Bevy 0.19's plugin keeps each view's pipeline in one component shared by every material type
 //! (`FullscreenMaterialPipelineId`, not generic): the prepare system of a type the camera does not carry removes it,
-//! so with two types registered only the one whose prepare runs last draws. The scene fade (`SceneFade`) stays on
-//! Bevy's plugin (its only user); the passes here each keep their own pipeline ([`PassPipeline<T>`]). The pass types
-//! still implement Bevy's [`FullscreenMaterial`] (the shader and the ordering).
+//! so with two types registered only the one whose prepare runs last draws. The passes here each keep their own
+//! pipeline ([`PassPipeline<T>`]). The pass types still implement Bevy's [`FullscreenMaterial`] (the shader and the
+//! ordering). [`pass`] also runs on crate::upscale's compose camera (Core2d), after its UI pass.
 //!
-//! Users: the Visibomb's missile view overlay (crate::visibomb_view), the underwater tint (crate::fog_state).
+//! Users: the Visibomb's missile view overlay (crate::visibomb_view), the underwater tint (crate::fog_state), the scene
+//! fade (crate::scene_render).
 
 use bevy::core_pipeline::fullscreen_material::FullscreenMaterial;
 use bevy::core_pipeline::FullscreenShader;

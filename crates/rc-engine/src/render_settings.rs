@@ -179,7 +179,7 @@ pub fn migrate_legacy(base: &std::path::Path) -> std::io::Result<Option<(std::pa
 }
 
 /// The value of `key` in `key = value` text (the last one wins; `#` comments, quotes around the value allowed).
-fn read_key<'a>(text: &'a str, key: &str) -> Option<&'a str> {
+pub(crate) fn read_key<'a>(text: &'a str, key: &str) -> Option<&'a str> {
     text.lines()
         .filter_map(|l| l.split_once('='))
         .filter(|(k, _)| k.trim() == key)
@@ -188,7 +188,7 @@ fn read_key<'a>(text: &'a str, key: &str) -> Option<&'a str> {
 }
 
 /// `text` with `key = value` set (the existing line replaced in place, else appended).
-fn write_key(text: &str, key: &str, value: &str) -> String {
+pub(crate) fn write_key(text: &str, key: &str, value: &str) -> String {
     let mut found = false;
     let mut out: Vec<String> = text
         .lines()
