@@ -13,7 +13,7 @@
 //! | [`DrawDistance`] | Original (the game's draw distances), Far (×1.5), Farther (×2), Maximum (×4), the new end faded | crate::tfrag_lod, crate::tie_lod, crate::shrub_render, crate::moby_lod (their drawn flag stays the game's), crate::game_camera (the far plane); not particles (their drawn flag is game state) |
 //! | [`AmbientOcclusion`] | Original (none: the shade is the artists' baked vertex colours), On (screen-space occlusion from the depth buffer) | crate::ao_render |
 //! | [`Water`] | Original (the GS blend of the water textures), Enhanced (clear by depth, reflections, a sun glint, foam at the shore; under water: absorption, caustics, light shafts) | crate::water_render, crate::sea_water (the seas), crate::scene_copy, crate::underwater_render |
-//! | [`Particles`] | Original (sprites cut where they meet the world), Soft (faded by their depth in front of it), Enhanced (Soft, bright effects light the world, glowing stars, restyled rain and snow) | crate::particle_render, crate::scene_copy, crate::particle_lights, crate::sky_stars, crate::flight_render, crate::weather_render |
+//! | [`Particles`] | Original (sprites cut where they meet the world), Soft (faded by their depth in front of it), Enhanced (Soft, bright effects light the world, glowing stars, restyled rain and snow, lit billowing smoke) | crate::particle_render (its `SMOKE`), crate::scene_copy, crate::particle_lights, crate::sky_stars, crate::flight_render, crate::weather_render |
 //! | [`Foliage`] | Original (the level's own plants only), Moderate, Lush (grass clumps on the grassy ground and more of the level's small plants) | crate::foliage |
 //! | [`Lighting`] | Original (the game's shadows), Simple (sun shadows in their place), Enhanced (Simple's shadows and every advanced lighting effect) | crate::shadow_render, crate::sun_shadow, crate::tie_lod ([`Lighting::game_shadows`], [`Lighting::sun_shadows`]); crate::sun_rays, crate::gi_render, crate::post_render ([`Lighting::enhanced`]; the rays also per level, [`LightShafts`]) |
 //! | [`Upscaler`] | Off (the 3D drawn at the frame's resolution), Ultra quality / Quality / Balanced / Performance (drawn at 1/1.3 .. 1/2 of it per axis and upscaled FSR 1-style; the HUD and menus at the frame's) | crate::upscale |
@@ -281,6 +281,7 @@ pub enum Particles {
     /// Soft, and the bright effects (flashes, fireballs, additive sprites) light the opaque world around them
     /// (crate::particle_lights); the stars glow and the rain and snow are restyled ([`Particles::atmosphere`]); the
     /// ground fire rings (Gemlik's stompers, Blarg's fire waves) burn as flame curtains (crate::fx_draw::flame_curtain).
+    /// The smoke, steam and dust puffs billow, rise and take the light (crate::particle_render `SMOKE`).
     Enhanced,
 }
 
