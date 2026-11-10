@@ -308,7 +308,13 @@ impl Plugin for GameplayPlugin {
 }
 
 #[derive(Resource)]
-struct PlayScript(Option<Script>);
+pub(crate) struct PlayScript(Option<Script>);
+
+impl PlayScript {
+    /// `RC_PLAY_SCRIPT`'s pad of main-loop frame `t` (None: no script). The scene player reads it too (a scripted
+    /// scene skip: all four shoulders and START).
+    pub(crate) fn at(&self, t: u64) -> Option<PadInput> { self.0.as_ref().map(|s| s.at(t)) }
+}
 
 /// The parent of one of Ratchet's LOD sets (`Play::ratchet_lods`; no mesh, so despawned here at a level change).
 #[derive(Component)]
@@ -2013,6 +2019,18 @@ fn death_reload(p: &mut Play, lv: &crate::level_load::LoadedLevel, state: Option
     // The services that hold the old table's ids or per-visit moby state.
     p.svc.groups = statics.groups(&lv.gameplay);
     p.svc.hits = Default::default();
+    // The frame's draw callbacks (`0x2ab920` empties the lists after every frame's draw, so none outlives the reload's
+    // frame): the port runs them at the next tick's start, by the old table's ids (kept, a callback of Oltanis's arc
+    // keeper 1331 ran on whichever moby took its id and read pvars it did not have).
+    p.svc.draw_callbacks.list1.clear();
+    p.svc.draw_callbacks.list2.clear();
+    p.svc.draw_callbacks.ties.clear();
+    p.svc.draw_callbacks.matrices.clear();
+    // `load_level_gameplay` (L00, Lombyte) zeroes the eight point lights and their attachment records: the lights the
+    // old table's classes held are gone (kept, they leaked; once all eight were taken every allocation failed, and
+    // Gaspar's turrets, which retry theirs every tick, played their light-on sound every tick). The slots
+    // keep their generation: the next allocation of each bumps it, so the lighting sees fresh lights.
+    for i in 0..p.svc.point_lights.slots.len() { p.svc.point_lights.free(i); }
     // The "use" system's talk slots and save values by the new instance → moby map (before the load pass, as the load).
     crate::interact_render::install(&mut p.svc, lv, &statics.instance_to_moby, state);
     if let Some(id) = ship_id.filter(|_| !p.svc.travel.adopted) { p.svc.interact.register_talk_mobys([(id, 0)]); }

@@ -188,6 +188,9 @@ pub struct MovieState {
     pub finished: Vec<(u32, bool)>,
     /// The mode the running movie interrupted (restored by a [`MovieExit::FrontEnd`] exit).
     interrupted: Option<Mode>,
+    /// The app frame of the last `MovieExitToGameplay` (it skips that frame's draw, 0x15f5d8 = 1: crate::scene_render
+    /// keeps it black when its tick asks for the next scene or movie).
+    pub exited_frame: Option<u64>,
 }
 
 impl MovieState {
@@ -454,6 +457,7 @@ fn movie_exit(
     mut audio: Option<ResMut<crate::audio_out::AudioOut>>,
     frame_no: Res<crate::determinism::FrameNumber>,
     mut vis: Query<&mut Visibility>,
+    mut scenes: Option<ResMut<crate::scene_render::SceneRuntime>>,
 ) {
     let st = &mut *state;
     if !st.running.as_ref().is_some_and(|r| r.player.done()) { return; }
@@ -468,6 +472,10 @@ fn movie_exit(
     let interrupted = st.interrupted.take();
     match rt.req.exit {
         MovieExit::Gameplay => {
+            st.exited_frame = Some(frame_no.0);
+            // `MovieExitToGameplay` skips this frame's draw (0x15f5d8): black until gameplay really resumes or the next
+            // scene or movie starts (crate::scene_render's hand-over latch).
+            if let (Some(sc), Some(p)) = (scenes.as_mut(), play.as_ref()) { sc.begin_handover(p.game.counter); }
             // MovieExitToGameplay: replay mode 2 (the menu's in-level replays) back to 0 (0x15eed8).
             if let Some(m) = menu.as_mut() {
                 if m.replay == 2 { m.replay = 0; }

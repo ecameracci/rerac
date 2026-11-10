@@ -234,6 +234,8 @@ pub struct ScenePlayer {
     skipped: bool,
     /// Black coverage accumulated by the running `FadeToBlack`.
     black: f32,
+    /// The image under the start fade is already black ([`ScenePlayer::start_from_black`]).
+    from_black: bool,
     last_camera: Option<SceneCamera>,
     last_actors: Vec<ActorPose>,
     last_subtitle: Option<SubtitleLine>,
@@ -300,8 +302,14 @@ pub fn scene_camera(r: &CamRecord) -> SceneCamera {
     SceneCamera { eye: r.eye, rows: [v(m[2], true), v(m[0], true), v(m[1], false)], tan_half_fov: r.tan_half_fov, cut: r.is_cut() }
 }
 
-/// Alpha (of 0x80) of `FadeToBlack(n)` step `k` (0-based): `0x80 − i·0x80/n` with i = n − 1 − k.
-pub fn fade_to_black_alpha(n: u32, k: u32) -> u32 { 0x80 - (n - 1 - k) * 0x80 / n }
+/// Alpha (of 0x80) of `FadeToBlack(n)` step `k` (0-based): `0x80 − i·0x80/(i + 1)` with i = n − 1 − k (Lombyte
+/// `fade_to_black`, OpenRAC `FadeToBlack`: `q = (n << 7) / (n + 1)`). Drawn over the held image one after another, the
+/// steps darken it evenly: step k leaves (k + 1)/n of it black. The port had `i·0x80/n`, whose steps grow too fast:
+/// black after about half the frames, the rest a held black (a fade that snapped instead of easing).
+pub fn fade_to_black_alpha(n: u32, k: u32) -> u32 {
+    let i = n - 1 - k;
+    0x80 - i * 0x80 / (i + 1)
+}
 
 /// Black coverage after steps 0..=k of `FadeToBlack(n)` drawn over one held image (each quad blends
 /// `Cd·(1 − a/128)`).
@@ -323,11 +331,17 @@ impl ScenePlayer {
             fade: Pf::ONE,
             skipped: false,
             black: 0.0,
+            from_black: false,
             last_camera: None,
             last_actors: Vec::new(),
             last_subtitle: None,
         }
     }
+
+    /// The scene follows one that just ended: the game's start fade (`fade_to_black(6)`) draws over the last image
+    /// shown, and the frames in between were never shown (`0x15f5d8`: `finish_cutscene` and `start_scene` both skip
+    /// their frame's draw), so that image is the last scene's black end: the start fade stays black.
+    pub fn start_from_black(&mut self) { self.from_black = true; }
 
     /// The trigger frame's requests (`music_Pause(0)`).
     pub fn start_audio(&self) -> Vec<AudioRequest> { vec![AudioRequest::PauseMusic] }
@@ -364,7 +378,7 @@ impl ScenePlayer {
     pub fn tick(&mut self, pad: &PadState) -> SceneTick {
         match self.phase {
             Phase::FadeIn(k) => {
-                self.black = fade_to_black_coverage(START_FADE_FRAMES, k);
+                self.black = if self.from_black { 1.0 } else { fade_to_black_coverage(START_FADE_FRAMES, k) };
                 self.phase = if k + 1 < START_FADE_FRAMES { Phase::FadeIn(k + 1) } else { Phase::Black(0) };
                 // The fade draws over the last gameplay image: no camera change, no actors yet.
                 self.out(Frame::FadeIn(k), false, self.black)
@@ -611,7 +625,9 @@ mod tests {
         // 6 fade frames, 5 black frames, then tick 1.
         assert_eq!(v.len(), 12);
         let alphas: Vec<u32> = (0..6).map(|k| fade_to_black_alpha(6, k)).collect();
-        assert_eq!(alphas, [22, 43, 64, 86, 107, 128]);
+        assert_eq!(alphas, [22, 26, 32, 43, 64, 128]);
+        // An even darkening: coverage (k + 1)/6 after step k (within the integer alphas' rounding).
+        for k in 0..6 { assert!((fade_to_black_coverage(6, k) - (k + 1) as f32 / 6.0).abs() < 0.03, "step {k}"); }
         assert!(v[..6].iter().zip(1..).all(|(t, k)| t.frame == Frame::FadeIn(k - 1) && !t.world_runs && t.camera.is_none()));
         assert_eq!(v[5].black, 1.0);
         assert!(v[..5].windows(2).all(|w| w[0].black < w[1].black));

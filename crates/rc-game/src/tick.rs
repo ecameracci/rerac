@@ -93,6 +93,11 @@ pub struct Game {
     /// hero, the particles, the sound step and the counter run, but never `CameraUpdate` 0x20eca8 (and its crate hit),
     /// whose springs resume where they were on the first mode-0 tick, nor the free-slot pass `MobyFreeSlotBookkeeping`
     /// 0x263300 (only `InLevelFrameUpdate` runs it).
+    /// `hero_set_state(id, play)` calls the engine makes outside a tick that the game makes directly (a scene's end:
+    /// `finish_cutscene`'s `hero_set_state(0, 1)`): run at the next tick's start, before the moby loop, so the classes
+    /// of that tick already see the new state (queued as a class's hero call they ran after the moby loop, one tick
+    /// late: the Novalis counselor's next scene waited a tick and that tick was drawn).
+    pub pre_states: Vec<(i32, bool)>,
     pub camera_paused: bool,
     /// The level's grind paths (gameplay section 0x74) the hero rides (`hero::boots`; empty: no rails).
     pub grind_paths: std::sync::Arc<Vec<rc_formats::volumes::GrindPath>>,
@@ -214,7 +219,7 @@ impl Game {
         let hero = Hero::init_from_moby(&mut mobys.mobys[hero_moby], coll, &mut rng);
         let pad = PadState::default();
         let camera = Camera::new(&CamInput { hero: &hero, pad: &pad, coll, mobys: None, hero_moby: None }, options.camera);
-        Game { pad, mobys, hero_moby, hero, camera, rng, counter: 0, options, death_z: Pf::f(death_z), fade_rate: 0.0, item_data: None, item_globals: ItemGlobals::default(), camera_paused: false, grind_paths: Default::default(), cheat_patterns: Default::default(), cheat_toggled: None }
+        Game { pad, mobys, hero_moby, hero, camera, rng, counter: 0, options, death_z: Pf::f(death_z), fade_rate: 0.0, item_data: None, item_globals: ItemGlobals::default(), camera_paused: false, pre_states: Vec::new(), grind_paths: Default::default(), cheat_patterns: Default::default(), cheat_toggled: None }
     }
 
     /// The end of the level load (`LoadLevelCoreData` 0x258128): `0x15f5cc++` right after
@@ -290,6 +295,24 @@ impl Game {
             anim: anim.view(),
             cam_pos: self.camera.current_pos(),
         };
+        if !self.pre_states.is_empty() {
+            let view = self.camera.out;
+            let env = Env {
+                coll,
+                pad: &self.pad,
+                cam_yaw: view.yaw(),
+                cam_rows: view.rows,
+                mirror: self.options.mirror,
+                death_z: self.death_z,
+                mobys: None,
+                hero_moby: Some(self.hero.hero_moby(self.hero_moby)),
+                water: hooks.world.as_deref().and_then(|w| w.water()),
+                world: None,
+            };
+            for (id, play) in std::mem::take(&mut self.pre_states) {
+                self.hero.set_state(&mut crate::hero::states::Ctx { env: &env, anim: &mut *anim, rng: &mut self.rng, voice: None }, id, play);
+            }
+        }
         (hooks.mobys)(&mut self.mobys, &self.hero, &mut self.rng, &self.camera.out, coll, self.counter);
         // The classes' stores into the hero block (the flow 679's push, the lift's lockouts …) land before the hero
         // update, as in the game (moby_update::services::HeroFields).
@@ -388,6 +411,13 @@ impl Game {
             let moby = &mut self.mobys.mobys[self.hero.hero_moby(self.hero_moby)];
             hero_update_with_sounds(&mut self.hero, moby, &env, anim, &mut self.rng, hero_sounds)
         };
+        // The hero update on foot (`update_hero_frame` L01 0x228870, Ratchet's body) calls `begin_draw_frame` 0x1f7978 every
+        // frame: `InitViewContext` puts the view's tan(hfov/2) back to 0.63. Not while he rides a vehicle (state 0x32: the
+        // jets write their boost FOV every frame) nor outside gameplay (a scene's camera keeps its own). Without it the
+        // Pokitaru jet's boost FOV stayed after crashing it while boosting, until the next level.
+        if self.hero.mode == 0 && self.hero.state != 0x32 && self.hero.gadgets.game_mode == 0 {
+            if let Some(w) = hooks.world.as_deref_mut() { w.set_view_tan(crate::scene_player::GAMEPLAY_TAN_HALF_FOV.to_f32()); }
+        }
         let hm = self.hero.hero_moby(self.hero_moby);
         let hero_moby = Some(hm);
         // The walk's footprints query the scene as the moby loop left it (the hero update does not move other mobys).
@@ -468,8 +498,10 @@ impl Game {
             if let Some(data) = self.item_data.as_ref() {
                 // 0x1abe80, the targetable mobys of the moby loop's run list (crate::targeting), for the items' aim searches.
                 let targets = if self.hero.items.slot.item.is_some() { self.target_list(hooks.world.as_deref()) } else { Vec::new() };
-                // The thrown wrench's lines test the mobys' collision too (the doors: crate::hero::comet).
-                let scene = if self.hero.items.slot.detached != 0 { hooks.world.as_deref_mut().and_then(|w| w.scene(&self.mobys)) } else { None };
+                // The thrown wrench's lines test the mobys' collision too (the doors: crate::hero::comet), and so does the
+                // Bomb Glove's line of sight to its targets (crate::hero::gloves).
+                let lines = self.hero.items.slot.detached != 0 || self.hero.items.slot.id == crate::inventory::item::BOMB_GLOVE;
+                let scene = if lines { hooks.world.as_deref_mut().and_then(|w| w.scene(&self.mobys)) } else { None };
                 let scene = scene.as_ref().map(OwnedScene::scene);
                 let ienv = ItemEnv { data, pad: &self.pad, frame: self.counter as i32, hero_moby: self.hero_moby, coll: Some(coll), mobys: scene.as_ref(), camera: Some((self.camera.out.pos_f32(), self.camera.out.rows_f32()[0])), camera_up: Some(self.camera.out.rows_f32()[2]), targets: &targets };
                 items_update(&mut self.hero, &mut self.item_globals, &mut self.mobys, &*anim, &mut self.rng, &ienv, hits);
