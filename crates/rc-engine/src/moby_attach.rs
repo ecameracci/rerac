@@ -35,11 +35,13 @@
 //!    frame, after the items are attached: in body 0 every slot's first moby is scaled on rows +0xc0 / +0xd0
 //!    and pulled toward Ratchet's body point in x / y twice (the loop's j = 0 and j = 2), its second moby once
 //!    (j = 1: slot 1's right boot, slot 3's Clank, slot 4's Bolt Grabber); the hand item is the game's, already
-//!    squashed by `hologuise::squash_hand`. So the attach matrices here are taken from the hero moby's rows
-//!    *before* the tick's squash (the game scales those rows in place), and [`squash_item`] scales each item on
-//!    its own — the items shrink and grow with Ratchet. In a scene the actor loop's attachment ([`place_on_actor`])
-//!    comes after this and re-places the extras on the cutscene's Ratchet, so they are not squashed there: the
-//!    game's `update_cutscene_playback` (0x298f90) also runs the hero update, squash included, before its actor loop.
+//!    squashed by `hologuise::squash_hand`, and Clank's antenna glow 1204 is not one of the slots' mobys, so the
+//!    loop leaves it at the place `HeroItemsAttach` gave it. So the attach matrices here (and [`place_antenna`]'s)
+//!    are taken from the hero moby's rows *before* the tick's squash (the game scales those rows in place), and
+//!    [`squash_items`] then scales each item on its own — the items shrink and grow with Ratchet, the glow keeps
+//!    its full size. In a scene the actor loop's attachment ([`place_on_actor`]) comes after this and re-places
+//!    the extras on the cutscene's Ratchet, so they are not squashed there: the game's `update_cutscene_playback`
+//!    (0x298f90) also runs the hero update, squash included, before its actor loop.
 //!
 //! Draw: the item's palette is `MobyAnimEval` of its own state (after its advance), its record the usual
 //! `MobyInst` (crate::moby_render "Extra" block), in a record / palette buffer of its own.
@@ -79,8 +81,10 @@
 //! advances nothing).
 //!
 //! **Clank's antenna glow** (class 1204, `HeroItemsAttach` 0x22fec0: [`place_antenna`]) on Clank's joint list 6, its
-//! +0x90 pulsing (ticks(120)). The red dot over it (the hero's draw callback `0x229440`) and the other hero glow sprites
-//! are `rc_game::hero::glow`'s, drawn by crate::fx_draw at the points [`MobyAttach::glow_point`] gives.
+//! +0x90 pulsing (ticks(120)). It is attached before the Hologuise's squash, which never walks it, so it keeps its
+//! full size and pre-squash place ([`place_antenna`] runs before [`squash_items`]). The red dot over it (the hero's
+//! draw callback `0x229440`) and the other hero glow sprites are `rc_game::hero::glow`'s, drawn by crate::fx_draw at
+//! the points [`MobyAttach::glow_point`] gives.
 //!
 //! **Which entities may show.** The port keeps an entity set for every class that can be in the hand (every gadget
 //! class of the level) or on the back (the three packs), where the game has only the slots' mobys. So this module is
@@ -467,7 +471,7 @@ fn build(
     };
     // Placement before the first tick (the game creates the items in the first hero update).
     let host = &anim.instances[host_k];
-    place(&mut a, &level.mobys.anim[placed.class], &host.state, anim.snapshots[host_k].as_ref(), false, false, &[], None);
+    place(&mut a, &level.mobys.anim[placed.class], &host.state, anim.snapshots[host_k].as_ref(), false, false, &[], &[], None);
     for (slot, (item, class)) in a.items.iter_mut().zip(&geometry).enumerate() {
         let t = Transform::from_matrix(model_of(item));
         item.entities = a.extra.spawn(commands, level, class, slot as u32, t, item.name, meshes, images, materials);
@@ -498,7 +502,8 @@ fn clank_antenna_chain() -> Vec<u8> {
 /// `HeroItemsAttach` 0x22fec0 for Clank's antenna glow 1204: while Clank shows, `MobyAttachToJoint(clank, 6, M)`
 /// (Clank's joint list 6 through his pose with his modifier list, his rows, position and scale: `attach_matrix`),
 /// position = M.r3, rows = M's rows as they are (`MatrixCopyRows`), and the pulsing glow word
-/// (`rc_game::hero::idle::antenna_glow`, mode |= 0x10).
+/// (`rc_game::hero::idle::antenna_glow`, mode |= 0x10). Runs before [`squash_items`], like the game's attach, so the
+/// glow keeps its full size and pre-squash place.
 fn place_antenna(a: &mut MobyAttach, counter: Option<i32>) {
     let Some(ci) = a.items.iter().position(|i| i.o_class == CLANK_O_CLASS as i16) else { return };
     let Some(ai) = a.items.iter().position(|i| i.attach.slot == Slot::Antenna) else { return };
@@ -568,9 +573,8 @@ fn unsquash_rows(rows: &[V4; 3], factor: f32) -> [V4; 3] {
     out
 }
 
-/// `0x229158`'s item loop on an item this module placed: the slot's first moby is scaled (rows +0xc0 / +0xd0)
-/// and pulled toward the body point in x / y at the loop's j = 0 and again at j = 2, its second moby once (j = 1).
-/// The hand item is the game's (`hologuise::squash_hand`).
+/// One item of `0x229158`'s item loop: the slot's first moby is scaled (rows +0xc0 / +0xd0) and pulled toward
+/// the body point in x / y at the loop's j = 0 and again at j = 2, its second moby once (j = 1).
 fn squash_item(item: &mut Item, sq: Squash) {
     let passes = if is_second_moby(item) { 1 } else { 2 };
     for _ in 0..passes {
@@ -594,12 +598,13 @@ fn is_second_moby(item: &Item) -> bool {
 }
 
 /// Steps 2–3 of the tick (module docs): attach matrices from Ratchet's current state, then every item's
-/// position, (optionally) advance, rows, column normalisation, and the Hologuise's squash.
+/// position, (optionally) advance, rows and column normalisation. The Hologuise's squash runs after this, in
+/// [`squash_items`], so the attach matrices and [`place_antenna`] see the hero's rows before the tick's squash.
 /// `mods`: the host's joint-modifier list (moby +0x64; Ratchet's head look / lean when the game ticks).
 #[allow(clippy::too_many_arguments)]
-fn place(a: &mut MobyAttach, host_class: &MobyAnimClass, host: &AnimState, snap: Option<&MobyFrame>, advance_back: bool, advance_hand: bool, mods: &[moby_anim::JointModifier], squash: Option<Squash>) {
+fn place(a: &mut MobyAttach, host_class: &MobyAnimClass, host: &AnimState, snap: Option<&MobyFrame>, advance_back: bool, advance_hand: bool, layers: &[moby_anim::PoseLayer], mods: &[moby_anim::JointModifier], squash: Option<Squash>) {
     let chains: Vec<&[u8]> = a.chains.iter().map(|c| c.1.as_slice()).collect();
-    let ps = moby_anim::evaluate_chains_posed(host_class, host, snap, &chains, &[], mods);
+    let ps = moby_anim::evaluate_chains_posed(host_class, host, snap, &chains, layers, mods);
     let host_rows = squash.map_or(a.host_rows, |s| unsquash_rows(&a.host_rows, s.factor));
     let ws: Vec<(usize, Rows)> = a.chains.iter().zip(&ps).map(|(c, p)| (c.0, moby_anim::attach_matrix(p, &host_rows, a.host_pos, a.host_scale))).collect();
     for item in &mut a.items {
@@ -615,9 +620,20 @@ fn place(a: &mut MobyAttach, host_class: &MobyAnimClass, host: &AnimState, snap:
         let mut rows: [V4; 3] = [0, 1, 2].map(|i| w[i].map(f32::to_bits));
         if item.attach.normalise { moby_anim::normalise_columns(&mut rows); }
         item.rows = rows;
-        // The hand item is the game's, placed later in `update` from its moby; `squash_hand` already squashed it.
-        if let Some(sq) = squash.filter(|_| item.attach.slot != Slot::Hand) { squash_item(item, sq); }
     }
+}
+
+/// Whether the Hologuise's item loop (`0x229158`) touches this item: every slot's own mobys, but not the hand item
+/// (the game's `squash_hand` already did it), the Swingshot's hook (a moby of its own) or Clank's antenna glow 1204
+/// (attached to Clank before the squash; the loop walks the item slots only, so it keeps full size).
+fn takes_squash(item: &Item) -> bool {
+    !matches!(item.attach.slot, Slot::Hand | Slot::Hook | Slot::Antenna)
+}
+
+/// The end of the tick: `0x229158`'s item loop on the items [`place`] just attached (module docs step 4). The
+/// hand item, the Swingshot's hook and Clank's antenna glow are not its own and are left alone ([`takes_squash`]).
+fn squash_items(a: &mut MobyAttach, sq: Squash) {
+    for item in a.items.iter_mut().filter(|i| takes_squash(i)) { squash_item(item, sq); }
 }
 
 /// One 60 Hz tick, after Ratchet's `MobyAnimAdvance` (crate::moby_anim tick in FixedUpdate). With the game
@@ -643,8 +659,8 @@ fn update(
     // body (`0x22a110` → `0x2486c0`, rc_game::hero::bodies: Clank or Giant Clank is the hero, Ratchet and his items hidden).
     let fp = play.as_ref().is_some_and(|p| p.game.hero.f13f5 != 0 || p.game.hero.mode != 0);
     // `FUN_002487a8` hides the hand item: the wrench in the water or on a ledge (0x1413fe), any item at the gold bolt's
-    // pickup (0x1413ff).
-    let hand_off = play.as_ref().is_some_and(|p| p.game.hero.hand_hidden());
+    // pickup (0x1413ff); decided in the write-back, a tick behind 0x1413fe (`Hero::hand_off`).
+    let hand_off = play.as_ref().is_some_and(|p| p.game.hero.hand_off);
     // The Swingshot's hook (a moby of its own in the game: advanced every tick, placed by the item's update).
     let hook = play.as_ref().and_then(|p| p.game.hero.swing.item.hook.clone().filter(|_| p.game.hero.swing.item.alive));
     // The back mobys' animation state and pose snapshot as the hero update left them (item slot 3: pack
@@ -684,14 +700,20 @@ fn update(
     }
     let (k, class) = (a.host_k, &level.0.mobys.anim[a.host_class]);
     let mods = play.as_ref().map(|p| p.game.mobys.mobys[p.game.hero_moby].joint_mods.clone()).unwrap_or_default();
-    // The Hologuise's squash as the tick left it (the factor only exists in body 0): the items this module places
-    // scale and pull with Ratchet's moby (module docs step 4).
+    // His pose layers (the moby +0x60 list: the weapon arms, the face) as his draw has them (crate::gameplay): the
+    // attach matrices (`MobyAnimEvalChain`) and the worn items' local pose (`MobyAnimDecodeLocalPose`) walk them too.
+    let layers = play.as_ref().map(|p| rc_game::hero::anim::pose_layers_with(&p.game.hero.weapons.layers, &p.ratchet.layer_joints, &p.ratchet.hold)).unwrap_or_default();
+    // The Hologuise's squash as the tick left it (the factor only exists in body 0): the attach matrices come from
+    // the hero moby's rows before it, then the item loop scales and pulls the items with Ratchet (module docs step 4).
     let squash = play.as_ref().and_then(|p| {
         let h = &p.game.hero;
         Some(Squash { factor: h.gadgets.disguise.factor?, body: rc_game::hero::physics::to_f32x3(h.body_point) })
     });
-    place(a, class, &anim.instances[k].state, anim.snapshots[k].as_ref(), back.is_none(), hand.is_none(), &mods, squash);
+    place(a, class, &anim.instances[k].state, anim.snapshots[k].as_ref(), back.is_none(), hand.is_none(), &layers, &mods, squash);
     place_antenna(a, play.as_ref().map(|p| p.game.hero.idle.counter));
+    // The item loop runs last, after `HeroItemsAttach` (and so after the antenna): the items shrink and grow with
+    // Ratchet, while the glow keeps the place and size the attach gave it.
+    if let Some(sq) = squash { squash_items(a, sq); }
     // `FUN_0024a0e8`: in a scene (mode 2) or the take-off / landing (mode 6) Ratchet is a scene actor, and the extras
     // attach to it instead of the hidden hero moby (`HeroComputeAttachMatrices(actor)` → `HeroItemsAttach`, which
     // attaches only item slots 4 / 5 in those modes).
@@ -762,7 +784,7 @@ fn update(
                 _ if item.o_class == SONIC_SUMMONER_O_CLASS => (&worn::SONIC_SUMMONER_JOINTS, 6),
                 _ => (&worn::HEAD_JOINTS, 0),
             };
-            item.snapshot = worn::pose_from_host(class, &host_state, host_snap.as_ref(), &item.anim, joints, extra);
+            item.snapshot = worn::pose_from_host(class, &host_state, host_snap.as_ref(), &layers, &mods, &item.anim, joints, extra);
             item.state = worn::posed_state();
         }
     }
@@ -1434,7 +1456,8 @@ mod tests {
     /// `0x229158`'s item loop: the attach matrices come from Ratchet's rows before the squash, then each item's
     /// rows +0xc0 / +0xd0 are scaled and its position pulled toward the body point in x / y — twice for the
     /// slot's first moby (the pack), once for its second (slot 1's right boot, slot 3's Clank, slot 4's Bolt
-    /// Grabber) — so the items shrink and grow with Ratchet.
+    /// Grabber) — so the items shrink and grow with Ratchet. The hand item, the hook and Clank's antenna glow
+    /// are not the loop's (`takes_squash`).
     #[test]
     fn the_hologuise_squash_scales_the_attached_items() {
         let class = MobyAnimClass { joint_count: 0, skeleton: vec![], rest: vec![], parent_word: vec![], sequences: vec![] };
@@ -1456,6 +1479,13 @@ mod tests {
         assert!(!is_second_moby(&item(Slot::Extra, 7, EXTRAS[0].1 as i16)), "the Map-o-Matic is slot 4's moby");
         assert!(!is_second_moby(&item(Slot::Extra, 8, EXTRAS[2].1 as i16)), "the Persuader is slot 5's moby");
         assert!(!is_second_moby(&item(Slot::Head, 4, 433)));
+        // Not the item loop's: the hand item (`squash_hand` already squashed it), the Swingshot's hook (a moby of
+        // its own) and Clank's antenna glow 1204 (attached before the squash, so it keeps full size).
+        assert!(!takes_squash(&item(Slot::Hand, 0, WRENCH_O_CLASS_I16)));
+        assert!(!takes_squash(&item(Slot::Hook, 1, SWINGSHOT_HOOK_O_CLASS as i16)));
+        assert!(!takes_squash(&item(Slot::Antenna, BACK_ATTACH, ANTENNA_O_CLASS as i16)));
+        assert!(takes_squash(&item(Slot::Back, BACK_ATTACH, CLANK_O_CLASS as i16)));
+        assert!(takes_squash(&item(Slot::Feet, worn::RIGHT_BOOT_ATTACH, 195)));
         let f = 0.5;
         let body = [1.0, 2.0, 3.0];
         let identity = [[1.0f32, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]].map(|r| r.map(f32::to_bits));
