@@ -1,5 +1,5 @@
 //! **Port-only** (not in the game): the "Port Options" page, for settings the PS2 never had (the graphics options and
-//! their preset, anti-aliasing, detail and draw distance, ambient occlusion, water, particles, foliage, the clouds, the lighting (the
+//! their preset, anti-aliasing, detail and draw distance, ambient occlusion, water, particles, foliage, the model detail, the clouds, the lighting (the
 //! game's shadows, sun shadows, or sun shadows with the advanced lighting effects),
 //! the gameplay and cutscene aspects, the render resolution, fullscreen, the FPS limit, frame smoothing and, last, the gameplay rows
 //! Strafing and Quick Select, the ring's hold of the world, the mouse look's direction and speed and, last, the Controller
@@ -105,7 +105,7 @@ pub const ROW_STEP: i32 = 20;
 /// The frame mobys' stretch for page `page` ([`super::frame::FrameMobys::stretch`]): the list panel on the port pages.
 pub fn panel_stretch(page: u32) -> [Option<[i32; 2]>; super::frame::SLOTS] {
     let mut s = [None; super::frame::SLOTS];
-    if [PAGE, FRONT_PAGE, GMS_PAGE, GMS_PAGE_FRONT, super::mods::PAGE].contains(&page) { s[LIST_SLOT] = Some(LIST_ROWS); }
+    if [PAGE, FRONT_PAGE, GMS_PAGE, GMS_PAGE_FRONT, super::mods::PAGE, super::update::PAGE].contains(&page) { s[LIST_SLOT] = Some(LIST_ROWS); }
     s
 }
 
@@ -142,6 +142,7 @@ pub mod text {
     pub const CUSTOM: i32 = -0x163;
     pub const HUD: i32 = -0x170;
     pub const SHARP_PIXELS: i32 = -0x171;
+    pub const HIGH_RESOLUTION: i32 = -0x172;
     pub const TEXTURES: i32 = -0x180;
     pub const SMOOTH: i32 = -0x181;
     pub const SHARP: i32 = -0x182;
@@ -170,6 +171,7 @@ pub mod text {
     pub const CLOUDS: i32 = -0x1be;
     pub const MODERATE: i32 = -0x1b5;
     pub const LUSH: i32 = -0x1b6;
+    pub const MODEL_DETAIL: i32 = -0x1bd;
     pub const STRAFING: i32 = -0x1c0;
     pub const CLASSIC: i32 = -0x1c1;
     pub const MODERN: i32 = -0x1c2;
@@ -185,6 +187,12 @@ pub mod text {
     pub const MODS: i32 = -0x200;
     pub const MODS_NONE: i32 = -0x201;
     pub const MODS_WHERE: i32 = -0x202;
+    /// The main menu's Update page (super::super::update).
+    pub const UPDATE_ENTRY: i32 = -0x400;
+    pub const UPDATE_CURRENT: i32 = -0x401;
+    pub const UPDATE_NEWEST: i32 = -0x402;
+    pub const UPDATE_ACTION: i32 = -0x403;
+    pub const BACK: i32 = -0x404;
     /// "On" / "Off", capitalised like the page's other values (the game's own 20314 / 20315, the Subtitles /
     /// HelpDesk toggle values, are lower case).
     pub const ON: i32 = -0x103;
@@ -259,6 +267,7 @@ If you like, you may change your options on the Port Options screen, under Contr
             CUSTOM => b"Custom",
             HUD => b"HUD",
             SHARP_PIXELS => b"Sharp pixels",
+            HIGH_RESOLUTION => b"High resolution",
             TEXTURES => b"Texture filtering",
             SMOOTH => b"Smooth",
             SHARP => b"Sharp",
@@ -287,6 +296,7 @@ If you like, you may change your options on the Port Options screen, under Contr
             QUALITY => b"Quality",
             BALANCED => b"Balanced",
             PERFORMANCE => b"Performance",
+            MODEL_DETAIL => b"Ratchet model detail",
             STRAFING => b"Strafing",
             QUICK_SELECT => b"Quick Select",
             MOUSE_X => b"Mouse left / right",
@@ -303,6 +313,11 @@ If you like, you may change your options on the Port Options screen, under Contr
             MODS => b"Mods",
             MODS_NONE => b"No mods found",
             MODS_WHERE => b"Put mods in the mods folder beside the game",
+            UPDATE_ENTRY => b"Update",
+            UPDATE_CURRENT => b"This version",
+            UPDATE_NEWEST => b"Newest",
+            UPDATE_ACTION => b"Update",
+            BACK => b"Back",
             VIBRATION => b"Vibration",
             VIBRATION_STRENGTH => b"Vibration strength",
             LOW => b"Low",
@@ -362,6 +377,8 @@ pub enum Setting {
     Particles,
     /// Extra plants on the grassy ground: value 0 Original (the level's own only), 1 Moderate, 2 Lush.
     Foliage,
+    /// Ratchet's model: value 0 Original (the game's mesh), 1 Enhanced (refined with curved triangles at load).
+    ModelDetail,
     /// The render resolution (the engine's game frame): value 0 fits the window, 1..5 a height of 416 (the PS2's lines), 720, 1080, 1440 or 2160 (the width
     /// follows the Aspect row).
     Resolution,
@@ -374,7 +391,8 @@ pub enum Setting {
     /// The cutscenes' aspect (the story scenes, the letterboxed cutaways, the ship's take-off / landing), the same
     /// values. The frame takes the wider of the two; the narrower view is pillarboxed in it.
     CutsceneAspect,
-    /// How the game's 2D screen reaches the frame: value 0 Original (scaled smoothly, as on a TV), 1 Sharp pixels.
+    /// How the game's 2D screen reaches the frame: value 0 Original (scaled smoothly, as on a TV), 1 Sharp pixels, 2 High resolution
+    /// (drawn at the frame's resolution).
     Hud,
     /// How world textures pick their detail level: value 0 Original (the PS2's rule), 1 Smooth, 2 Sharp.
     Textures,
@@ -442,13 +460,14 @@ pub const ENTRIES: &[Entry] = &[
     Entry { setting: Setting::Detail, label: text::DETAIL, values: &[text::ORIGINAL, text::FAR, text::FARTHER, text::MAXIMUM] },
     Entry { setting: Setting::DrawDistance, label: text::DRAW_DISTANCE, values: &[text::ORIGINAL, text::FAR, text::FARTHER, text::MAXIMUM] },
     Entry { setting: Setting::Textures, label: text::TEXTURES, values: &[text::ORIGINAL, text::SMOOTH, text::SHARP] },
-    Entry { setting: Setting::Hud, label: text::HUD, values: &[text::ORIGINAL, text::SHARP_PIXELS] },
+    Entry { setting: Setting::Hud, label: text::HUD, values: &[text::ORIGINAL, text::SHARP_PIXELS, text::HIGH_RESOLUTION] },
     Entry { setting: Setting::AmbientOcclusion, label: text::AMBIENT_OCCLUSION, values: &[text::ORIGINAL, text::ON] },
     Entry { setting: Setting::Particles, label: text::PARTICLES, values: &[text::ORIGINAL, text::SOFT, text::ENHANCED] },
     Entry { setting: Setting::Lighting, label: text::LIGHTING, values: &[text::ORIGINAL, text::SIMPLE, text::ENHANCED] },
     Entry { setting: Setting::Clouds, label: text::CLOUDS, values: &[text::OFF, text::ON] },
     Entry { setting: Setting::Water, label: text::WATER, values: &[text::ORIGINAL, text::ENHANCED] },
     Entry { setting: Setting::Foliage, label: text::FOLIAGE, values: &[text::ORIGINAL, text::MODERATE, text::LUSH] },
+    Entry { setting: Setting::ModelDetail, label: text::MODEL_DETAIL, values: &[text::ORIGINAL, text::ENHANCED] },
     Entry { setting: Setting::Strafing, label: text::STRAFING, values: &[text::CLASSIC, text::MODERN] },
     Entry { setting: Setting::QuickSelect, label: text::QUICK_SELECT, values: &[text::CLASSIC, text::MODERN] },
     Entry { setting: Setting::MouseX, label: text::MOUSE_X, values: &[text::NORMAL, text::INVERTED] },
@@ -467,7 +486,7 @@ pub const ENTRIES: &[Entry] = &[
 /// The Port Options page shows [`ENTRIES`]`[..PORT_ROWS]` (the last one the Controller row); the Controller page the
 /// rest, then the connected controllers. Every row's value lives in the Port Options list ([`PortList::values`], by
 /// [`ENTRIES`] index), whichever page shows it.
-pub const PORT_ROWS: usize = 25;
+pub const PORT_ROWS: usize = 26;
 
 /// The list's run-time state: cursor, each row's value index and each row's selectable values (bit k = value k;
 /// a missing entry = all).
@@ -548,8 +567,9 @@ pub fn front_options_insert(list: &mut Vec<Item>, it: Item) {
     list.insert(at, it);
 }
 
-/// An Options entry the port inserted (Port Options, Mods): not in the disc list, so it has no `options_ss` picture.
-pub fn is_port_item(it: &Item) -> bool { it.label == text::ENTRY as i16 || it.label == text::MODS as i16 }
+/// An Options entry the port inserted (Port Options, Mods, Update): not in the disc list, so it has no
+/// `options_ss` picture.
+pub fn is_port_item(it: &Item) -> bool { [text::ENTRY, text::MODS, text::UPDATE_ENTRY].contains(&(it.label as i32)) }
 
 /// The picture an Options list shows for its cursor: [`PICTURE`] on a port entry, else the disc entry's own (the
 /// cursor less the port entries above it, so Quit Game keeps its picture below Port Options).

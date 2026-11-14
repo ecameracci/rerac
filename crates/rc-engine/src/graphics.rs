@@ -7,7 +7,7 @@
 //! | Option | Values | Consumer |
 //! |---|---|---|
 //! | [`AntiAliasing`] | Original (the game's own softening passes: the AA blit and the display copy), Off, 2x / 4x / 8x multisampling | crate::aa_blit, crate::render_settings (the samples) |
-//! | [`Hud`] | Original (the 512×416 HUD scaled up smoothly, as the TV showed it), Sharp pixels | crate::hud_render composite |
+//! | [`Hud`] | Original (the 512×416 HUD scaled up smoothly, as the TV showed it), Sharp pixels, High resolution (drawn at the frame's resolution) | crate::hud_render composite |
 //! | [`Textures`] | Original (the GS mip rule, one level per pixel), Smooth (blended levels), Sharp (the GPU's own choice, anisotropic) | the world shaders, through crate::game_camera's shared fog buffer |
 //! | [`Detail`] | Original (the game's LOD distances), Far (×2), Farther (×4), Maximum (the full model whenever it is drawn) | crate::tfrag_lod, crate::tie_lod, crate::moby_render, crate::shrub_render (drawing only: the game logic keeps its own decisions) |
 //! | [`DrawDistance`] | Original (the game's draw distances), Far (×1.5), Farther (×2), Maximum (×4), the new end faded | crate::tfrag_lod, crate::tie_lod, crate::shrub_render, crate::moby_lod (their drawn flag stays the game's), crate::game_camera (the far plane); not particles (their drawn flag is game state) |
@@ -15,6 +15,7 @@
 //! | [`Water`] | Original (the GS blend of the water textures), Enhanced (clear by depth, reflections, a sun glint, foam at the shore; under water: absorption, caustics, light shafts) | crate::water_render, crate::sea_water (the seas), crate::scene_copy, crate::underwater_render |
 //! | [`Particles`] | Original (sprites cut where they meet the world), Soft (faded by their depth in front of it), Enhanced (Soft, bright effects light the world, glowing stars, restyled rain and snow, lit billowing smoke) | crate::particle_render (its `SMOKE`), crate::scene_copy, crate::particle_lights, crate::sky_stars, crate::flight_render, crate::weather_render |
 //! | [`Foliage`] | Original (the level's own plants only), Moderate, Lush (grass clumps on the grassy ground and more of the level's small plants) | crate::foliage |
+//! | [`ModelDetail`] (the "Ratchet model detail" row) | Original (the game's mesh), Enhanced (Ratchet refined with curved triangles at load) | crate::model_detail, crate::moby_render |
 //! | [`Lighting`] | Original (the game's shadows), Simple (sun shadows in their place), Enhanced (Simple's shadows and every advanced lighting effect) | crate::shadow_render, crate::sun_shadow, crate::tie_lod ([`Lighting::game_shadows`], [`Lighting::sun_shadows`]); crate::sun_rays, crate::gi_render, crate::post_render ([`Lighting::enhanced`]; the rays also per level, [`LightShafts`]) |
 //! | [`Upscaler`] | Off (the 3D drawn at the frame's resolution), Ultra quality / Quality / Balanced / Performance (drawn at 1/1.3 .. 1/2 of it per axis and upscaled FSR 1-style; the HUD and menus at the frame's) | crate::upscale |
 //! | [`Clouds`] | Off (the game's painted sky), On (3D clouds over the open daylight skies of `cloud_render::CLOUD_LEVELS`) | crate::cloud_render |
@@ -26,7 +27,7 @@
 //!
 //! Persisted in the port settings file (`crate::render_settings::save_key`); `RC_HUD`-style switches are not used here
 //! (`RC_HUD=0` already hides the HUD): `RC_GFX_ANTI_ALIASING`, `RC_GFX_HUD`, `RC_GFX_TEXTURES`, `RC_GFX_DETAIL`,
-//! `RC_GFX_DRAW_DISTANCE`, `RC_GFX_AMBIENT_OCCLUSION`, `RC_GFX_WATER`, `RC_GFX_PARTICLES`, `RC_GFX_FOLIAGE`, `RC_GFX_CLOUDS`,
+//! `RC_GFX_DRAW_DISTANCE`, `RC_GFX_AMBIENT_OCCLUSION`, `RC_GFX_WATER`, `RC_GFX_PARTICLES`, `RC_GFX_FOLIAGE`, `RC_GFX_CLOUDS`, `RC_GFX_MODEL_DETAIL`,
 //! `RC_GFX_LIGHTING`, `RC_GFX_UPSCALER`, `RC_GFX_FRAME_SMOOTHING` (the keys below), `RC_MSAA=0|2|4|8` (Anti-aliasing Off or that
 //! multisampling), `RC_SHADOWS=1|dynamic` (Lighting Original / Enhanced, the older switch; `0`: crate::shadow_render)
 //! and `RC_GFX_PRESET=original|low|medium|high` (the file's options ignored; `enhanced`, the older preset, is Medium)
@@ -102,15 +103,19 @@ pub enum Hud {
     Original,
     /// Each game pixel a hard square (integer-looking pixel doubling).
     SharpPixels,
+    /// Port-only: drawn at the frame's own resolution (crate::hud_render: the layer's target is the frame's size, its
+    /// textures magnified with a bicubic filter), so text, icons and edges stay crisp at 1440p and 4K.
+    HighResolution,
 }
 
 impl GfxOption for Hud {
-    const ALL: &'static [Self] = &[Hud::Original, Hud::SharpPixels];
+    const ALL: &'static [Self] = &[Hud::Original, Hud::SharpPixels, Hud::HighResolution];
     const KEY: &'static str = "hud";
     fn key(self) -> &'static str {
         match self {
             Hud::Original => "original",
             Hud::SharpPixels => "sharp",
+            Hud::HighResolution => "high",
         }
     }
 }
@@ -277,6 +282,12 @@ two_valued!(
     Clouds, "clouds",
     /// Ray-marched cumulus over the open daylight skies (crate::cloud_render).
     On = "on"
+);
+two_valued!(
+    /// Ratchet's model: Original is the game's mesh.
+    ModelDetail, "model_detail",
+    /// Ratchet refined with curved triangles at load, his normals smoothed across UV seams (crate::model_detail).
+    Enhanced = "enhanced"
 );
 /// How smoke and other sprites meet the world, and whether bright effects light it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -570,6 +581,7 @@ pub struct GraphicsSettings {
     pub foliage: Foliage,
     pub upscaler: Upscaler,
     pub clouds: Clouds,
+    pub model: ModelDetail,
 }
 
 impl GraphicsSettings {
@@ -581,7 +593,7 @@ impl GraphicsSettings {
         GraphicsSettings {
             // 4x: the best count every GPU offers (crate::render_settings clamps a count a device lacks).
             aa: pick(p, [AntiAliasing::Original, AntiAliasing::Off, AntiAliasing::X4, AntiAliasing::X4]),
-            hud: pick(p, [Hud::Original; 4]),
+            hud: pick(p, [Hud::Original, Hud::Original, Hud::HighResolution, Hud::HighResolution]),
             textures: pick(p, [Textures::Original, Textures::Smooth, Textures::Smooth, Textures::Sharp]),
             detail: pick(p, [Detail::Original, Detail::Original, Detail::Far, Detail::Farther]),
             draw: pick(p, [DrawDistance::Original, DrawDistance::Original, DrawDistance::Far, DrawDistance::Farther]),
@@ -592,6 +604,7 @@ impl GraphicsSettings {
             foliage: pick(p, [Foliage::Original, Foliage::Original, Foliage::Moderate, Foliage::Lush]),
             upscaler: pick(p, [Upscaler::Off, Upscaler::Balanced, Upscaler::Off, Upscaler::Off]),
             clouds: pick(p, [Clouds::Original, Clouds::Original, Clouds::Original, Clouds::On]),
+            model: pick(p, [ModelDetail::Original, ModelDetail::Original, ModelDetail::Original, ModelDetail::Enhanced]),
         }
     }
 
@@ -599,7 +612,7 @@ impl GraphicsSettings {
     pub fn preset(&self) -> Preset { Preset::CHOSEN.into_iter().find(|&p| self.with_preset(p) == *self).unwrap_or(Preset::Custom) }
 
     /// Every settings-file key and value: the preset's, then each option's.
-    pub fn keys(&self) -> [(&'static str, &'static str); 13] {
+    pub fn keys(&self) -> [(&'static str, &'static str); 14] {
         fn kv<T: GfxOption>(v: T) -> (&'static str, &'static str) { (T::KEY, v.key()) }
         [
             (Preset::KEY, self.preset().key()),
@@ -615,6 +628,7 @@ impl GraphicsSettings {
             kv(self.foliage),
             kv(self.upscaler),
             kv(self.clouds),
+            kv(self.model),
         ]
     }
 
@@ -636,6 +650,7 @@ impl GraphicsSettings {
             foliage: val(&load, base.foliage),
             upscaler: val(&load, base.upscaler),
             clouds: val(&load, base.clouds),
+            model: val(&load, base.model),
         }
     }
 
@@ -660,6 +675,7 @@ impl GraphicsSettings {
         s.foliage = env_value(s.foliage);
         s.upscaler = env_value(s.upscaler);
         s.clouds = env_value(s.clouds);
+        s.model = env_value(s.model);
         s
     }
 
@@ -705,7 +721,7 @@ impl Plugin for GraphicsPlugin {
             .init_resource::<LightShafts>()
             .add_plugins(bevy::render::extract_resource::ExtractResourcePlugin::<GraphicsSettings>::default())
             .add_plugins(bevy::render::extract_resource::ExtractResourcePlugin::<LightShafts>::default())
-            .add_systems(PreUpdate, (apply_detail, apply_samples, apply_draw_distance))
+            .add_systems(PreUpdate, (apply_detail, apply_samples, apply_draw_distance, crate::model_detail::apply_model_detail))
             .add_systems(PostUpdate, update_shafts);
     }
 }
@@ -763,6 +779,8 @@ mod tests {
         assert_eq!(o.with_preset(Preset::Low).upscaler, Upscaler::Balanced);
         // Clouds: On on High only.
         assert_eq!(Preset::CHOSEN.map(|p| o.with_preset(p).clouds), [Clouds::Original, Clouds::Original, Clouds::Original, Clouds::On]);
+        // Ratchet model detail: Enhanced on High only.
+        assert_eq!(Preset::CHOSEN.map(|p| o.with_preset(p).model), [ModelDetail::Original, ModelDetail::Original, ModelDetail::Original, ModelDetail::Enhanced]);
         // Any one option changed from a preset makes it Custom; Custom keeps the options.
         for p in Preset::CHOSEN {
             let s = o.with_preset(p);
@@ -773,6 +791,7 @@ mod tests {
                 GraphicsSettings { aa: AntiAliasing::X8, ..s },
                 GraphicsSettings { upscaler: if s.upscaler.on() { Upscaler::Off } else { Upscaler::Performance }, ..s },
                 GraphicsSettings { clouds: if s.clouds == Clouds::On { Clouds::Original } else { Clouds::On }, ..s },
+                GraphicsSettings { model: if s.model == ModelDetail::Enhanced { ModelDetail::Original } else { ModelDetail::Enhanced }, ..s },
                 GraphicsSettings { lighting: if s.lighting.enhanced() { Lighting::Original } else { Lighting::Enhanced }, ..s },
             ];
             for c in changed {
@@ -818,7 +837,7 @@ mod tests {
     fn a_stored_preset_fills_the_options_the_file_lacks() {
         // An option added after the file was written takes the stored preset's value.
         let high = GraphicsSettings::default().with_preset(Preset::High);
-        let text: String = written("", &high).lines().filter(|l| !l.starts_with("foliage") && !l.starts_with("upscaler") && !l.starts_with("clouds")).map(|l| format!("{l}\n")).collect();
+        let text: String = written("", &high).lines().filter(|l| !l.starts_with("foliage") && !l.starts_with("upscaler") && !l.starts_with("clouds") && !l.starts_with("model_detail")).map(|l| format!("{l}\n")).collect();
         assert_eq!(GraphicsSettings::from_file(reader(&text)), high);
         // The options in the file win over the stored preset (a hand edit): Custom.
         let edited = text.replace("water = enhanced", "water = original");
@@ -903,6 +922,8 @@ mod tests {
         for &v in FrameSmoothing::ALL { assert_eq!(FrameSmoothing::parse(v.key()), Some(v)); }
         assert_eq!(FrameSmoothing::ALL[0], FrameSmoothing::default());
         for &v in Foliage::ALL { assert_eq!(Foliage::parse(v.key()), Some(v)); }
+        assert_eq!(ModelDetail::ALL.iter().map(|v| v.key()).collect::<Vec<_>>(), ["original", "enhanced"]);
+        for &v in ModelDetail::ALL { assert_eq!(ModelDetail::parse(v.key()), Some(v)); }
         assert!(!AmbientOcclusion::Original.on() && Water::Enhanced.on());
         assert_eq!(Particles::parse("enhanced"), Some(Particles::Enhanced));
         assert!(Particles::Enhanced.on() && Particles::Enhanced.lights() && !Particles::Soft.lights());
