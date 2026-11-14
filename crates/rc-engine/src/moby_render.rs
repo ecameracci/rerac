@@ -56,6 +56,7 @@ use crate::gs_state::{self, AlphaRange, GsPass};
 use crate::level_load::LoadedLevel;
 use crate::moby_anim::{self, AnimInstance, MobyAnim};
 use crate::moby_light::{self, GpuLights, MobyLighting};
+use crate::model_detail;
 use crate::moby_lod::{self, ProcInput, ProcPick};
 use crate::tfrag_render::game_to_bevy;
 use anyhow::{Context, Result};
@@ -841,6 +842,63 @@ fn glow_from(class: &LevelMobyClass, low: bool) -> usize {
 /// (moby.wgsl: the identity). The vertex id is the (packet, vertex) index in `lod` (the CPU colour table only
 /// covers the high LOD, and `RC_MOBY_CPU_LIGHT=1` keeps every instance on it).
 fn build_parts(class: &LevelMobyClass, lod: &[MobySubmesh], identity: bool, glow_from: usize, meshes: &mut Assets<Mesh>) -> (Vec<Part>, u8) {
+    let (raw, max_joint) = part_meshes(class, lod, identity, glow_from);
+    (raw.iter().map(|r| r.part(class, meshes.add(moby_mesh(&r.mesh)))).collect(), max_joint)
+}
+
+/// A part's vertex data before it is a mesh asset ([`build_parts`], crate::model_detail).
+struct RawPart {
+    texture: usize,
+    glow: bool,
+    mesh: model_detail::PartMesh,
+    alpha: Option<AlphaRange>,
+    tris: usize,
+}
+
+impl RawPart {
+    fn part(&self, class: &LevelMobyClass, mesh: Handle<Mesh>) -> Part {
+        Part { texture: self.texture, glow: self.glow, mesh, mult_alpha: self.alpha.unwrap_or(AlphaRange::OPAQUE), triangles: self.tris, caster: class.class.header.shadow != 0 }
+    }
+}
+
+/// The mesh of a part's vertex data.
+fn moby_mesh(b: &model_detail::PartMesh) -> Mesh {
+    Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, b.pos.clone())
+        .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, b.uv.clone())
+        .with_inserted_attribute(ATTRIBUTE_MOBY_SKIN, VertexAttributeValues::Uint32x4(b.skin.clone()))
+        .with_inserted_attribute(ATTRIBUTE_MOBY_VID, VertexAttributeValues::Uint32(b.vid.clone()))
+        .with_inserted_indices(Indices::U32(b.idx.clone()))
+}
+
+/// A class's high-LOD parts and the highest joint they skin to. Ratchet's ([`model_detail::HERO_CLASS`]) are built
+/// twice, the game's and Ratchet model detail Enhanced's (crate::model_detail), and registered so the option swaps them.
+fn build_high(class: &LevelMobyClass, meshes: &mut Assets<Mesh>) -> (Vec<Part>, u8) {
+    if class.o_class != model_detail::HERO_CLASS { return build_parts(class, &class.class.high_lod, false, glow_from(class, false), meshes); }
+    let (raw, max_joint) = part_meshes(class, &class.class.high_lod, false, glow_from(class, false));
+    let t0 = Instant::now();
+    let input: Vec<model_detail::PartMesh> = raw.iter().map(|r| r.mesh.clone()).collect();
+    let (smooth, cached) = model_detail::subdivide_cached(&input);
+    if !cached {
+        let tris = |v: &[model_detail::PartMesh]| v.iter().map(|m| m.idx.len() / 3).sum::<usize>();
+        let (segments, crease) = model_detail::params();
+        println!(
+            "mobys: class {} smooth build: {} -> {} triangles ({segments} segments, crease {crease}°) in {:.1} ms",
+            class.o_class, tris(&input), tris(&smooth), t0.elapsed().as_secs_f64() * 1e3
+        );
+    }
+    let shown = model_detail::smooth_now();
+    let parts = raw.iter().zip(smooth).map(|(r, s)| {
+        let (original, smooth) = (moby_mesh(&r.mesh), moby_mesh(&s));
+        let h = meshes.add(if shown { smooth.clone() } else { original.clone() });
+        model_detail::register(meshes, h.id(), original, smooth, shown);
+        r.part(class, h)
+    }).collect();
+    (parts, max_joint)
+}
+
+/// [`build_parts`]' vertex data, one per (texture, glow) in key order.
+fn part_meshes(class: &LevelMobyClass, lod: &[MobySubmesh], identity: bool, glow_from: usize) -> (Vec<RawPart>, u8) {
     #[derive(Default)]
     struct B { pos: Vec<[f32; 3]>, uv: Vec<[f32; 2]>, skin: Vec<[u32; 4]>, vid: Vec<u32>, idx: Vec<u32>, remap: HashMap<(usize, u32), u32>, alpha: Option<AlphaRange>, tris: usize }
     let mults = moby_light::vertex_multipliers(lod);
@@ -881,14 +939,12 @@ fn build_parts(class: &LevelMobyClass, lod: &[MobySubmesh], identity: bool, glow
     }
     let parts = by_tex
         .into_iter()
-        .map(|((texture, glow), b)| {
-            let mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD)
-                .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, b.pos)
-                .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, b.uv)
-                .with_inserted_attribute(ATTRIBUTE_MOBY_SKIN, VertexAttributeValues::Uint32x4(b.skin))
-                .with_inserted_attribute(ATTRIBUTE_MOBY_VID, VertexAttributeValues::Uint32(b.vid))
-                .with_inserted_indices(Indices::U32(b.idx));
-            Part { texture, glow, mesh: meshes.add(mesh), mult_alpha: b.alpha.unwrap_or(AlphaRange::OPAQUE), triangles: b.tris, caster: class.class.header.shadow != 0 }
+        .map(|((texture, glow), b)| RawPart {
+            texture,
+            glow,
+            mesh: model_detail::PartMesh { pos: b.pos, uv: b.uv, skin: b.skin, vid: b.vid, idx: b.idx },
+            alpha: b.alpha,
+            tris: b.tris,
         })
         .collect();
     (parts, max_joint)
@@ -1058,7 +1114,7 @@ fn spawn_mobys(
     let mut parts: HashMap<usize, ClassDraws> = HashMap::new();
     for &ci in &used {
         let c = &m.classes[ci];
-        let high = build_parts(c, &c.class.high_lod, false, glow_from(c, false), meshes);
+        let high = build_high(c, meshes);
         let low = if lod_on && !c.class.low_lod.is_empty() { build_parts(c, &c.class.low_lod, c.class.header.low_lod_joint_count == 0, glow_from(c, true), meshes).0 } else { Vec::new() };
         let metal = build_metal_parts(c, meshes);
         st.meshes += high.0.len() + low.len() + metal.0.len();
@@ -1996,7 +2052,7 @@ impl ExtraMobys {
         images: &mut Assets<Image>,
         materials: &mut Assets<MobyMaterial>,
     ) -> (Vec<Entity>, Vec<Entity>) {
-        let parts = self.parts.entry(class.o_class).or_insert_with(|| build_parts(class, &class.class.high_lod, false, glow_from(class, false), meshes).0).clone();
+        let parts = self.parts.entry(class.o_class).or_insert_with(|| build_high(class, meshes).0).clone();
         let out = self.cache.spawn(commands, level, &parts, MobyBlend::Plain, true, transform, slot, Visibility::Inherited, &format!("{name} class {}", class.o_class), images, materials);
         // The shine pass, its gate and basis written each frame by update_extra_metal.
         let mut metal = Vec::new();
@@ -2197,7 +2253,7 @@ impl ExtraMobys {
             }
             if want_key != was_key || self.slot_late.get(&slot) != Some(&look.late) { queue_late(commands, ents.clone(), look.late); }
         } else {
-            let parts = self.parts.entry(oc).or_insert_with(|| build_parts(class, &class.class.high_lod, false, glow_from(class, false), meshes).0).clone();
+            let parts = self.parts.entry(oc).or_insert_with(|| build_high(class, meshes).0).clone();
             let name = format!("dynamic moby slot {slot} class {oc} {blend:?}");
             let ents = self.cache.spawn(commands, level, &parts, blend, look.late, t, slot, Visibility::Inherited, &name, images, materials);
             self.slot_ents.insert(key, ents);

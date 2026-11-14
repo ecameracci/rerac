@@ -79,6 +79,7 @@ mod mirror_render;
 mod moby_anim;
 mod moby_attach;
 mod moby_light;
+mod model_detail;
 mod moby_lod;
 mod moby_render;
 mod moby_spawn;
