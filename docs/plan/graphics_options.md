@@ -155,7 +155,7 @@ The presets' values: "Presets" above.
   plus the elapsed fraction, so up to one tick (16.7 ms, ~8.3 ms on average) after Off. Evidence (Novalis, frame-exact):
   Off and On at 60 Hz byte-identical to the earlier build; at 120 Hz (`RC_DUMP_TICKS=1,0`) the same play trace as Off
   with every frame distinct (the camera half a tick between); a death reload's 120-unit camera cut drawn as the tick.
-* The Port Options page (twenty-four rows) keeps the Camera sub-page's frame and scrolls, four rows at a time (port.rs `VISIBLE`).
+* The Port Options page (twenty-five rows) keeps the Camera sub-page's frame and scrolls, four rows at a time (port.rs `VISIBLE`).
 
 ## Draw distances
 
