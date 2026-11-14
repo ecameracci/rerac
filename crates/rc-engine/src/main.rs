@@ -150,6 +150,7 @@ mod underwater_render;
 mod upscale;
 mod volumetric_light;
 mod world_lights;
+mod update;
 
 use bevy::core_pipeline::tonemapping::{DebandDither, Tonemapping};
 use bevy::prelude::*;
@@ -180,6 +181,8 @@ fn main() -> anyhow::Result<()> {
     // `--version-json` exits here; a missing or wrong data folder exits with a clear error (crate::disc_source).
     let root = disc_source::startup();
     session::start();
+    // A finished update's work folder (crate::update).
+    update::cleanup();
     // Going Commando's data folder: its own front end (crate::rac2).
     // Going Commando runs the same app on its level (crate::rac2_level), its front end over it (crate::rac2).
     let rac2 = disc_source::game(&root) == disc_source::Game::Rac2;
