@@ -19,7 +19,7 @@
 // crossing a wall or the ground shows no hard line.
 
 #import bevy_pbr::view_transformations::{position_world_to_clip, depth_ndc_to_view_z}
-#import bevy_pbr::mesh_view_bindings::view
+#import bevy_pbr::mesh_view_bindings::{view, globals}
 #import rerac::display_blend::{gs_add, gs_mix}
 
 // Game pixels per NDC unit across: 256 in the game's 4:3 view; × the frame's widening in 16:9 (crate::display: the
@@ -51,6 +51,67 @@ struct Sprites {
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(3) var<storage, read> sprites: Sprites;
 @group(#{MATERIAL_BIND_GROUP}) @binding(4) var scene_depth: texture_2d<f32>;
+// Particles Enhanced's smoke: toward the key light (Bevy world).
+@group(#{MATERIAL_BIND_GROUP}) @binding(5) var<uniform> smoke_light: vec4<f32>;
+
+// Particles Enhanced's volumetric smoke (crate::particle_render `SMOKE`): the tag's smoke bit.
+const SMOKE_BIT: u32 = 1u << 20u;
+
+fn smoke_hash(p: vec2<f32>) -> f32 {
+    let q = fract(p * vec2<f32>(0.1031, 0.1030));
+    let r = q + dot(q, q.yx + 33.33);
+    return fract((r.x + r.y) * r.x);
+}
+
+fn smoke_value(p: vec2<f32>) -> f32 {
+    let i = floor(p);
+    let f = fract(p);
+    let u = f * f * (3.0 - 2.0 * f);
+    let a = smoke_hash(i);
+    let b = smoke_hash(i + vec2<f32>(1.0, 0.0));
+    let c = smoke_hash(i + vec2<f32>(0.0, 1.0));
+    let d = smoke_hash(i + vec2<f32>(1.0, 1.0));
+    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+}
+
+// Billows: three octaves, the finer ones turned and drifting faster (0..1).
+fn smoke_fbm(p: vec2<f32>, t: f32) -> f32 {
+    var v = smoke_value(p) * 0.55;
+    let p2 = mat2x2<f32>(0.8, -0.6, 0.6, 0.8) * p * 2.03 + vec2<f32>(0.0, t * 0.6);
+    v += smoke_value(p2) * 0.3;
+    let p3 = mat2x2<f32>(0.8, -0.6, 0.6, 0.8) * p2 * 2.01 + vec2<f32>(0.0, t * 0.9);
+    v += smoke_value(p3) * 0.15;
+    return v;
+}
+
+// A smoke sprite's texel in GS units (colour 0..255 × light, alpha 0..0x80 eroded into billows): `off` the fragment's
+// place in the puff on the screen (x right, y down; 1 at a corner), `seed` its pool record.
+fn smoke_texel(t: vec4<f32>, off: vec2<f32>, seed: u32) -> vec4<f32> {
+    let time = globals.time;
+    let s = vec2<f32>(f32(seed % 61u), f32(seed / 61u)) * 7.31;
+    // The pattern rises through the puff (screen y is down) while the game moves the puff itself.
+    let rise = vec2<f32>(0.0, time * 0.45);
+    let q = off * 2.2 + s + rise;
+    let n = smoke_fbm(q, time);
+    let r = length(off);
+    // Erode the game's soft disc into billows: the core stays, the rim breaks into wisps.
+    let keep = smoothstep(0.18, 0.72, n + 0.5 * (1.0 - r));
+    let a = t.a * mix(1.0, keep * 1.25, 0.9);
+    // A sphere's normal bent by the billows (view space: x right, y up, z to the camera).
+    let e = 0.08;
+    let gx = smoke_fbm(q + vec2<f32>(e, 0.0), time) - n;
+    let gy = smoke_fbm(q + vec2<f32>(0.0, e), time) - n;
+    let z = sqrt(max(1.0 - r * r, 0.08));
+    let nrm = normalize(vec3<f32>(off.x - gx * 6.0, -(off.y - gy * 6.0), z));
+    let l = normalize((view.view_from_world * vec4<f32>(smoke_light.xyz, 0.0)).xyz);
+    let wrap = saturate(dot(nrm, l) * 0.6 + 0.4);
+    // Self-shadow: the billows between this point and the light.
+    let toward = normalize(vec2<f32>(l.x, -l.y) + vec2<f32>(1e-4, 0.0)) * 0.35 * length(l.xy);
+    let occ = smoke_fbm(q + toward * 2.2, time);
+    let shadow = 1.0 - 0.5 * smoothstep(0.35, 0.8, occ) * (1.0 - l.z * 0.5);
+    let lit = mix(0.6, 1.3, wrap * shadow);
+    return vec4<f32>(t.rgb * lit, a);
+}
 
 // 1 far in front of the scene, 0 where the sprite meets it (Particles Soft); 1 when off or before the copy is sized.
 fn soft_fade(frag: vec4<f32>) -> f32 {
@@ -74,6 +135,9 @@ struct ParticleVertexOutput {
     // ribbons (screen-linear like the GS).
     @location(1) @interpolate(linear) color: vec4<f32>,
     @location(2) @interpolate(flat) tag: u32,
+    // Particles Enhanced smoke: the corner vectors a, b (pixels) and the pool record (seed).
+    @location(3) @interpolate(flat) frame: vec4<f32>,
+    @location(4) @interpolate(flat) seed: u32,
 }
 
 @vertex
@@ -134,6 +198,8 @@ fn vertex(v: ParticleVertex) -> ParticleVertexOutput {
     out.uv = st;
     out.color = vec4<f32>(f32(c & 0xffu), f32((c >> 8u) & 0xffu), f32((c >> 16u) & 0xffu), f32(c >> 24u));
     out.tag = s.c.y;
+    out.frame = vec4<f32>(s.p.w, s.q.x, s.q.y, s.q.z);
+    out.seed = s.c.z;
     return out;
 }
 
@@ -144,6 +210,14 @@ fn fragment(in: ParticleVertexOutput) -> @location(0) vec4<f32> {
     var t = textureSample(tex, tex_sampler, in.uv, layer);
     // A line is untextured (the GS then takes the vertex colour as is: MODULATE by a white 0x80 texel).
     if (((in.tag >> 18u) & 3u) == 2u) { t = vec4<f32>(128.0 / 255.0); }
+    if ((in.tag & SMOKE_BIT) != 0u) {
+        // The fragment in the puff on the screen: corners S+a (ST 0,0), S+b (1,0), S−b (0,1), S−a (1,1).
+        let a = in.frame.xy;
+        let b = in.frame.zw;
+        let c = in.uv - 0.5;
+        let off = (c.x * (b - a) - c.y * (a + b)) / max(length(a), 1e-3);
+        t = smoke_texel(t, off, in.seed);
+    }
     // Texel in GS units: RGB 0..255, A 0..0x80.
     let ct = round(t.rgb * 255.0);
     let at = round(t.a * 255.0);

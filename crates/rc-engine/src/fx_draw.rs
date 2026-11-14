@@ -99,7 +99,8 @@ pub const LIST2_BIAS: f32 = 3.0e6;
 #[derive(Clone, Copy, Debug, Default, ShaderType)]
 pub struct FxPrimParams {
     /// x = 1: ALPHA 0x48 (additive `Cs·As + Cd`), 0: ALPHA 0x44 (`(Cs − Cd)·As + Cd`). y = 1: the subtractive
-    /// `Cd − Cs·As` (ALPHA 0x62 with As = FIX: [`FxPrimParams::subtract`]; a pipeline key). w = 1: an opaque world
+    /// `Cd − Cs·As` (ALPHA 0x62 with As = FIX: [`FxPrimParams::subtract`]; a pipeline key). z = 1: the smoke look
+    /// ([`FxPrimParams::smoke`]). w = 1: an opaque world
     /// surface ([`FxPrimParams::opaque`]; the pipeline key).
     pub misc: Vec4,
 }
@@ -114,6 +115,10 @@ impl FxPrimParams {
 
     /// ALPHA 0x62 (`(0 − Cs)·FIX + Cd`) with As = FIX through the vertex alpha: the colour taken off the frame.
     pub fn subtract() -> Self { FxPrimParams { misc: Vec4::new(0.0, 1.0, 0.0, 0.0) } }
+
+    /// Particles Enhanced's volumetric smoke on a 0x44 group (z = 1: billowing, rising, lit; `fx_prim.wgsl`
+    /// `smoke_look`): the fire fields' smoke elements and curtain (crate::water_render).
+    pub fn smoke(on: bool) -> Self { FxPrimParams { misc: Vec4::new(0.0, 0.0, on as u32 as f32, 0.0) } }
 
     fn is_opaque(&self) -> bool { self.misc.w > 0.5 }
     fn is_subtract(&self) -> bool { self.misc.y > 0.5 }
