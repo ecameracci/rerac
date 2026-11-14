@@ -184,7 +184,7 @@ pub mod text {
     pub const MODS: i32 = -0x200;
     pub const MODS_NONE: i32 = -0x201;
     pub const MODS_WHERE: i32 = -0x202;
-    /// The main menu's Check for Update page (super::super::update).
+    /// The main menu's Update page (super::super::update).
     pub const UPDATE_ENTRY: i32 = -0x400;
     pub const UPDATE_CURRENT: i32 = -0x401;
     pub const UPDATE_NEWEST: i32 = -0x402;
@@ -307,7 +307,7 @@ If you like, you may change your options on the Port Options screen, under Contr
             MODS => b"Mods",
             MODS_NONE => b"No mods found",
             MODS_WHERE => b"Put mods in the mods folder beside the game",
-            UPDATE_ENTRY => b"Check for Update",
+            UPDATE_ENTRY => b"Update",
             UPDATE_CURRENT => b"This version",
             UPDATE_NEWEST => b"Newest",
             UPDATE_ACTION => b"Update",
@@ -554,7 +554,7 @@ pub fn front_options_insert(list: &mut Vec<Item>, it: Item) {
     list.insert(at, it);
 }
 
-/// An Options entry the port inserted (Port Options, Mods, Check for Update): not in the disc list, so it has no
+/// An Options entry the port inserted (Port Options, Mods, Update): not in the disc list, so it has no
 /// `options_ss` picture.
 pub fn is_port_item(it: &Item) -> bool { [text::ENTRY, text::MODS, text::UPDATE_ENTRY].contains(&(it.label as i32)) }
 

@@ -4,7 +4,7 @@ Status: built (2026-11-07) for 0.6.0-beta. Fork-only: never upstreamed.
 
 ## What
 
-Main menu → Options → **Check for Update** (after Mods, before Quit Game) opens a page showing:
+Main menu → Options → **Update** (named "Check for Update" until 2026-11-14, cut off by the list panel) (after Mods, before Quit Game) opens a page showing:
 
 - **This version**: the build version (`<version>-<hash>-<platform>`, `crates/rc-extract/build.rs`);
 - **Newest**: the newest release of `ecameracci/rerac` ("Checking..." while the request runs, "Couldn't check"
@@ -69,7 +69,7 @@ dependency-free.
 - Windows, for real (2026-11-07), a `cargo xtask package` of this branch (`0.5.3-d29e9bd2-windows-x86_64`) unzipped
   to a scratch folder, run with `--data-dir`, `RC_SKIP_LOGOS=1` and
   `RC_PLAY_SCRIPT="300:press START,340:press DOWN,360:press DOWN,380:press X,420:press DOWN,435:press DOWN,450:press DOWN,465:press DOWN,480:press X"`
-  (main menu → Options → Check for Update):
+  (main menu → Options → Update):
   - without `RC_UPDATE_AS`: Newest 0.5.3-alpha, "Up to date", only Back;
   - with `RC_UPDATE_AS=0.5.2` and `700:press X` (Update): the real `rerac-0.5.3-windows-x86_64.zip` of v0.5.3-alpha
     downloaded, checked, swapped in while `rerac.exe` ran, and the game restarted into it (`--version-json`:

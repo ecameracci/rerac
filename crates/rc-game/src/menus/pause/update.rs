@@ -1,4 +1,4 @@
-//! **Port-only, fork-only** (not in the game): the main menu's "Check for Update" page (docs/plan/check_for_update.md).
+//! **Port-only, fork-only** (not in the game): the main menu's "Update" page (docs/plan/check_for_update.md).
 //! Two lines (this build's version, the newest release or the check's state), a status line, then the rows
 //! **Update** (only when a newer release can be installed) and **Back**. The engine owns the network and the install
 //! (rc-engine `update`): it fills the view before each front-end menu tick ([`PageMenu::set_update_view`]), starts the
@@ -6,7 +6,7 @@
 //!
 //! Built like the Mods page ([`super::mods`]): the Port Options' main-menu page frames with the list panel stretched,
 //! a copy of the port title label, rows drawn and driven like the camera list (Up/Down without wrap with sound 1, ✕
-//! with sound 0, the generic Start/Select/R3 and △ keys; ✕ on Back is △). Entry: one item "Check for Update"
+//! with sound 0, the generic Start/Select/R3 and △ keys; ✕ on Back is △). Entry: one item "Update"
 //! (action 3 → [`PAGE`]) in both of the front end's Options lists, before the port's Quit Game
 //! ([`super::port::front_options_insert`]).
 

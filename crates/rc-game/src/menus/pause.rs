@@ -365,7 +365,7 @@ pub enum Data {
     Port(port::PortList),
     /// Port-only: the main menu's "Mods" list ([`mods`]).
     Mods(mods::ModList),
-    /// Port-only: the main menu's "Check for Update" rows ([`update`]).
+    /// Port-only: the main menu's "Update" rows ([`update`]).
     Update(update::UpdateRows),
     /// Port-only: the Gadgetron Movement System's controller list ([`port::GmsList`]).
     Gms(port::GmsList),

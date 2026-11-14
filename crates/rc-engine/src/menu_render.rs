@@ -347,8 +347,8 @@ fn setup(
         if !m.install_port_page(&overlay) { eprintln!("menus: Port Options page not installed (Options page records missing)"); }
         // The main menu's Mods page (crate::mods), after Port Options in its Options lists.
         else if !m.install_mods_page() { eprintln!("menus: Mods page not installed (the main menu's Port Options page is missing)"); }
-        // Fork-only: the main menu's Check for Update page (crate::update), after Mods.
-        else if !m.install_update_page() { eprintln!("menus: Check for Update page not installed (the main menu's Port Options page is missing)"); }
+        // Fork-only: the main menu's Update page (crate::update), after Mods.
+        else if !m.install_update_page() { eprintln!("menus: Update page not installed (the main menu's Port Options page is missing)"); }
         m.port_picture = crate::hud_images::port_picture();
     }
     println!(
