@@ -8,6 +8,7 @@
 
 #import bevy_pbr::view_transformations::{position_world_to_clip, position_world_to_view}
 #import rerac::display_blend::{gs_add, gs_mix}
+#import bevy_pbr::mesh_view_bindings::globals
 
 struct FxFog {
     color: vec4<f32>,
@@ -35,6 +36,8 @@ struct FxVertexOutput {
     // RGBA bytes / 128 and GS F / 255, screen-space linear like the GS.
     @location(1) @interpolate(linear) color: vec4<f32>,
     @location(2) @interpolate(linear) fog: f32,
+    // Bevy world position (the smoke look).
+    @location(3) world: vec3<f32>,
 }
 
 @vertex
@@ -43,6 +46,7 @@ fn vertex(v: FxVertex) -> FxVertexOutput {
     out.position = position_world_to_clip(v.position);
     out.uv = v.uv;
     out.color = v.color;
+    out.world = v.position;
     let depth = -position_world_to_view(v.position).z * 1024.0;
     let f = max(min(depth * fog.params.x + fog.params.y, fog.params.w), fog.params.z);
     out.fog = trunc(f) / 255.0;
@@ -51,7 +55,8 @@ fn vertex(v: FxVertex) -> FxVertexOutput {
 
 @fragment
 fn fragment(in: FxVertexOutput) -> @location(0) vec4<f32> {
-    let t = textureSample(tex, tex_sampler, in.uv);
+    var t = textureSample(tex, tex_sampler, in.uv);
+    if (params.misc.z > 0.5) { t = smoke_look(t, in.world); }
     let ct = round(t * 255.0);
     // MODULATE on the bytes: floor(Ct·Cv / 128) (colour clamped to 255), A likewise.
     var rgb = min(floor(ct.rgb * in.color.rgb + vec3<f32>(1e-3)), vec3<f32>(255.0)) / 255.0;
@@ -76,4 +81,38 @@ fn srgb_to_linear(c: vec3<f32>) -> vec3<f32> {
     let lo = c / 12.92;
     let hi = pow((c + 0.055) / 1.055, vec3<f32>(2.4));
     return select(hi, lo, c <= vec3<f32>(0.04045));
+}
+
+// Particles Enhanced's volumetric smoke (FxPrimParams::smoke, the fire fields' smoke): the texel's alpha eroded into
+// billows of world-space noise that rise over time, and its colour lit from above (the sky) and shaded where the
+// billows above it are thick (self-shadow); the game's texture, colours and blend stay.
+fn fxs_hash(p: vec2<f32>) -> f32 {
+    let q = fract(p * vec2<f32>(0.1031, 0.1030));
+    let r = q + dot(q, q.yx + 33.33);
+    return fract((r.x + r.y) * r.x);
+}
+
+fn fxs_value(p: vec2<f32>) -> f32 {
+    let i = floor(p);
+    let f = fract(p);
+    let u = f * f * (3.0 - 2.0 * f);
+    return mix(mix(fxs_hash(i), fxs_hash(i + vec2<f32>(1.0, 0.0)), u.x), mix(fxs_hash(i + vec2<f32>(0.0, 1.0)), fxs_hash(i + vec2<f32>(1.0, 1.0)), u.x), u.y);
+}
+
+fn fxs_fbm(p: vec2<f32>) -> f32 {
+    let m = mat2x2<f32>(0.8, -0.6, 0.6, 0.8);
+    return fxs_value(p) * 0.55 + fxs_value(m * p * 2.03) * 0.3 + fxs_value(m * m * p * 4.1) * 0.15;
+}
+
+fn smoke_look(t: vec4<f32>, world: vec3<f32>) -> vec4<f32> {
+    let time = globals.time;
+    // Across (x + z) and up (y), rising 1.2 units a second.
+    let q = vec2<f32>((world.x + world.z) * 0.35, (world.y - time * 1.2) * 0.35);
+    let n = fxs_fbm(q);
+    let above = fxs_fbm(q + vec2<f32>(0.0, 0.5));
+    let keep = smoothstep(0.2, 0.7, n);
+    let a = t.a * mix(1.0, keep * 1.3, 0.85);
+    // Lit from above, shaded under thick billows.
+    let lit = mix(0.6, 1.3, saturate(0.5 + (n - above) * 2.5)) * (1.0 - 0.3 * smoothstep(0.45, 0.8, above));
+    return vec4<f32>(t.rgb * lit, a);
 }

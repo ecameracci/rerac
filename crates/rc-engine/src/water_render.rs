@@ -1263,9 +1263,17 @@ fn draw_fire_fields(
     mut images: ResMut<Assets<Image>>,
     mut materials: ResMut<Assets<FxPrimMaterial>>,
     mut vis: Query<&mut Visibility>,
+    gfx: Res<GraphicsSettings>,
 ) {
     let Some(mut st) = state else { return };
     let st = &mut *st;
+    // Particles Enhanced: the smoke groups (1, 2) billow, rise and take the light.
+    let params_of = |g: usize| if g == 0 { FxPrimParams::blend(true) } else { FxPrimParams::smoke(gfx.particles.atmosphere()) };
+    if gfx.is_changed() {
+        for (g, (_, _, mat, _)) in st.slots.iter().flat_map(|s| s.groups.iter().enumerate().filter_map(|(g, x)| x.as_ref().map(|x| (g, x)))) {
+            if let Some(mut mm) = materials.get_mut(mat) { mm.params = params_of(g); }
+        }
+    }
     let Some(cam_t) = cams.iter().next() else { return };
     let registered: Vec<(usize, rc_game::moby_runtime::MobyId)> = match play.as_deref() {
         Some(p) => p.svc.draw_callbacks.list2.iter().filter(|(cb, _)| *cb == rc_game::moby_update::classes::draw_callbacks::Callback::FireField760).map(|&(_, id)| id).enumerate().collect(),
@@ -1320,7 +1328,7 @@ fn draw_fire_fields(
                         let mut m = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
                         q.write(&mut m);
                         let mesh = meshes.add(m);
-                        let params = FxPrimParams::blend(g == 0);
+                        let params = params_of(g);
                         let mat = materials.add(FxPrimMaterial { texture: img.clone(), fog, params, order: LIST2_BIAS + (slot_no * 3 + g as u32) as f32 });
                         let e = commands
                             .spawn((Mesh3d(mesh.clone()), MeshMaterial3d(mat.clone()), Transform::IDENTITY, NoFrustumCulling, Visibility::Inherited, crate::display_blend::DisplayEffect, Name::new(format!("fire field {slot_no} group {g}"))))

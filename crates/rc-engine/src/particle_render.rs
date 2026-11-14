@@ -264,13 +264,27 @@ pub const SOFT_DISTANCE: f32 = 1.5;
 
 fn soft_distance(g: &GraphicsSettings) -> f32 { if g.particles.on() { SOFT_DISTANCE } else { 0.0 } }
 
-/// The Particles option into the materials.
-fn follow_soft(g: Res<GraphicsSettings>, mut materials: ResMut<Assets<ParticleMaterial>>) {
-    if !g.is_changed() { return; }
+/// Particles Enhanced's volumetric smoke: the update types (record byte 0) drawn as lit, billowing puffs, the smoke,
+/// steam and dust puffs and trails (6 Novalis's smoke columns, the class-27 emitters; the smoke types of crate::particle_lights
+/// `NON_EMISSIVE`: 13 crate dust, 16 smoke, 18 the Suck
+/// Cannon's trail, 22 rising puffs, 43 tinted smoke, 44, 47 dust, 51 rising dust, 74 jet puffs, 77 drifting puffs).
+pub const SMOKE: [u8; 11] = [6, 13, 16, 18, 22, 43, 44, 47, 51, 74, 77];
+/// The sprite tag's smoke bit (particle.wgsl `SMOKE_BIT`; the layer is bits 0..15, additive 16, flat 17, kind 18..19).
+const SMOKE_TAG: u32 = 1 << 20;
+/// The smoke's light before the level's key light is known: from straight above.
+const SMOKE_LIGHT: Vec4 = Vec4::new(0.0, 1.0, 0.0, 0.0);
+
+/// The Particles option and the key light (the smoke's light, particle.wgsl `params.light`) into the materials.
+fn follow_soft(g: Res<GraphicsSettings>, key: Option<Res<crate::sun_shadow::KeyLight>>, mut materials: ResMut<Assets<ParticleMaterial>>) {
+    if !g.is_changed() && !key.as_ref().is_some_and(|k| k.is_changed()) { return; }
     let z = soft_distance(&g);
-    let ids: Vec<_> = materials.iter().filter(|(_, m)| m.params.z != z).map(|(id, _)| id).collect();
+    let light = key.map_or(SMOKE_LIGHT, |k| k.to_light.normalize_or(Vec3::Y).extend(0.0));
+    let ids: Vec<_> = materials.iter().filter(|(_, m)| m.params.z != z || m.light != light).map(|(id, _)| id).collect();
     for id in ids {
-        if let Some(mut m) = materials.get_mut(id) { m.params.z = z; }
+        if let Some(mut m) = materials.get_mut(id) {
+            m.params.z = z;
+            m.light = light;
+        }
     }
 }
 
@@ -290,6 +304,9 @@ pub struct ParticleMaterial {
     /// The opaque scene's depth (crate::scene_copy), read while Particles is Soft.
     #[texture(4, sample_type = "float", filterable = false)]
     pub scene_depth: Handle<Image>,
+    /// Particles Enhanced's smoke: toward the key light (Bevy world; [`follow_soft`]).
+    #[uniform(5)]
+    pub light: Vec4,
     pub draw: u8,
     /// Transparent3d position among the four particle draws (normal A, normal B, additive B, additive A).
     pub slot: u8,
@@ -418,6 +435,7 @@ fn setup(
             params: Vec4::new(draw as f32, 128.0, soft_distance(&g), 0.0),
             sprites: buffers[additive as usize].clone(),
             scene_depth: copy.depth.clone(),
+            light: SMOKE_LIGHT,
             draw,
             slot,
         });
@@ -520,8 +538,10 @@ fn build_sprites(
     fog: Option<Res<crate::game_camera::GameFog>>,
     (frame, mut smooth, phase): (Res<crate::display::GameFrame>, ResMut<crate::frame_smooth::ParticleSmooth>, Res<crate::frame_smooth::TickPhase>),
     mut weather: crate::weather_render::WeatherParams,
+    gfx: Res<GraphicsSettings>,
 ) {
     let (Some(mut sim), Some(mut mesh)) = (sim, mesh) else { return };
+    let smoke = gfx.particles.atmosphere();
     // Particles Enhanced: the weather's records go to crate::weather_render (pass 1 below is the same either way).
     let mut weather = weather.frame(sim.sys.level, sim.tick, fog.as_deref());
     let Some((t, proj)) = cams.iter().next() else { return };
@@ -636,6 +656,11 @@ fn build_sprites(
         let additive = r[3] == 0x48;
         let tag = layer | (additive as u32) << 16 | (flat as u32) << 17;
         // GS strip v0 v1 v2 v3 = S+a, S+b, S−b, S−a (quad_mesh).
+        if smoke && !flat && SMOKE.contains(&r[0]) {
+            // Particles Enhanced: the record's pool index seeds its billows (stable over its life).
+            groups[additive as usize].push_raw([centre[0], centre[1], centre[2], a[0]], [a[1], b[0], b[1], 0.0], [rgba, tag | SMOKE_TAG, it.index as u32, 0]);
+            continue;
+        }
         groups[additive as usize].push(centre, a, b, rgba, tag);
     }
     for (mut v, d) in &mut draws {

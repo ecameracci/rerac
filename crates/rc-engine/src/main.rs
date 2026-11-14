@@ -139,6 +139,7 @@ mod weather_render;
 mod aa_blit;
 mod afterimage_render;
 mod ao_render;
+mod cloud_render;
 mod fx_view;
 mod gi_render;
 mod post_render;
@@ -264,6 +265,8 @@ fn main() -> anyhow::Result<()> {
     // the soft particles and the water read, sun rays, volumetric light, the image post-process, the water's mirror view.
     .add_plugins((fx_view::FxViewPlugin, sun_shadow::SunShadowPlugin, ao_render::AoPlugin, gi_render::GiPlugin, scene_copy::SceneCopyPlugin, sun_rays::SunRaysPlugin, volumetric_light::VolumetricLightPlugin, post_render::PostPlugin, water_mirror::WaterMirrorPlugin, upscale::UpscalePlugin))
     // Water Enhanced under water: the fog, light, caustics and shafts over the 3D picture (crate::underwater_render).
+    // Lighting Enhanced: 3D clouds over the open daylight skies (crate::cloud_render).
+    .add_plugins(cloud_render::CloudPlugin)
     .add_plugins(underwater_render::UnderwaterPlugin)
     .add_plugins(frame_log::FrameLogPlugin)
     .add_plugins(session::SessionPlugin)
