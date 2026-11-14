@@ -77,7 +77,8 @@ pub struct TfragLodUniform {
     pub k667: Vec4,
     pub k668: Vec4,
     pub k669: Vec4,
-    /// x = VU w per raw unit of camera depth, y = 1 to tint by LOD (`RC_LOD_TINT=1`), z = near (32, Q = n / z).
+    /// x = VU w per raw unit of camera depth, y = 1 to tint by LOD (`RC_LOD_TINT=1`), z = near (32, Q = n / z), w = the shine
+    /// (crate::metal: + drawn as metal, − listed but off, 0 not metal).
     pub misc: Vec4,
     /// Per batch: y = MXL (highest mip level), w = 1 on a tfrag liquid and z = 1 while its look is on
     /// (crate::liquid_render::TFRAG_LIQUIDS). (TEX1 K comes per vertex.)

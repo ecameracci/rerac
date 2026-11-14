@@ -136,7 +136,8 @@ pub fn load_ties(core: &LevelCore, core_data: &[u8], gs_ram: &[u8], gameplay: &[
     Ok(LevelTies { classes, instances, class_of, colors, mips, mip_fallbacks, parse_time, light_time, texture_time: t0.elapsed() })
 }
 
-/// Material uniform: x = near (32; GS Q = n / z), y = MXL, z = 1 to tint by LOD (`RC_TIE_LOD_TINT=1`).
+/// Material uniform: x = near (32; GS Q = n / z), y = MXL, z = 1 to tint by LOD (`RC_TIE_LOD_TINT=1`), w = the shine
+/// (crate::metal: + drawn as metal, − listed but off, 0 not metal; [`TieKey`]).
 #[derive(Clone, Copy, Debug, Default, ShaderType)]
 pub struct TieParams {
     pub misc: Vec4,
@@ -144,7 +145,7 @@ pub struct TieParams {
 
 /// Tie material: texture × slot colour (GS MODULATE), per-instance fog, per-instance data in storage.
 #[derive(Asset, TypePath, AsBindGroup, Debug, Clone)]
-#[bind_group_data(GsPass)]
+#[bind_group_data(TieKey)]
 pub struct TieMaterial {
     #[texture(0)]
     #[sampler(1)]
@@ -166,6 +167,18 @@ pub struct TieMaterial {
 
 impl From<&TieMaterial> for GsPass {
     fn from(m: &TieMaterial) -> Self { m.pass }
+}
+
+/// The pipeline key: the GS state, and whether the texture draws as shiny metal (crate::metal, `params.misc.w` > 0: the
+/// `WORLD_METAL` variant; every other tie pipeline stays the shader it was).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct TieKey {
+    pass: GsPass,
+    metal: bool,
+}
+
+impl From<&TieMaterial> for TieKey {
+    fn from(m: &TieMaterial) -> Self { TieKey { pass: m.pass, metal: m.params.misc.w > 0.0 } }
 }
 
 /// The tie pass's depth bias (reverse Z: positive is nearer; the world pipeline only, not the sun's shadow maps).
@@ -193,10 +206,14 @@ impl Material for TieMaterial {
     ) -> Result<(), SpecializedMeshPipelineError> {
         descriptor.primitive.cull_mode = None;
         if crate::gs_state::is_shadow_pipeline(descriptor) {
-            key.bind_group_data.specialize_shadow(descriptor, "tie");
+            key.bind_group_data.pass.specialize_shadow(descriptor, "tie");
         } else {
-            key.bind_group_data.specialize_world(descriptor);
+            key.bind_group_data.pass.specialize_world(descriptor);
             if let Some(ds) = descriptor.depth_stencil.as_mut() { ds.bias = TIE_DEPTH_BIAS; }
+            if key.bind_group_data.metal {
+                descriptor.vertex.shader_defs.push("WORLD_METAL".into());
+                if let Some(f) = descriptor.fragment.as_mut() { f.shader_defs.push("WORLD_METAL".into()); }
+            }
         }
         descriptor.vertex.buffers = vec![layout.0.get_layout(&[
             Mesh::ATTRIBUTE_POSITION.at_shader_location(0),
@@ -546,6 +563,7 @@ fn spawn_ties_on(
             // Af of every slot the part reads (fat-vertex morph colours are blends of two of them).
             let vertex_alpha = AlphaRange::of((0..SLOTS).filter(|&s| part.slots & (1 << s) != 0).map(|s| colors[s][3]));
             let (image, texel_alpha, mxl, lod_scale) = image_for(part.texture, part.skey, images);
+            let shine = crate::metal::signed_strength(crate::metal::shine(crate::level_load::level_index(), crate::metal::MetalTex::Tie(part.texture)));
             for pass in gs_state::draws(gs_state::AREF_WORLD, texel_alpha, vertex_alpha) {
                 let mat = mats
                     .entry((part.texture, part.skey, pass))
@@ -553,7 +571,7 @@ fn spawn_ties_on(
                         materials.add(TieMaterial {
                             texture: image.clone(),
                             fog: crate::game_camera::fog_buffer(),
-                            params: TieParams { misc: Vec4::new(crate::game_camera::NEAR / lod_scale, mxl as f32, tint, 0.0) },
+                            params: TieParams { misc: Vec4::new(crate::game_camera::NEAR / lod_scale, mxl as f32, tint, shine) },
                             instances: inst_buffer.clone(),
                             lods: lod_buffer.clone(),
                             pass,

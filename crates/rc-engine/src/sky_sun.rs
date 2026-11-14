@@ -337,6 +337,11 @@ pub struct SkySun {
     pub median: f32,
 }
 
+/// The level's sky averaged by height and bearing for crate::metal (`metal::probe` of the map [`detect`] draws, inserted
+/// at each level load); None without a sky.
+#[derive(Resource, Clone, Copy, Default, PartialEq)]
+pub struct SkyProbe(pub Option<crate::metal::Probe>);
+
 pub struct SkySunPlugin;
 
 impl Plugin for SkySunPlugin {
@@ -357,10 +362,16 @@ fn log_level() -> u32 { std::env::var("RC_SUN_RAYS_LOG").ok().and_then(|v| v.tri
 
 /// [`LevelSun`] from the level's sky.
 fn detect(mut commands: Commands, level: Res<crate::Level>) {
-    let Some(ls) = &level.0.sky else { return };
+    let Some(ls) = &level.0.sky else {
+        commands.insert_resource(SkyProbe(None));
+        return;
+    };
     let start = std::time::Instant::now();
     let rotations = crate::sky_render::level_rotations(ls.level);
     let map = render(&faces(ls, &rotations));
+    let probe = crate::metal::probe(H, W, &map.rgb);
+    if crate::metal::log_on() { println!("metal: level {} sky probe (zenith, middle, horizon sectors, ground): {probe:?}", ls.level); }
+    commands.insert_resource(SkyProbe(Some(probe)));
     let v = find_sun(&map);
     let log = log_level();
     if let Some(s) = v.sun {

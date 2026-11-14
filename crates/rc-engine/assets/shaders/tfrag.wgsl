@@ -59,6 +59,9 @@
 #import bevy_pbr::mesh_view_bindings::{view, globals}
 #endif
 #import rerac::world_lights::{WorldLight, NO_LIGHTS}
+#ifdef WORLD_METAL
+#import rerac::metal_look::{metal_normal, metal_shade}
+#endif
 
 struct TfragFog {
     // rgb = FOGCOL (display-encoded 0..1), w = 1 when fog is enabled.
@@ -67,6 +70,10 @@ struct TfragFog {
     params: vec4<f32>,
     // x: the texture option (crate::graphics; sample_world), z: the Draw distance factor (the end fade).
     tex_mode: vec4<f32>,
+#ifdef WORLD_METAL
+    // crate::metal::MetalEnv: to the sun, its colour, the sky probe (`metal_look.wgsl`).
+    metal: array<vec4<f32>, 27>,
+#endif
 }
 
 struct TfragLod {
@@ -74,7 +81,7 @@ struct TfragLod {
     k667: vec4<f32>,
     k668: vec4<f32>,
     k669: vec4<f32>,
-    // x = VU w per raw unit of depth, y = 1: tint by LOD, z = near (32).
+    // x = VU w per raw unit of depth, y = 1: tint by LOD, z = near (32), w = the shine (crate::metal; > 0: WORLD_METAL).
     misc: vec4<f32>,
     // y = MXL.
     tex: vec4<f32>,
@@ -200,6 +207,11 @@ struct TfragVertexOutput {
     // The Bevy world position (the view, `goo_look`) and the pattern's plane: the ST through the triangle's map.
     @location(6) world: vec3<f32>,
     @location(7) plane: vec2<f32>,
+#endif
+#ifdef WORLD_METAL
+    // Shiny metal (crate::metal): the Bevy world position and the slot's normal (zero without a light record).
+    @location(8) mworld: vec3<f32>,
+    @location(9) mnormal: vec3<f32>,
 #endif
 }
 
@@ -335,6 +347,11 @@ fn vertex(v: TfragVertex) -> TfragVertexOutput {
 #ifdef TFRAG_LIQUID
     out.world = r.pos;
     out.plane = vec2<f32>(dot(v.st_map.xy, e.uv), dot(v.st_map.zw, e.uv));
+#endif
+#ifdef WORLD_METAL
+    out.mworld = r.pos;
+    let sn = slot_normal(slots[e.slot].normal);
+    out.mnormal = sn.xyz * sn.w;
 #endif
     out.uv = e.uv;
     out.color = r.col / 128.0;
@@ -618,6 +635,13 @@ fn fragment(in: TfragVertexOutput) -> @location(0) vec4<f32> {
         let base = min(goo_mean() * in.color.rgb, vec3<f32>(1.0));
         rgb = min(goo_look(base, in.world, in.plane, globals.time), vec3<f32>(1.0));
     }
+#endif
+#ifdef WORLD_METAL
+    // Shiny metal (crate::metal, Lighting Enhanced; `lod.misc.w` its shine): before the fog, as the game's colour.
+    let to_eye = normalize(view.world_position - in.mworld);
+    let mn = metal_normal(in.mnormal, in.mworld, to_eye);
+    let env = fog.metal;
+    rgb = min(metal_shade(rgb, in.color.rgb, mn, to_eye, lod.misc.w, env), vec3<f32>(1.0));
 #endif
     if (fog.color.w > 0.5) {
         rgb = mix(fog.color.rgb, rgb, in.fog);

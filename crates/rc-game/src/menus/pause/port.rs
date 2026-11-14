@@ -1,5 +1,5 @@
 //! **Port-only** (not in the game): the "Port Options" page, for settings the PS2 never had (the graphics options and
-//! their preset, anti-aliasing, detail and draw distance, ambient occlusion, water, particles, foliage, the model detail, the lighting (the
+//! their preset, anti-aliasing, detail and draw distance, ambient occlusion, water, particles, foliage, fur, the model detail, the lighting (the
 //! game's shadows, sun shadows, or sun shadows with the advanced lighting effects),
 //! the gameplay and cutscene aspects, the render resolution, fullscreen, the FPS limit, frame smoothing and, last, the gameplay rows
 //! Strafing and Quick Select, the ring's hold of the world, the mouse look's direction and speed and, last, the Controller
@@ -170,6 +170,7 @@ pub mod text {
     pub const PERFORMANCE: i32 = -0x1bc;
     pub const MODERATE: i32 = -0x1b5;
     pub const LUSH: i32 = -0x1b6;
+    pub const FUR: i32 = -0x1b7;
     pub const MODEL_DETAIL: i32 = -0x1bd;
     pub const STRAFING: i32 = -0x1c0;
     pub const CLASSIC: i32 = -0x1c1;
@@ -294,6 +295,7 @@ If you like, you may change your options on the Port Options screen, under Contr
             QUALITY => b"Quality",
             BALANCED => b"Balanced",
             PERFORMANCE => b"Performance",
+            FUR => b"Fur",
             MODEL_DETAIL => b"Ratchet model detail",
             STRAFING => b"Strafing",
             QUICK_SELECT => b"Quick Select",
@@ -373,6 +375,8 @@ pub enum Setting {
     Particles,
     /// Extra plants on the grassy ground: value 0 Original (the level's own only), 1 Moderate, 2 Lush.
     Foliage,
+    /// Ratchet's fur: value 0 Original (the game's model), 1 On (shell-layer fur on his furry parts).
+    Fur,
     /// Ratchet's model: value 0 Original (the game's mesh), 1 Enhanced (refined with curved triangles at load).
     ModelDetail,
     /// The render resolution (the engine's game frame): value 0 fits the window, 1..5 a height of 416 (the PS2's lines), 720, 1080, 1440 or 2160 (the width
@@ -462,6 +466,7 @@ pub const ENTRIES: &[Entry] = &[
     Entry { setting: Setting::Lighting, label: text::LIGHTING, values: &[text::ORIGINAL, text::SIMPLE, text::ENHANCED] },
     Entry { setting: Setting::Water, label: text::WATER, values: &[text::ORIGINAL, text::ENHANCED] },
     Entry { setting: Setting::Foliage, label: text::FOLIAGE, values: &[text::ORIGINAL, text::MODERATE, text::LUSH] },
+    Entry { setting: Setting::Fur, label: text::FUR, values: &[text::ORIGINAL, text::ON] },
     Entry { setting: Setting::ModelDetail, label: text::MODEL_DETAIL, values: &[text::ORIGINAL, text::ENHANCED] },
     Entry { setting: Setting::Strafing, label: text::STRAFING, values: &[text::CLASSIC, text::MODERN] },
     Entry { setting: Setting::QuickSelect, label: text::QUICK_SELECT, values: &[text::CLASSIC, text::MODERN] },
@@ -481,7 +486,7 @@ pub const ENTRIES: &[Entry] = &[
 /// The Port Options page shows [`ENTRIES`]`[..PORT_ROWS]` (the last one the Controller row); the Controller page the
 /// rest, then the connected controllers. Every row's value lives in the Port Options list ([`PortList::values`], by
 /// [`ENTRIES`] index), whichever page shows it.
-pub const PORT_ROWS: usize = 25;
+pub const PORT_ROWS: usize = 26;
 
 /// The list's run-time state: cursor, each row's value index and each row's selectable values (bit k = value k;
 /// a missing entry = all).

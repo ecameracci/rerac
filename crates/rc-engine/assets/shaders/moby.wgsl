@@ -28,12 +28,19 @@
 #ifdef DISPLAY_BLEND_ADD
 #import rerac::display_blend::gs_add
 #endif
+#ifndef PREPASS_PIPELINE
+#import rerac::metal_look::{metal_facing, metal_shade, metal_strength}
+#endif
 
 struct MobyFog {
     // rgb = FOGCOL (display-encoded 0..1), w = 1 when fog is enabled.
     color: vec4<f32>,
     // (slope per integer unit of depth, offset qw661.w, lower clamp qw656.y, upper clamp qw656.z).
     params: vec4<f32>,
+    // The texture option words (crate::game_camera `fog_bytes`), then crate::metal::MetalEnv (metal[1].w = 1: the shine is
+    // drawn, Lighting Enhanced).
+    tex_mode: vec4<f32>,
+    metal: array<vec4<f32>, 27>,
 }
 
 struct MobyInst {
@@ -92,6 +99,11 @@ struct MobyVertexOutput {
     @location(2) @interpolate(linear) fog: f32,
     // 1: the fragment goes into the ambient occlusion's moby mask (not `FLAG_AO_WORLD`).
     @location(3) @interpolate(flat) ao_mask: u32,
+    // Shiny metal (crate::metal): the shine level (skin word bits 25..26, crate::moby_render `SKIN_SHINE_SHIFT`; 0: none),
+    // the Bevy world position and the skinned normal in world axes.
+    @location(4) @interpolate(flat) mshine: u32,
+    @location(5) mworld: vec3<f32>,
+    @location(6) mnormal: vec3<f32>,
 }
 
 fn s16(x: i32) -> i32 { return (x << 16u) >> 16u; }
@@ -238,6 +250,12 @@ fn vertex(v: MobyVertex) -> MobyVertexOutput {
     let fg = max(min(depth * fog.params.x + fog.params.y, fog.params.w), fog.params.z);
     out.fog = trunc(fg) / 255.0;
     out.ao_mask = select(1u, 0u, ((*lod).misc.y & 2u) != 0u);
+    out.mshine = (v.skin.x >> 25u) & 3u;
+    out.mworld = world;
+    let mta = normal_table[v.skin.x & 0xffu];
+    let mte = normal_table[(v.skin.x >> 8u) & 0xffu];
+    let mn = vec3<f32>(mta.x * mte.x, mta.y * mte.x, mte.y);
+    out.mnormal = ((*inst).model * vec4<f32>((m[0] * mn.x + m[1] * mn.y + m[2] * mn.z).xyz, 0.0)).xyz;
     return out;
 }
 
@@ -251,6 +269,12 @@ fn srgb_to_linear(c: vec3<f32>) -> vec3<f32> {
 fn fragment(in: MobyVertexOutput) -> @location(0) vec4<f32> {
     let t = textureSample(tex, tex_sampler, in.uv);
     var rgb = min(t.rgb * in.color.rgb, vec3<f32>(1.0));
+    // Shiny metal (crate::metal: a listed texture while Lighting is Enhanced): before the fog. Other pixels are untouched.
+    if (in.mshine != 0u && fog.metal[1].w > 0.5) {
+        let to_eye = normalize(view.world_position - in.mworld);
+        let env = fog.metal;
+        rgb = min(metal_shade(rgb, in.color.rgb, metal_facing(in.mnormal, to_eye), to_eye, metal_strength(in.mshine), env), vec3<f32>(1.0));
+    }
     if (fog.color.w > 0.5) {
         rgb = mix(fog.color.rgb, rgb, in.fog);
     }
