@@ -142,6 +142,7 @@ pub mod text {
     pub const CUSTOM: i32 = -0x163;
     pub const HUD: i32 = -0x170;
     pub const SHARP_PIXELS: i32 = -0x171;
+    pub const HIGH_RESOLUTION: i32 = -0x172;
     pub const TEXTURES: i32 = -0x180;
     pub const SMOOTH: i32 = -0x181;
     pub const SHARP: i32 = -0x182;
@@ -258,6 +259,7 @@ If you like, you may change your options on the Port Options screen, under Contr
             CUSTOM => b"Custom",
             HUD => b"HUD",
             SHARP_PIXELS => b"Sharp pixels",
+            HIGH_RESOLUTION => b"High resolution",
             TEXTURES => b"Texture filtering",
             SMOOTH => b"Smooth",
             SHARP => b"Sharp",
@@ -370,7 +372,8 @@ pub enum Setting {
     /// The cutscenes' aspect (the story scenes, the letterboxed cutaways, the ship's take-off / landing), the same
     /// values. The frame takes the wider of the two; the narrower view is pillarboxed in it.
     CutsceneAspect,
-    /// How the game's 2D screen reaches the frame: value 0 Original (scaled smoothly, as on a TV), 1 Sharp pixels.
+    /// How the game's 2D screen reaches the frame: value 0 Original (scaled smoothly, as on a TV), 1 Sharp pixels, 2 High resolution
+    /// (drawn at the frame's resolution).
     Hud,
     /// How world textures pick their detail level: value 0 Original (the PS2's rule), 1 Smooth, 2 Sharp.
     Textures,
@@ -438,7 +441,7 @@ pub const ENTRIES: &[Entry] = &[
     Entry { setting: Setting::Detail, label: text::DETAIL, values: &[text::ORIGINAL, text::FAR, text::FARTHER, text::MAXIMUM] },
     Entry { setting: Setting::DrawDistance, label: text::DRAW_DISTANCE, values: &[text::ORIGINAL, text::FAR, text::FARTHER, text::MAXIMUM] },
     Entry { setting: Setting::Textures, label: text::TEXTURES, values: &[text::ORIGINAL, text::SMOOTH, text::SHARP] },
-    Entry { setting: Setting::Hud, label: text::HUD, values: &[text::ORIGINAL, text::SHARP_PIXELS] },
+    Entry { setting: Setting::Hud, label: text::HUD, values: &[text::ORIGINAL, text::SHARP_PIXELS, text::HIGH_RESOLUTION] },
     Entry { setting: Setting::AmbientOcclusion, label: text::AMBIENT_OCCLUSION, values: &[text::ORIGINAL, text::ON] },
     Entry { setting: Setting::Particles, label: text::PARTICLES, values: &[text::ORIGINAL, text::SOFT, text::ENHANCED] },
     Entry { setting: Setting::Lighting, label: text::LIGHTING, values: &[text::ORIGINAL, text::SIMPLE, text::ENHANCED] },

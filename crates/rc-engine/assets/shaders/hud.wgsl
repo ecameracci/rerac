@@ -21,11 +21,14 @@ struct HudVertex {
     @location(0) position: vec3<f32>,
     @location(1) uv: vec2<f32>,
     @location(2) rgba: u32,
-    // atlas x | y << 16, texture w | h << 16, flags (1 = textured, 2 = REPEAT, 4 = NEAREST, 8 = ALPHA_1 0x48),
+    // atlas x | y << 16, texture w | h << 16, flags (1 = textured, 2 = REPEAT, 4 = NEAREST, 8 = ALPHA_1 0x48,
+    // 16 = bicubic magnification: the HUD's High resolution),
     // atlas texels per game texel (1; a mod's replacement: its factor, hud_render::AtlasLayout)
     @location(3) tex: vec4<u32>,
     // x0, x1, y0, y1 (inclusive pixels)
     @location(4) scissor: vec4<u32>,
+    // The primitive's texel UV rectangle (umin, vmin, umax, vmax): the bicubic taps stay inside it.
+    @location(5) uv_rect: vec4<f32>,
 }
 
 struct HudVarying {
@@ -35,6 +38,7 @@ struct HudVarying {
     @location(1) @interpolate(flat) rgba: vec4<u32>,
     @location(2) @interpolate(flat) tex: vec4<u32>,
     @location(3) @interpolate(flat) scissor: vec4<u32>,
+    @location(4) @interpolate(flat) uv_rect: vec4<f32>,
 }
 
 @vertex
@@ -45,6 +49,7 @@ fn vertex(v: HudVertex) -> HudVarying {
     out.rgba = vec4<u32>(v.rgba & 0xffu, (v.rgba >> 8u) & 0xffu, (v.rgba >> 16u) & 0xffu, v.rgba >> 24u);
     out.tex = v.tex;
     out.scissor = v.scissor;
+    out.uv_rect = v.uv_rect;
     return out;
 }
 
@@ -58,6 +63,50 @@ fn texel(t: vec4<u32>, p: vec2<i32>) -> vec4<f32> {
         q = ((p % size) + size) % size;
     }
     return round(textureLoad(atlas, origin + q, 0) * 255.0);
+}
+
+// Catmull-Rom weights of the taps at −1, 0, 1, 2 for a fraction `f`.
+fn cr_weights(f: f32) -> vec4<f32> {
+    return vec4<f32>(
+        f * (-0.5 + f * (1.0 - 0.5 * f)),
+        1.0 + f * f * (-2.5 + 1.5 * f),
+        f * (0.5 + f * (2.0 - 1.5 * f)),
+        f * f * (-0.5 + 0.5 * f),
+    );
+}
+
+// The texture at texel position `uv` (texel centres at +0.5) by 4×4 Catmull-Rom, each tap held inside the primitive's
+// texels `rect` (a glyph's own cell: at 1:1 the GS never reads past it; REPEAT primitives wrap instead), the result
+// held inside the range of the four nearest texels (no ringing halo round the glyphs), as 0..255 bytes.
+fn bicubic(t: vec4<u32>, uv: vec2<f32>, rect: vec4<f32>) -> vec4<f32> {
+    let q = uv - vec2<f32>(0.5);
+    let i0 = vec2<i32>(floor(q));
+    let f = q - floor(q);
+    let wx = cr_weights(f.x);
+    let wy = cr_weights(f.y);
+    let repeat = (t.z & 2u) != 0u;
+    let lo_t = vec2<i32>(floor(rect.xy));
+    let hi_t = max(vec2<i32>(ceil(rect.zw)) - vec2<i32>(1), lo_t);
+    var acc = vec4<f32>(0.0);
+    var lo = vec4<f32>(255.0);
+    var hi = vec4<f32>(0.0);
+    for (var y = 0; y < 4; y++) {
+        var row = vec4<f32>(0.0);
+        for (var x = 0; x < 4; x++) {
+            var p = i0 + vec2<i32>(x - 1, y - 1);
+            if !repeat {
+                p = clamp(p, lo_t, hi_t);
+            }
+            let c = texel(t, p);
+            row += c * wx[x];
+            if (x == 1 || x == 2) && (y == 1 || y == 2) {
+                lo = min(lo, c);
+                hi = max(hi, c);
+            }
+        }
+        acc += row * wy[y];
+    }
+    return round(clamp(acc, lo, hi));
 }
 
 @fragment
@@ -83,6 +132,12 @@ fn fragment(in: HudVarying) -> @location(0) vec4<f32> {
             let t01 = texel(in.tex, i0 + vec2<i32>(0, 1));
             let t11 = texel(in.tex, i0 + vec2<i32>(1, 1));
             ct = floor(mix(mix(t00, t10, f.x), mix(t01, t11, f.x), f.y));
+            if (in.tex.z & 16u) != 0u {
+                // Port-only (HUD High resolution, hud_render::LayerScale): the texture magnified onto a target finer
+                // than the game's pixels, Catmull-Rom on the unquantised position, held inside the four nearest
+                // texels' range (no ringing halo round the glyphs).
+                ct = bicubic(in.tex, in.uv, in.uv_rect);
+            }
             if (in.tex.z & 4u) != 0u {
                 // TEX1 MMAG / MMIN NEAREST: the texel under the sample point.
                 ct = texel(in.tex, vec2<i32>(floor(in.uv)));
@@ -123,7 +178,8 @@ fn fragment(in: HudVarying) -> @location(0) vec4<f32> {
 #ifdef HUD_COMPOSITE
 @group(1) @binding(0) var hud_image: texture_2d<f32>;
 // x: 1 bilinear (the HUD option's Original: the TV showed the picture smoothed), 0 nearest (Sharp pixels);
-// y: the layer's pixels per game pixel (1; a mod's replacements: up to 4, sampled plain bilinear).
+// y: the layer's pixels per game pixel down (1; a mod's replacements: up to 4; High resolution: the frame's), sampled
+// plain bilinear above 1; z: 1 under High resolution (plain bilinear at any size: at the frame's size, pixel for pixel).
 @group(1) @binding(1) var<uniform> scaling: vec4<f32>;
 
 // The image at `uv`: the pixel under it (nearest), or the four around it weighted (bilinear, edges clamped). Both on
@@ -133,7 +189,7 @@ fn fragment(in: HudVarying) -> @location(0) vec4<f32> {
 // resolution that is the bilinear sample half a pixel left. Down, the copy's stretch is centred (the plain sample).
 fn sample_layer(uv: vec2<f32>) -> vec4<f32> {
     let size = vec2<i32>(textureDimensions(hud_image));
-    let hd = scaling.y > 1.5;
+    let hd = scaling.y > 1.5 || scaling.z > 0.5;
     if scaling.x < 0.5 && !hd {
         let p = clamp(vec2<i32>(floor(uv * vec2<f32>(size))), vec2<i32>(0), size - vec2<i32>(1));
         return textureLoad(hud_image, p, 0);

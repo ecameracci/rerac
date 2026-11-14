@@ -84,6 +84,7 @@ mod moby_render;
 mod moby_spawn;
 mod mod_textures;
 mod mods;
+mod texture_packs;
 mod movie_render;
 mod no_clusters;
 mod occlusion;
@@ -184,6 +185,8 @@ fn main() -> anyhow::Result<()> {
     // Going Commando runs the same app on its level (crate::rac2_level), its front end over it (crate::rac2).
     let rac2 = disc_source::game(&root) == disc_source::Game::Rac2;
     let index = level_load::level_index();
+    // The mods and texture packs before the boot's level load: its textures look up the packs (crate::texture_packs).
+    let mods_found = mods::Mods::startup();
     // The one level load (the boot's and every runtime level change's, crate::level_switch): the level data, the loader's
     // ship and the load-time update pass (crate::moby_spawn; RC_SPAWN_RULES=0 skips it), the fog zones and the
     // underwater test (crate::fog_state).
@@ -248,7 +251,7 @@ fn main() -> anyhow::Result<()> {
     // MSAA of the world cameras (default off; `RenderSettings` can change it at run time).
     .add_plugins(render_settings::RenderSettingsPlugin)
     // The mods folder beside the executable and the enabled set (crate::mods; the HUD reads the replacements).
-    .add_plugins(mods::ModsPlugin)
+    .add_plugins(mods::ModsPlugin(mods_found))
     // The Strafing option (crate::strafing).
     .add_plugins(strafing::StrafingPlugin)
     .add_plugins((MaterialPlugin::<TfragMaterial>::default(), FlyCamPlugin, game_camera::GameCameraPlugin { fog: level.fog }))

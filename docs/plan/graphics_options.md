@@ -28,7 +28,7 @@ switch in `startup` and its row in `menu_render.rs`.
 | Detail distance | Original | Original | Far | Farther |
 | Draw distance | Original | Original | Far | Farther |
 | Texture filtering | Original | Smooth | Smooth | Sharp |
-| HUD | Original | Original | Original | Original |
+| HUD | Original | Original | High resolution | High resolution |
 | Ambient occlusion | Original | Original | On | On |
 | Particles | Original | Soft | Soft | Enhanced |
 | Lighting | Original | Original | Simple | Enhanced |
@@ -56,7 +56,7 @@ settings file's own writer and read back; unknown keys kept; saving twice is the
 | Detail distance | Original / Far / Farther / Maximum | the game's LOD distances (×1, ×2, ×4; Maximum ×1000, past every draw distance) | done: tfrag (`trunc(D·1024)` thresholds and the morph constants), tie (class near/mid/far), moby (`lod_trans << 10`, `moby_lod::set_lod_scale`; drawing only: every joint is evaluated whatever LOD is drawn), shrub mesh/billboard (F' = F × scale; within 24 units of D the class draws as one without a billboard: `shrub_render::detail_fade`, shrub.wgsl, shrub_billboard.wgsl; the factor rides in `tex_mode.y`). Draw distances are the Draw distance row's. Original byte-identical to the earlier build |
 | Draw distance | Original / Far / Farther / Maximum | the game's draw distances (×1, ×1.5, ×2, ×4; see "Draw distances" below) | done: tfrag (`tfrag_lod::DRAW_DISTANCE`), tie (per-instance distance), shrub (D and both fade bands), the main camera's far plane (`GameProjection::draw_scale`); above ×1 tfrags and ties fade out over the last 16·s units (4×4 ordered dither, tfrag.wgsl / tie.wgsl); the factor rides in `tex_mode.z`. Mobys, particles, the sky and the level fog are not scaled. Not part of the preset yet. Original byte-identical to the earlier build (8 views on Novalis, Kerwan, Rilgar, Pokitaru, 2026-10-24) |
 | Texture filtering | Original / Smooth / Sharp | the GS mip rule: one level from depth, `round(log2(z/32)+K)`; Smooth = the same level unrounded, two levels blended; Sharp = the GPU's footprint level + anisotropic | done (tfrag, tie, shrub, shrub billboard: `sample_world`; the mode rides in the shared fog buffer's third vec4 `tex_mode`; samplers linear between levels + anisotropy 16, an integer level reads one level: Original verified byte-identical to the earlier build on a Novalis walk) |
-| HUD | Original / Sharp pixels / High resolution | the 512×416 screen through the display copy B (half a pixel across, like the world) and scaled up with bilinear filtering, as the TV and an emulator's display showed it; Sharp pixels = nearest (the port's earlier look); High resolution = drawn at the frame's resolution | Original / Sharp pixels done |
+| HUD | Original / Sharp pixels / High resolution | the 512×416 screen through the display copy B (half a pixel across, like the world) and scaled up with bilinear filtering, as the TV and an emulator's display showed it; Sharp pixels = nearest (the port's earlier look); High resolution = drawn at the frame's resolution | done (2026-11-07, "Sharp HUD" below): High resolution draws the HUD, text and menus into a layer the frame's own size (`hud_render::layer_size`, `LayerScale`), each primitive at the game's place and scissor, so edges, fades and rotated or scaled sprites are drawn at the frame's pixels instead of a 512×416 image stretched; textures drawn 1:1 or larger are magnified bicubic (`hud.wgsl` flag 16), held in the four nearest texels' range so no halo; the static layer (noise, scan lines) stays at 416 lines |
 | Ambient occlusion | Original / On | the baked vertex colours only | built (`ao_render.rs`, `ao.wgsl`): a spiral SSAO from the depth buffer after the opaque pass, a depth-aware 4×4 blur, multiplied into the frame before the transparent pass; faded out by 150 units; the mobys' own pixels are left unoccluded (2026-10-31: each moby fragment keeps its depth in a per-pixel mask, `moby.wgsl`, and the pass skips a pixel whose depth is that one; mobys with a bounding sphere over 3 units are occluded like the world). It replaced the mobys' world boxes (2026-10-30), which lifted the occlusion off the grass and plants inside them, rectangles around Ratchet, Clank and plant mobys (Orxon, session 2026-10-31_09-35-03), and before them the half-sphere in front of the bounding sphere's centre, which shaded a crate's far faces as the camera turned (Orxon marker 4 of session 2026-10-30_15-54-38). Off: the pass is not added (no `AoTarget` on the view) |
 | Particles | Original / Soft / Enhanced | sprites cut where they cross the world; effects light nothing but through the game's own light bank | built (`particle_render.rs`, `particle.wgsl`): the blend alpha fades over 1.5 units in front of the depth copy. Original: fade distance 0, the factor is 1. Enhanced (`particle_lights.rs`, `particle_lights.wgsl`): Soft, and the bright effects (additive and overbright particles, the explosion flashes and fireballs) become up to 32 point lights, faded in and out at the cap, applied to the opaque world by a full-screen pass from the depth buffer. The veils are never lights (`particle_lights::NON_EMISSIVE`: the weather, splashes, rings, drops and bubbles, Novalis's waterfall mist 56 and foam rings 57, the smoke, steam and dust puffs, goo drips, decals; 2026-10-28, Novalis marker 1 of the fifth play test: the 127 additive foam rings at the foot of the fall made five saturated lights on the river). A light keeps its identity while sources keep coming within its reach and follows them through exponential filters (intensity up 0.1 s, down 0.4 s, centre 0.05 s), and the ones shown count 1.5× against the others at the cap, so a fountain of random sparks or a glow the game redraws every tick holds a steady level (2026-10-28, Orxon marker 3: the type-2 goo blobs under the floor grates and the spark fountains 1240 flickered when each frame's random sparks were re-clustered and each light took that frame's power). Enhanced also restyles the atmosphere (`Particles::atmosphere`; meant for Lighting Enhanced once that option lands, G-REN-240): the sky stars (`sky_stars.rs`, `sky_stars.wgsl` `STAR_GLOW`: the title world's and the levels' star records) glow with a soft halo sized by brightness, twinkle smoothly per star (the game's per-frame colour noise of kinds 1 / 3 replaced by its mean and a hashed slow shimmer) with a slight warm / cool tint; the space flight's painted stars (`flight_render.rs`, `sky.wgsl` `SKY_STAR_GLOW`) get a bright-pass halo and twinkle; the rain and snow of levels 08, 12 and 14 (`weather_render.rs`, `weather.wgsl`: the game's type-0 and type-73 records, so its intensity, area and roof culling) are drawn as thin motion-blurred streaks tinted by the fog colour and soft round fluttering flakes with a depth-of-field blur, in one instanced draw; each flake record also draws three more flakes at hashed offsets of up to 2.2 units across and 2.6 up or down, sized for their own depth, 0.6..0.9 of the size and 0.85 of the opacity (`weather_render::FLAKE_COPIES`, `weather.wgsl` `EXTRA_SPREAD`), so the snow is about four times as thick but only where and while the game's own flakes fall (2026-10-27, Hoven marker 4 of the fourth play test). Not in the Enhanced preset (G-REN-142) |
 | Lighting | Original / Simple / Enhanced | the game's shadows, cast by characters and enemies (the classes with a shadow block, `shadow_render.rs`) | done (2026-10-23; it replaced the Shadows row On / Off / Dynamic: Original is the old On, Simple the old Dynamic without the rays, Enhanced the old Dynamic). Simple (`sun_shadow.rs`, `sun_shadow.wgsl`): in place of the game's shadows, a sun light along the level's key light (`ShadowGame::sun_light`: light set 0's direction A, or its light B where A lights from below and B is the brighter, as on Drek's fleet (`shadow_render::key_light`), fixed for the level, raised on the same bearing to at least 60° under Simple; under Enhanced it keeps its own elevation down to a 30° floor, `sun_shadow::min_elevation`, `ENHANCED_FLOOR`, `RC_SUN_FLOOR=<degrees>`, 2026-10-24: Novalis 32.8° and Kerwan 35° are kept) with a cascaded shadow map (3 cascades to 150 units) that every tfrag (its LOD-0 list), tie (LOD 0 unmorphed, the ones culled for the camera too: `tie_lod` hides none while the sun casts), shrub (cut out by its texture's alpha) and moby casts into through its shader's `PREPASS_PIPELINE` branch (the GS alpha test kept, non-Z-writing passes skipped), received by a full-screen pass over the depth buffer (3×3 PCF, multiplied in before the transparent pass). Enhanced: Simple's shadows and every advanced lighting effect: the sun's rays (`sun_rays.rs`, `sun_rays.wgsl`, `sky_sun.rs`; 2026-10-24) from the sun the sky paints, not the shadows' key light: at level load the sky shells are drawn into a 1° latitude–longitude luminance map (each shell at its first tick's SkyM) and the brightest compact spot at least 3° up in one shell's layer, bright and above its row's median and not hidden by the shells drawn after it, is the sun (Veldin's sunset disc, the bright patch of the Novalis / Eudora / Kerwan / Pokitaru / Kalebo III domes, Gemlik's red sun); it turns with its shell. The sky's pixels (depth 0) around its screen point (a falloff of twice the spot's radius, 0.08–0.3 of the screen height), keyed on their luminance between the sky's median and the sun's peak, are blurred radially at half resolution (40 taps) and added in PostProcess before the AA blit, at a strength from the sun's contrast (0.5–1); skipped with the sun behind the camera, faded at the screen edge and the horizon; none on a sky without a sun (night, space, storms: 12 of the 19 levels) or under `RC_SHADOWS=0`; and its volumetric light (2026-10-24, `volumetric_light.rs`, `volumetric_light.wgsl`), shafts in the air with the sun on or off screen: at half resolution each pixel's view ray is marched from the camera to the depth-buffer surface (at most 48 units, 12 toward the sky) in 24 steps packed toward the camera from an interleaved-gradient-noise start, each step testing the sun's cascades (one comparison tap; 2026-10-30: Ratchet's own shadow does not shade the air: where the light reaches a step through his bounding sphere and the shadow map's occluder lies within it, `VolumetricLight::hero`, so looking down along the sun his shadow column no longer bounds a beam that seems to come from his body, Gaspar marker 3 of play session 2026-10-30_15-54-38; other mobys still cast into the air); lit steps add a uniform thin medium's in-scattering (σ 0.02 per unit, extinction along the ray, brightness 2.0) weighted by a Henyey-Greenstein phase (g 0.3, mildly forward). **Shadow-contrast weighting** (2026-10-24, `volumetric_light::Shafts`, mirrored in the shader): each lit step counts in full within about 4 units along the ray of a long shadow bounding its lit run (`1 − (1 − a)(1 − b)`, `a`, `b` = `exp(−d/4)` to the run's ends), and 0.05 in lit air far from shadow; a bounding shadow counts by its length along the ray (`smoothstep(1, 4, length)`, so a character's thin shadow does not light the air around it), and a shadow behind lit air (a shadowed wall seen from the sun) only 0.25 while the camera is in sunlight. So a shaded space with a lit opening gets bold beams and open daylight and the sky stay clear. A 4×4 depth-aware blur upsamples it and adds it to the frame in PostProcess before the rays. Its colour is the key light's (light set 0's colour A) pulled 35 % toward the fog colour, its strength follows that light's brightness (none below a luminance of 0.15, full from 0.6) and fades at the horizon. **The shafts follow the shadow light**, so they match the shadows on the ground: on Kerwan's first tunnel the real 35° key light does not reach inside, so the shafts are in the opening (cut by the arch and the hanging vines); a lower sun from the side (`RC_SUN_DIR=0.4,-0.5,0.75`) sends bold beams across the tunnel's air, as in the user's reference; and global illumination (`gi_render.rs`, `gi.wgsl`, 2026-10-24): one bounce of the lit colour between nearby surfaces (the world has no albedo, only baked light × texture), screen-space after the ambient occlusion and before the scene copy: quarter-resolution cells (normal and depth from the depth buffer, the lit colour averaged), 16 taps per cell on a golden-angle spiral of 3 units (denser near the centre) with a fixed per-cell rotation, each standing for its share of the disc as world area at the sender (larger far away and at a slant) and sending by the disc-to-point form factor (no visibility test), a 7 + 7-cell depth- and normal-aware blur, a depth-aware upsample, × 3 and the receiver's gain (0.5 / its lit luminance, at most 3), blended `dst · (1 + bounce)` so the bounce takes the receiver's colour; none on the sky, faded out by 150 units like the occlusion; water and effects are drawn after it. Checked 2026-10-24 on Novalis, Kerwan and Eudora (`RC_GI_DEBUG=1` shows the bounce alone): Ratchet's boots warm the grass at his feet, the grass greens his legs, crates and the ground at their feet trade light; Original and Simple byte-identical to the build before it; no fps cost measured (G-REN-080, G-REN-081). And the image post-process (`post_render.rs`, `post.wgsl`, 2026-10-24) on the 3D picture after the rays and before the screen tints, the AA blit and the UI pass (the HUD, menus, movies, the underwater tint and the fades untouched): a bloom (a soft threshold on the brightest linear channel, so saturated lamps count, the sky's pixels at a quarter, Karis-averaged into half size, five half-size levels down with the 13-tap filter and back up with a 3×3 tent, each wider level weighted 0.6 of the one above so the glow stays near its light; in the 8-bit frame a light is at most white, so the threshold sits at 0.7 and the strength is 2.5), a filmic grade in linear light (a gentle contrast power around mid grey and an exponential shoulder toward white, no hard clip; vibrance that lifts dull colours more than saturated ones) and contrast-adaptive sharpening (CAS), light; each part has an `RC_POST*` switch (docs/workflows/dev-switches.md). **The gate:** a new lighting effect (volumetric light, global illumination) runs only while `GraphicsSettings::lighting.enhanced()` (`Lighting::enhanced`; `Lighting::sun_shadows` / `game_shadows` pick the shadows), in the main world or the render world's extracted copy. Not part of the preset (a preset keeps it; the Preset row ignores it) |
@@ -154,6 +154,116 @@ The presets' values: "Presets" above.
   Off and On at 60 Hz byte-identical to the earlier build; at 120 Hz (`RC_DUMP_TICKS=1,0`) the same play trace as Off
   with every frame distinct (the camera half a tick between); a death reload's 120-unit camera cut drawn as the tick.
 * The Port Options page (twenty-four rows) keeps the Camera sub-page's frame and scrolls, four rows at a time (port.rs `VISIBLE`).
+
+## Sharp HUD (the HUD row's High resolution)
+
+From rac-rs's README feature list ("sharp HUD"; none of its code read). The HUD layer (`hud_render.rs`) has always
+drawn the game's 2D primitives itself, in the game's 512×416 coordinates; Original renders them at 512×416 and the
+composite stretches that image over the frame (bilinear, half a pixel left, as the TV showed it). High resolution:
+
+* **Target.** The layer's target is the frame's size (`display::GameFrame::size`; the layer already spans the whole
+  frame, the 512-wide screen in its middle and the wide-screen side margins `display::side_extra` around it, so the
+  layout and the margins of commits 37097ba4 / 31aba112 are unchanged). Each primitive keeps the game's position;
+  only the vertex shader's clip mapping covers more pixels. Scissors (`FontPrintWindow`'s windows, the menu panels)
+  are converted to target pixels by centre coverage (`build_mesh`). A mod's whole-scale HUD replacements keep their
+  own scale when it is larger (a 416-line frame).
+* **Textures.** Fonts, icons and panels are drawn 1:1 by the game (16×16 glyph cells), so at 1440p and 4K every texel
+  is magnified 3.5–5×. The GS bilinear tap at that density is the same blur the TV's stretch gave; High resolution
+  samples them with Catmull-Rom (4×4 taps on the unquantised texel position) clamped to the range of the four nearest
+  texels, which keeps glyph edges firm without the ring a bicubic leaves round a dark outline. NEAREST primitives
+  (TEX1 = 1) stay nearest. A mod's or pack's larger replacement is sampled plain bilinear on its own texels, as before.
+* **Composite.** The target is the frame's size, so the composite is pixel for pixel (`scaling.z`: plain bilinear at
+  the texel centres, no half-pixel shift). The static layer (the screens' noise and scan lines) stays at 416 lines
+  and is stretched bilinear, as those are the game's pixel-sized effects.
+* **Upscaler contract** (0.6.0, with the upscaler's session): the HUD composite is drawn in the main camera's UI pass
+  into `GameFrame`; the upscaler keeps `GameFrame` at the output size and lowers only the 3D cameras' resolution, so
+  the HUD stays at full resolution. With it on, its compose camera (`upscale::ComposeCamera`, on `GameFrame`) takes
+  over the UI pass and every `UiTargetCamera(FlyCam)` node, the HUD composite included; the layer is sized from
+  `GameFrame::size`, never from the FlyCam's own (smaller) target. A frame smaller than the window (the Resolution row's 720p / 1080p) draws the HUD
+  at the frame's lines, and the present camera scales the whole frame.
+* **Look.** Same layout, colours and blending (the GS formulas per fragment are unchanged); text and icons are crisp
+  where Original is soft. It is part of the Enhanced preset.
+* Checked 2026-11-07 (4K frame, `RC_RESOLUTION=2160`): see "Checks" below.
+
+## Texture packs (PCSX2 format)
+
+From rac-rs's README feature list ("PCSX2 texture packs work as they are"; none of its code read). Code:
+`crates/rc-formats/src/pcsx2.rs` (the names), `crates/rc-engine/src/texture_packs.rs` (the folder, the index, the
+lookups), crate::mods (the toggles), crate::mod_textures (world loading). Player steps: the README.
+
+**The scheme** (learned from PCSX2's source, GPL-3.0, read only for the scheme and nothing copied:
+`GSTextureReplacements.cpp`, `GSTextureCache.cpp` `HashCacheKey::Create` / `HashTexture` / `HashTextureLevel`,
+`GSClut.cpp` `Read32`; PCSX2 has no documentation page for it, only its 2022–2025 progress posts). A replacement is
+`<tex>-<clut>-<bits>.dds|png` anywhere under `<serial>/replacements/`; `tex` is XXH3-64 of the texture as it lies in GS
+memory (a level at least one block in each direction is hashed block by block, each block's 256 bytes in the GS's
+own swizzled order, PSMT8's column layout; a smaller one row by row), `clut` XXH3-64 of the 256-entry CLUT expanded to
+32-bit RGBA in index order, `bits` = PSM | TW << 6 | TH << 10 (TEXA bits only for 16 / 24-bit textures; bit 14, once
+TCC, set in older packs and ignored). Hashes are `%llx` (no zero padding).
+
+**Why every kind can match.** Every texture the port uploads is 8-bit indexed with a 32-bit CLUT (PSMT8 / CT32 /
+CSM1): the tfrag, moby, tie and shrub tables, the shrub billboards, the sky, the particles, the FX textures (fonts,
+logo) and the HUD frames. The game uploads their linear indices with PSMT8 image transfers, so GS memory holds them in
+PSMT8's layout, which the port rebuilds (`pcsx2::t8_block_offset`, `t8_hash_bytes`) from the stored indices; the CLUT
+is the stored one with CSM1 undone. No translation step: names are computed at the level load
+(`texture_packs::register_level`, about … ms a level with a pack on, nothing with none).
+
+**Verified** against the community pack "SCUS-97199 ratchet1 v2" (13 200 files, the one the HD Assets mod was made
+from), over all 19 levels with a throwaway checker (kept in `work/`): the names the port computes are in the pack for
+
+| Kind | Textures | CLUT in the pack | Name in the pack |
+|---|---|---|---|
+| tfrag | 1639 | 1600 | 1346 |
+| moby | 3870 | 3594 | 3112 |
+| tie | 2549 | 2504 | 1916 |
+| shrub | 963 | 954 | 851 |
+| shrub billboard | 83 | 83 | 82 |
+| sky | 102 | 98 | 98 |
+| particle | 948 | 811 | 810 |
+| FX (fonts, logo) | 1057 | 635 | 607 |
+| HUD frame | 6242 | 6065 | 2778 |
+
+(counts per level, so shared textures count once per level). Where the CLUT is in the pack but the name is not, the pack
+does not cover that texture, or (HUD) PCSX2 named the draw by a region (below).
+
+**What cannot match exactly, and why:**
+* **Region names** (`<tex>-<clut>-r<w>x<h>-<bits>`): PCSX2 hashes only the part of a texture a draw's CLAMP region
+  (or a recent smaller upload) selects, so the name depends on each draw's GS state, not on the texture. The packs' HUD
+  font glyphs and some HUD frames are named this way; they are skipped (as PCSX2 skips them when the region differs).
+* **Mipmapped hashes**: with PCSX2's hardware mipmapping on, a mipmapped draw's name also hashes its lower levels and
+  starts at the draw's first level. The port looks up both the level-0 name and the whole chain's
+  (`texture_packs::key_chain`, tfrag and billboards); a name from a draw that started at level 1 or deeper cannot be
+  matched. The community pack was dumped with mipmapping off (no chain name in it).
+* **Non-power-of-two sizes**: PCSX2 hashes the whole `1 << TW` × `1 << TH` area, beyond the texture's own texels; no
+  retail texture has such a size (none in the table above).
+* **Streamed pictures** (planet maps, menu backgrounds, `hud_images`), environment / metal maps, the movies and the
+  spaceship textures are not looked up yet.
+* **BC7** files load for the world, mobys and the sky (sampled as they are) but not for the HUD and particles, whose
+  layers are built on the CPU (BC1, BC2, BC3 and 32-bit only there).
+
+**Files.** DDS: BC1 (decoded, opaque at 0x80), BC2, BC3, BC7, 32-bit; PNG: RGBA or RGB (opaque at 0x80); alpha raw
+(0x80 = opaque), as PCSX2 dumps. A whole multiple of the original's size (1..16 for the world, 1..8 for the HUD and
+particles); other sizes are skipped with a log line. Packs apply live to the HUD (its atlas is rebuilt on a toggle) and
+from the next level load to the world, the mobys, the sky and the particles. `RC_TEXTURE_PACKS_DIR` overrides the
+folder (and, set, enables packs in frame-exact runs, with the enabled set from `RC_SETTINGS_FILE`'s `mods = pack:<folder>`).
+
+## Checks
+
+2026-11-07, Windows, dev build (captures in the git-ignored `work/shots/`, the test pack in `work/texture_packs/`):
+
+* **Texture packs.** A test pack generated from the port's own data (`make-pack` in the throwaway `work/texpack-verify`:
+  every texture of Novalis and Kerwan named as PCSX2 names it, colours rotated R,G,B → B,R,G, at 2×, half PNG and half
+  uncompressed DDS, raw alpha, in PCSX2's `SCUS-97199/replacements/` layout; 1097 files, nothing from it committed).
+  Novalis (`RC_LEVEL=1`): 623 world textures registered (60 ms), 687 of 687 world / moby / sky lookups replaced, 375
+  HUD textures, 41 particle layers; Kerwan (`RC_LEVEL=3`): 440 registered (67 ms), 544 of 545, 60 particle layers.
+  Both levels' captures with the pack on show the rotated colours on the ground, plants, buildings, Ratchet, the sky and
+  the HUD's health orbs; with it off they match the game.
+* **Sharp HUD.** 4K frame (`RC_RESOLUTION=2160`, `RC_ASPECT=16:9`), Original against High resolution: the HUD
+  (`RC_HUD_DEMO`), a `FontPrintWindow` text box (`RC_HUD_TEXT_WINDOW`) and the pause menu (a two-update Start press
+  replayed with `RC_REPLAY`). Same layout and colours; High resolution's text and panel edges are crisp where
+  Original's are soft. First try sampled past a glyph's cell (thin stray lines over some letters, the neighbouring
+  glyphs in the font texture): the bicubic taps now stay inside the primitive's own texel rectangle
+  (`ATTRIBUTE_UV_RECT`). The health orbs' art is aliased at 1×; High resolution shows its texel steps where Original
+  blurs them.
 
 ## Draw distances
 
