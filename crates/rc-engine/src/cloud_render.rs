@@ -1,5 +1,5 @@
-//! **Port-only: the 3D clouds of Lighting Enhanced** (gated on crate::graphics `GraphicsSettings::lighting.enhanced()`
-//! and the per-level table [`CLOUD_LEVELS`]): a ray-marched layer of cumulus over the game's sky.
+//! **Port-only: the 3D clouds** (the Clouds row, crate::graphics `GraphicsSettings::clouds`; Lighting Enhanced until
+//! 2026-11-14) and the per-level table [`CLOUD_LEVELS`]: a ray-marched layer of cumulus over the game's sky.
 //!
 //! Standard slab ray-marching through tiling noise (`assets/shaders/clouds.wgsl`), after the opaque world, its shadows,
 //! the ambient occlusion and the bounce light, before the transparent pass (so water, effects and the HUD stay in
@@ -174,9 +174,9 @@ fn update(
     let level = crate::level_load::level_index();
     let space = travel.is_some_and(|t| t.in_transition()) || title.is_some_and(|t| t.shown());
     let (table, gain) = level_clouds(level);
-    let coverage = if space || !gfx.lighting.enhanced() { 0.0 } else { env_coverage().unwrap_or(table) };
+    let coverage = if space || !gfx.clouds.on() { 0.0 } else { env_coverage().unwrap_or(table) };
     let gain = if env_coverage().is_some() && gain == 0.0 { 1.0 } else { gain };
-    if gfx.lighting.enhanced() && *logged != Some((level, coverage > 0.0)) {
+    if gfx.clouds.on() && *logged != Some((level, coverage > 0.0)) {
         *logged = Some((level, coverage > 0.0));
         let why = CLOUD_LEVELS.get(level as usize).map_or("", |l| l.2);
         println!("graphics: clouds {} (level {level:02} {why}; RC_CLOUDS=0|<coverage> forces)", if coverage > 0.0 { format!("coverage {coverage:.2}") } else { "off".into() });

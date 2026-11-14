@@ -132,16 +132,19 @@ fn march(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
 
 fn cloud_at(in: FullscreenVertexOutput) -> vec4<f32> {
     if (!is_sky(vec2<i32>(floor(in.position.xy)))) { return vec4<f32>(0.0); }
-    // The half-resolution target covers the whole target (texel k = full pixels 2k, 2k + 1). A 5-tap tent of
-    // bilinear fetches (about 4×4 texels) averages the march's jitter out, which would otherwise show as hatching.
+    // The half-resolution target covers the whole target (texel k = full pixels 2k, 2k + 1). A 3×3 Gaussian of
+    // bilinear fetches 1.5 texels apart (about 6×6 texels) averages the march's jitter out, which would otherwise show
+    // as dithering (2026-11-14 play session: the 5-tap tent of 4×4 texels left it visible at 1440p).
     let half = vec2<f32>(textureDimensions(tex));
     let uv = in.position.xy * 0.5 / half;
-    let o = 1.0 / half;
-    var c = textureSampleLevel(tex, samp, uv, 0.0) * 0.28;
-    c += textureSampleLevel(tex, samp, uv + vec2<f32>(o.x, o.y), 0.0) * 0.18;
-    c += textureSampleLevel(tex, samp, uv + vec2<f32>(-o.x, o.y), 0.0) * 0.18;
-    c += textureSampleLevel(tex, samp, uv + vec2<f32>(o.x, -o.y), 0.0) * 0.18;
-    c += textureSampleLevel(tex, samp, uv + vec2<f32>(-o.x, -o.y), 0.0) * 0.18;
+    let o = 1.5 / half;
+    var c = vec4<f32>(0.0);
+    for (var y = -1; y <= 1; y += 1) {
+        for (var x = -1; x <= 1; x += 1) {
+            let w = select(0.5, 1.0, x == 0) * select(0.5, 1.0, y == 0) * 0.25;
+            c += textureSampleLevel(tex, samp, uv + vec2<f32>(f32(x), f32(y)) * o, 0.0) * w;
+        }
+    }
     return c;
 }
 

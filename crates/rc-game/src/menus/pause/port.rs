@@ -1,5 +1,5 @@
 //! **Port-only** (not in the game): the "Port Options" page, for settings the PS2 never had (the graphics options and
-//! their preset, anti-aliasing, detail and draw distance, ambient occlusion, water, particles, foliage, the lighting (the
+//! their preset, anti-aliasing, detail and draw distance, ambient occlusion, water, particles, foliage, the clouds, the lighting (the
 //! game's shadows, sun shadows, or sun shadows with the advanced lighting effects),
 //! the gameplay and cutscene aspects, the render resolution, fullscreen, the FPS limit, frame smoothing and, last, the gameplay rows
 //! Strafing and Quick Select, the ring's hold of the world, the mouse look's direction and speed and, last, the Controller
@@ -167,6 +167,7 @@ pub mod text {
     pub const QUALITY: i32 = -0x1ba;
     pub const BALANCED: i32 = -0x1bb;
     pub const PERFORMANCE: i32 = -0x1bc;
+    pub const CLOUDS: i32 = -0x1be;
     pub const MODERATE: i32 = -0x1b5;
     pub const LUSH: i32 = -0x1b6;
     pub const STRAFING: i32 = -0x1c0;
@@ -281,6 +282,7 @@ If you like, you may change your options on the Port Options screen, under Contr
             MODERATE => b"Moderate",
             LUSH => b"Lush",
             UPSCALER => b"Upscaling",
+            CLOUDS => b"Clouds",
             ULTRA_QUALITY => b"Ultra quality",
             QUALITY => b"Quality",
             BALANCED => b"Balanced",
@@ -343,6 +345,8 @@ pub enum Setting {
     /// The 3D picture's resolution under the frame's, upscaled to it (the HUD and menus stay sharp): value 0 Off, 1 Ultra
     /// quality (÷1.3 per axis), 2 Quality (÷1.5), 3 Balanced (÷1.7), 4 Performance (÷2).
     Upscaler,
+    /// 3D clouds over the open daylight skies: value 0 Off (the painted sky), 1 On.
+    Clouds,
     /// Anti-aliasing: value 0 Original (the game's own softening passes), 1 off, 2 2x, 3 4x, 4 8x multisampling.
     AntiAliasing,
     /// The lighting (docs/plan/graphics_options.md, docs/plan/shadows.md): value 0 Original (the game's shadows, the
@@ -442,6 +446,7 @@ pub const ENTRIES: &[Entry] = &[
     Entry { setting: Setting::AmbientOcclusion, label: text::AMBIENT_OCCLUSION, values: &[text::ORIGINAL, text::ON] },
     Entry { setting: Setting::Particles, label: text::PARTICLES, values: &[text::ORIGINAL, text::SOFT, text::ENHANCED] },
     Entry { setting: Setting::Lighting, label: text::LIGHTING, values: &[text::ORIGINAL, text::SIMPLE, text::ENHANCED] },
+    Entry { setting: Setting::Clouds, label: text::CLOUDS, values: &[text::OFF, text::ON] },
     Entry { setting: Setting::Water, label: text::WATER, values: &[text::ORIGINAL, text::ENHANCED] },
     Entry { setting: Setting::Foliage, label: text::FOLIAGE, values: &[text::ORIGINAL, text::MODERATE, text::LUSH] },
     Entry { setting: Setting::Strafing, label: text::STRAFING, values: &[text::CLASSIC, text::MODERN] },
@@ -462,7 +467,7 @@ pub const ENTRIES: &[Entry] = &[
 /// The Port Options page shows [`ENTRIES`]`[..PORT_ROWS]` (the last one the Controller row); the Controller page the
 /// rest, then the connected controllers. Every row's value lives in the Port Options list ([`PortList::values`], by
 /// [`ENTRIES`] index), whichever page shows it.
-pub const PORT_ROWS: usize = 24;
+pub const PORT_ROWS: usize = 25;
 
 /// The list's run-time state: cursor, each row's value index and each row's selectable values (bit k = value k;
 /// a missing entry = all).

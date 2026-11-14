@@ -17,6 +17,7 @@
 //! | [`Foliage`] | Original (the level's own plants only), Moderate, Lush (grass clumps on the grassy ground and more of the level's small plants) | crate::foliage |
 //! | [`Lighting`] | Original (the game's shadows), Simple (sun shadows in their place), Enhanced (Simple's shadows and every advanced lighting effect) | crate::shadow_render, crate::sun_shadow, crate::tie_lod ([`Lighting::game_shadows`], [`Lighting::sun_shadows`]); crate::sun_rays, crate::gi_render, crate::post_render ([`Lighting::enhanced`]; the rays also per level, [`LightShafts`]) |
 //! | [`Upscaler`] | Off (the 3D drawn at the frame's resolution), Ultra quality / Quality / Balanced / Performance (drawn at 1/1.3 .. 1/2 of it per axis and upscaled FSR 1-style; the HUD and menus at the frame's) | crate::upscale |
+//! | [`Clouds`] | Off (the game's painted sky), On (3D clouds over the open daylight skies of `cloud_render::CLOUD_LEVELS`) | crate::cloud_render |
 //! | [`FrameSmoothing`] | Off (one picture per 60 Hz tick), On (the display's rate, interpolated between ticks); not in the presets | crate::frame_smooth, crate::frame_pace |
 //!
 //! **The lighting gate:** a later lighting effect (volumetric light, global illumination) runs only while
@@ -25,8 +26,8 @@
 //!
 //! Persisted in the port settings file (`crate::render_settings::save_key`); `RC_HUD`-style switches are not used here
 //! (`RC_HUD=0` already hides the HUD): `RC_GFX_ANTI_ALIASING`, `RC_GFX_HUD`, `RC_GFX_TEXTURES`, `RC_GFX_DETAIL`,
-//! `RC_GFX_DRAW_DISTANCE`, `RC_GFX_AMBIENT_OCCLUSION`, `RC_GFX_WATER`, `RC_GFX_PARTICLES`, `RC_GFX_FOLIAGE`, `RC_GFX_LIGHTING`,
-//! `RC_GFX_UPSCALER`, `RC_GFX_FRAME_SMOOTHING` (the keys below), `RC_MSAA=0|2|4|8` (Anti-aliasing Off or that
+//! `RC_GFX_DRAW_DISTANCE`, `RC_GFX_AMBIENT_OCCLUSION`, `RC_GFX_WATER`, `RC_GFX_PARTICLES`, `RC_GFX_FOLIAGE`, `RC_GFX_CLOUDS`,
+//! `RC_GFX_LIGHTING`, `RC_GFX_UPSCALER`, `RC_GFX_FRAME_SMOOTHING` (the keys below), `RC_MSAA=0|2|4|8` (Anti-aliasing Off or that
 //! multisampling), `RC_SHADOWS=1|dynamic` (Lighting Original / Enhanced, the older switch; `0`: crate::shadow_render)
 //! and `RC_GFX_PRESET=original|low|medium|high` (the file's options ignored; `enhanced`, the older preset, is Medium)
 //! override the file at start.
@@ -270,6 +271,12 @@ two_valued!(
     Water, "water",
     /// Clear by depth, with reflections, a sun glint and foam at the shore (crate::water_render).
     Enhanced = "enhanced"
+);
+two_valued!(
+    /// 3D clouds: Original (the row shows Off) is the game's painted sky alone.
+    Clouds, "clouds",
+    /// Ray-marched cumulus over the open daylight skies (crate::cloud_render).
+    On = "on"
 );
 /// How smoke and other sprites meet the world, and whether bright effects light it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -562,6 +569,7 @@ pub struct GraphicsSettings {
     pub lighting: Lighting,
     pub foliage: Foliage,
     pub upscaler: Upscaler,
+    pub clouds: Clouds,
 }
 
 impl GraphicsSettings {
@@ -583,6 +591,7 @@ impl GraphicsSettings {
             lighting: pick(p, [Lighting::Original, Lighting::Original, Lighting::Simple, Lighting::Enhanced]),
             foliage: pick(p, [Foliage::Original, Foliage::Original, Foliage::Moderate, Foliage::Lush]),
             upscaler: pick(p, [Upscaler::Off, Upscaler::Balanced, Upscaler::Off, Upscaler::Off]),
+            clouds: pick(p, [Clouds::Original, Clouds::Original, Clouds::Original, Clouds::On]),
         }
     }
 
@@ -590,7 +599,7 @@ impl GraphicsSettings {
     pub fn preset(&self) -> Preset { Preset::CHOSEN.into_iter().find(|&p| self.with_preset(p) == *self).unwrap_or(Preset::Custom) }
 
     /// Every settings-file key and value: the preset's, then each option's.
-    pub fn keys(&self) -> [(&'static str, &'static str); 12] {
+    pub fn keys(&self) -> [(&'static str, &'static str); 13] {
         fn kv<T: GfxOption>(v: T) -> (&'static str, &'static str) { (T::KEY, v.key()) }
         [
             (Preset::KEY, self.preset().key()),
@@ -605,6 +614,7 @@ impl GraphicsSettings {
             kv(self.lighting),
             kv(self.foliage),
             kv(self.upscaler),
+            kv(self.clouds),
         ]
     }
 
@@ -625,6 +635,7 @@ impl GraphicsSettings {
             lighting: file_lighting(&load).unwrap_or(base.lighting),
             foliage: val(&load, base.foliage),
             upscaler: val(&load, base.upscaler),
+            clouds: val(&load, base.clouds),
         }
     }
 
@@ -648,6 +659,7 @@ impl GraphicsSettings {
         s.particles = env_value(s.particles);
         s.foliage = env_value(s.foliage);
         s.upscaler = env_value(s.upscaler);
+        s.clouds = env_value(s.clouds);
         s
     }
 
@@ -749,6 +761,8 @@ mod tests {
         let h = o.with_preset(Preset::High);
         assert_eq!((h.lighting, h.particles, h.foliage), (Lighting::Enhanced, Particles::Enhanced, Foliage::Lush));
         assert_eq!(o.with_preset(Preset::Low).upscaler, Upscaler::Balanced);
+        // Clouds: On on High only.
+        assert_eq!(Preset::CHOSEN.map(|p| o.with_preset(p).clouds), [Clouds::Original, Clouds::Original, Clouds::Original, Clouds::On]);
         // Any one option changed from a preset makes it Custom; Custom keeps the options.
         for p in Preset::CHOSEN {
             let s = o.with_preset(p);
@@ -758,6 +772,7 @@ mod tests {
                 GraphicsSettings { detail: Detail::Maximum, ..s },
                 GraphicsSettings { aa: AntiAliasing::X8, ..s },
                 GraphicsSettings { upscaler: if s.upscaler.on() { Upscaler::Off } else { Upscaler::Performance }, ..s },
+                GraphicsSettings { clouds: if s.clouds == Clouds::On { Clouds::Original } else { Clouds::On }, ..s },
                 GraphicsSettings { lighting: if s.lighting.enhanced() { Lighting::Original } else { Lighting::Enhanced }, ..s },
             ];
             for c in changed {
@@ -803,7 +818,7 @@ mod tests {
     fn a_stored_preset_fills_the_options_the_file_lacks() {
         // An option added after the file was written takes the stored preset's value.
         let high = GraphicsSettings::default().with_preset(Preset::High);
-        let text: String = written("", &high).lines().filter(|l| !l.starts_with("foliage") && !l.starts_with("upscaler")).map(|l| format!("{l}\n")).collect();
+        let text: String = written("", &high).lines().filter(|l| !l.starts_with("foliage") && !l.starts_with("upscaler") && !l.starts_with("clouds")).map(|l| format!("{l}\n")).collect();
         assert_eq!(GraphicsSettings::from_file(reader(&text)), high);
         // The options in the file win over the stored preset (a hand edit): Custom.
         let edited = text.replace("water = enhanced", "water = original");
