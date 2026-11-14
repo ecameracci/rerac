@@ -198,8 +198,11 @@ height, the roots are darker (self-shadowing), and the outer shells sway in a li
 with the height squared).
 
 * Which parts: the textures of `fur::FUR_TEXTURES` (class 0, texture slot 0: his body atlas, the same on every level),
-  and in it only the triangles whose texels read as his fur (`fur::is_fur_texel`: yellow to orange, saturated,
-  bright; 60 % of 15 points over the triangle): the atlas also holds his gloves, trousers, boots and belt.
+  and in it only the triangles whose texels read as his fur (`fur::is_fur_texel`: orange to a pale greenish
+  yellow, saturated; the stripes' dark cores pass when strongly saturated; 60 % of 15 points over the triangle): the
+  atlas also holds his gloves, trousers, boots and belt. 2026-11-14 (play session 2026-11-14_10-03-08 marker 1): the
+  ears' pale tips (hue 64°) and the stripes' dark cores failed the first test and left bald patches on his ears;
+  2975 of the 5356 triangles are fur now (2866 before).
 * Skinning and animation: the shells use his own draw's record, joint palette, normal table and `MobyLod` (the same
   `MeshTag`), skinned and lit by the moby shader's code, so they follow every pose, his cutscene actors and the
   hides (children of his first high-LOD entity, registered by `moby_render::ExtraMobys::spawn_split`). They are built from the

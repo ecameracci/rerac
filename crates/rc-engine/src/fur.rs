@@ -47,15 +47,19 @@ pub fn is_fur_slot(class: i32, slot: i32) -> bool { FUR_TEXTURES.iter().any(|e| 
 /// `RC_FUR_LOG=1`.
 pub fn log_on() -> bool { std::env::var("RC_FUR_LOG").is_ok_and(|v| v.trim() == "1") }
 
-/// A texel of his fur: yellow to orange, saturated and bright (the trousers are green, the gloves and boots a dark
-/// brown, the belt grey); the darker stripes in the fur fail it but sit inside furry triangles ([`is_fur_triangle`]).
+/// A texel of his fur: orange to a pale greenish yellow, saturated (the trousers are green, the belt grey). The ears'
+/// pale tips (`[223, 233, 109]`, hue 64°) and the stripes' dark cores (`[100, 57, 18]`, brightness 0.39) are fur, so
+/// below 0.45 a texel passes when strongly saturated; the gloves, boots and straps are darker still (brightness ≤ 0.24:
+/// `[58, 45, 37]`, `[61, 38, 31]`, `[39, 30, 24]`). 2026-11-14 play session marker 1: the ears had bald patches where
+/// those texels failed it and took their triangles out ([`is_fur_triangle`]).
 pub fn is_fur_texel(rgb: [u8; 3]) -> bool {
     let [r, g, b] = rgb.map(|c| c as f32 / 255.0);
     let (max, min) = (r.max(g).max(b), r.min(g).min(b));
-    if max < 0.45 || max - min < 0.35 * max { return false; }
+    let s = if max > 0.0 { (max - min) / max } else { 0.0 };
+    if max < 0.33 || s < 0.35 || (max < 0.45 && s < 0.6) { return false; }
     let d = max - min;
     let h = if max == r { 60.0 * ((g - b) / d).rem_euclid(6.0) } else if max == g { 60.0 * ((b - r) / d + 2.0) } else { 60.0 * ((r - g) / d + 4.0) };
-    (22.0..=62.0).contains(&h)
+    (22.0..=70.0).contains(&h)
 }
 
 /// The texel at `uv` (repeating) of `t`'s level 0.
@@ -285,9 +289,11 @@ mod tests {
 
     #[test]
     fn fur_texels_by_colour() {
-        // His fur (yellow, orange-tan), its dark stripes, his green trousers, the dark brown gloves, the grey belt, white.
-        assert!(is_fur_texel([222, 170, 62]) && is_fur_texel([214, 150, 70]));
-        assert!(!is_fur_texel([110, 70, 30]) && !is_fur_texel([40, 90, 40]) && !is_fur_texel([70, 45, 30]));
+        // His fur (yellow, orange-tan), the ears' stripes and their dark cores, the ears' pale tips (his atlas, slot 0).
+        assert!(is_fur_texel([222, 170, 62]) && is_fur_texel([214, 150, 70]) && is_fur_texel([145, 91, 27]));
+        assert!(is_fur_texel([100, 57, 18]) && is_fur_texel([223, 233, 109]) && is_fur_texel([220, 228, 96]));
+        // Not fur: his green trousers, the gloves, boots and straps (his atlas), the grey belt, white.
+        assert!(!is_fur_texel([40, 90, 40]) && !is_fur_texel([58, 45, 37]) && !is_fur_texel([61, 38, 31]) && !is_fur_texel([39, 30, 24]));
         assert!(!is_fur_texel([150, 150, 150]) && !is_fur_texel([250, 250, 245]));
     }
 
