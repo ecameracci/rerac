@@ -180,6 +180,39 @@ pub struct LevelParticles {
     pub level: u32,
     /// The level's height grid (core +0xa4; Batalia, Orxon, Oltanis): the weather particles read it.
     pub grid: Option<rc_formats::level::HeightGrid>,
+    /// The enabled texture packs' file for each part texture ([`pack_files`]; empty without a pack).
+    pub replacements: Vec<Option<std::path::PathBuf>>,
+}
+
+/// The enabled texture packs' file for each part texture (crate::texture_packs, by the PCSX2 name of its stored indices
+/// and CLUT), when a pack is on.
+pub fn pack_files(core: &rc_formats::level::LevelCore, core_data: &[u8], t: Option<&ParticleTextures>) -> Vec<Option<std::path::PathBuf>> {
+    use rc_formats::particle_tex::{bank_texture_image, core_bank};
+    let Some(t) = t.filter(|_| crate::texture_packs::active()) else { return Vec::new() };
+    let Ok(bank) = core_bank(core, core_data, "part_bank") else { return Vec::new() };
+    t.entries.iter().map(|e| bank_texture_image(bank, e.palette, e.texture, e.side, e.side).ok().and_then(|img| crate::texture_packs::find_image(&img, &[]))).collect()
+}
+
+/// `rgba` (`w × h`) resampled bilinearly to `k` times its size (texel centres kept, edges clamped).
+fn upscale(rgba: &[u8], w: u32, h: u32, k: u32) -> Vec<u8> {
+    if k == 1 { return rgba.to_vec(); }
+    let (ow, oh) = (w * k, h * k);
+    let mut out = Vec::with_capacity((ow * oh * 4) as usize);
+    let at = |x: i32, y: i32, c: usize| rgba[((y.clamp(0, h as i32 - 1) as u32 * w + x.clamp(0, w as i32 - 1) as u32) * 4) as usize + c] as f32;
+    for y in 0..oh {
+        let fy = (y as f32 + 0.5) / k as f32 - 0.5;
+        let (y0, ty) = (fy.floor() as i32, fy - fy.floor());
+        for x in 0..ow {
+            let fx = (x as f32 + 0.5) / k as f32 - 0.5;
+            let (x0, tx) = (fx.floor() as i32, fx - fx.floor());
+            for c in 0..4 {
+                let top = at(x0, y0, c) * (1.0 - tx) + at(x0 + 1, y0, c) * tx;
+                let bot = at(x0, y0 + 1, c) * (1.0 - tx) + at(x0 + 1, y0 + 1, c) * tx;
+                out.push((top * (1.0 - ty) + bot * ty).round() as u8);
+            }
+        }
+    }
+    out
 }
 
 /// Reads the particle textures and the level's emitters (class 27 on Novalis) with their pvars.
@@ -205,7 +238,8 @@ pub fn load(core: &rc_formats::level::LevelCore, index: &[u8], core_data: &[u8],
         }
     }
     let grid = rc_formats::level::HeightGrid::parse(&core.header, core_data);
-    Ok(LevelParticles { textures, owners, level, grid })
+    let replacements = pack_files(core, core_data, textures.as_ref());
+    Ok(LevelParticles { textures, owners, level, grid, replacements })
 }
 
 /// The live simulation.
@@ -386,13 +420,24 @@ fn setup(
     // Textures: one 32×32 layer per part texture, alpha back in GS units (0x80 = 1.0) like shrub_render::mip_image.
     let Some(tex) = lp.textures.as_ref().filter(|t| !t.textures.is_empty()) else { return };
     let (w, h) = (tex.textures[0].width, tex.textures[0].height);
-    let mut rgba = Vec::with_capacity(tex.textures.len() * (w * h * 4) as usize);
-    for t in &tex.textures {
-        if (t.width, t.height) == (w, h) { rgba.extend_from_slice(&t.rgba) } else { rgba.extend(std::iter::repeat_n(0u8, (w * h * 4) as usize)) }
+    // A texture pack's layers (crate::texture_packs, raw alpha) at their whole scale; every layer at the largest, the
+    // others resampled bilinearly (the sampler's own filter, so the originals look as before).
+    let packs: Vec<Option<(u32, Vec<u8>)>> =
+        lp.replacements.iter().map(|p| p.as_deref().and_then(|p| crate::texture_packs::load_scaled(p, w, h))).collect();
+    let k = packs.iter().flatten().map(|(k, _)| *k).max().unwrap_or(1);
+    if k > 1 || packs.iter().any(Option::is_some) { println!("texture packs: {} particle textures replaced (layers at {k}x)", packs.iter().flatten().count()); }
+    let mut rgba = Vec::with_capacity(tex.textures.len() * (w * h * 4 * k * k) as usize);
+    for (i, t) in tex.textures.iter().enumerate() {
+        if let Some(Some((pk, p))) = packs.get(i) {
+            rgba.extend(upscale(p, w * pk, h * pk, k / pk));
+            continue;
+        }
+        let mut layer = if (t.width, t.height) == (w, h) { t.rgba.clone() } else { vec![0u8; (w * h * 4) as usize] };
+        for a in layer.iter_mut().skip(3).step_by(4) { *a = if *a == 0xff { 0x80 } else { *a / 2 }; }
+        rgba.extend(upscale(&layer, w, h, k));
     }
-    for a in rgba.iter_mut().skip(3).step_by(4) { *a = if *a == 0xff { 0x80 } else { *a / 2 }; }
     let mut img = Image::new_uninit(
-        Extent3d { width: w, height: h, depth_or_array_layers: tex.textures.len() as u32 },
+        Extent3d { width: w * k, height: h * k, depth_or_array_layers: tex.textures.len() as u32 },
         TextureDimension::D2,
         TextureFormat::Rgba8Unorm,
         RenderAssetUsages::RENDER_WORLD,

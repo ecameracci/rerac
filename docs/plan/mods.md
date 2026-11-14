@@ -93,8 +93,9 @@ and lossy only where §5.5 of the extractor plan says so (lighting not baked, LO
   in-game Mods page, no launcher tab; `mod.toml` reads only `id`, `name`, `version`, `description`. World textures
   are keyed by content hash rather than §2.1a's export paths, so one file covers a texture in every level and PCSX2
   packs convert; the export does not write those names yet. The rest of the design stands for the later stages.
-- **PCSX2 packs** are keyed by GS texture and CLUT hash, not by our keys; converting one means matching each pack
-  file to a decoded texture by CLUT hash, size and content (a one-off tool, kept out of the repo with the pack).
+- **PCSX2 packs** load as they are (2026-11-07): `texture_packs/<pack>/` beside the executable, toggled on the Mods page;
+  the port computes PCSX2's own names (GS-memory texture hash and CLUT hash) for every texture it uploads
+  (`crates/rc-engine/src/texture_packs.rs`, docs/plan/graphics_options.md "Texture packs"). No conversion step.
 
 ### 2.2 Data (gameplay content)
 - Level content as editable data exported to JSON (Tier 2) and merged back as patches: moby instances and pvars,

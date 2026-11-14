@@ -347,6 +347,8 @@ fn setup(
         if !m.install_port_page(&overlay) { eprintln!("menus: Port Options page not installed (Options page records missing)"); }
         // The main menu's Mods page (crate::mods), after Port Options in its Options lists.
         else if !m.install_mods_page() { eprintln!("menus: Mods page not installed (the main menu's Port Options page is missing)"); }
+        // Fork-only: the main menu's Update page (crate::update), after Mods.
+        else if !m.install_update_page() { eprintln!("menus: Update page not installed (the main menu's Port Options page is missing)"); }
         m.port_picture = crate::hud_images::port_picture();
     }
     println!(
@@ -556,12 +558,13 @@ fn sync_graphics_rows(menu: &mut PageMenu, g: &crate::graphics::GraphicsSettings
     menu.set_port_value(Setting::Foliage, g.foliage.index());
     menu.set_port_value(Setting::Upscaler, g.upscaler.index());
     menu.set_port_value(Setting::Fur, g.fur.index());
+    menu.set_port_value(Setting::ModelDetail, g.model.index());
 }
 
 /// The graphics rows back into the settings after the menu tick: a new preset sets every option; otherwise each row is
 /// read. A change is saved to the port settings file.
 fn read_graphics_rows(menu: &PageMenu, g: &mut crate::graphics::GraphicsSettings, before: &crate::graphics::GraphicsSettings, frame: u64) {
-    use crate::graphics::{AmbientOcclusion, AntiAliasing, Detail, DrawDistance, Foliage, Fur, GfxOption, Hud, Lighting, Particles, Preset, Textures, Upscaler, Water};
+    use crate::graphics::{AmbientOcclusion, AntiAliasing, Detail, DrawDistance, Foliage, Fur, GfxOption, Hud, Lighting, ModelDetail, Particles, Preset, Textures, Upscaler, Water};
     let preset = menu.port_value(Setting::Preset).map(Preset::from_index);
     match preset {
         Some(p) if p != Preset::Custom && p != before.preset() => *g = before.with_preset(p),
@@ -578,6 +581,7 @@ fn read_graphics_rows(menu: &PageMenu, g: &mut crate::graphics::GraphicsSettings
             if let Some(v) = menu.port_value(Setting::Foliage) { g.foliage = Foliage::from_index(v); }
             if let Some(v) = menu.port_value(Setting::Upscaler) { g.upscaler = Upscaler::from_index(v); }
             if let Some(v) = menu.port_value(Setting::Fur) { g.fur = Fur::from_index(v); }
+            if let Some(v) = menu.port_value(Setting::ModelDetail) { g.model = ModelDetail::from_index(v); }
         }
     }
     if *g != *before {
@@ -1601,9 +1605,23 @@ fn front_end_frame(
         3 => {
             if let Some(menu) = rt.menu.as_mut() {
                 let gfx_before = port.rows_in(menu);
+                let (current, newest, line, can_update, busy) = crate::update::view();
+                menu.set_update_view(&current, &newest, &line, can_update, busy);
                 saves_in(menu, play);
                 menu.saves.card.front_end = true;
                 let o = menu.tick(&inp, gs, &env);
+                // Fork-only Check for Update (crate::update): the network only when the page opens, and on Update.
+                if o.entered == Some(rc_game::menus::pause::update::PAGE) { crate::update::check(); }
+                if menu.take_update_pick() {
+                    println!("menus: frame {frame}: front end: Update");
+                    crate::update::install();
+                }
+                if let Some(exe) = crate::update::take_restart() {
+                    match crate::update::restart(&exe) {
+                        Ok(()) => { app_exit.write(AppExit::Success); }
+                        Err(e) => eprintln!("update: {e:#}: start the game again"),
+                    }
+                }
                 if o.elapsed_hold { play.svc.elapsed_hold = true; }
                 port.rows_out(menu, &gfx_before, frame);
                 if let Some(a) = audio.as_deref_mut() {
