@@ -162,6 +162,11 @@ pub mod text {
     pub const PARTICLES: i32 = -0x1b2;
     pub const SOFT: i32 = -0x1b3;
     pub const FOLIAGE: i32 = -0x1b4;
+    pub const UPSCALER: i32 = -0x1b8;
+    pub const ULTRA_QUALITY: i32 = -0x1b9;
+    pub const QUALITY: i32 = -0x1ba;
+    pub const BALANCED: i32 = -0x1bb;
+    pub const PERFORMANCE: i32 = -0x1bc;
     pub const MODERATE: i32 = -0x1b5;
     pub const LUSH: i32 = -0x1b6;
     pub const STRAFING: i32 = -0x1c0;
@@ -275,6 +280,11 @@ If you like, you may change your options on the Port Options screen, under Contr
             FOLIAGE => b"Foliage",
             MODERATE => b"Moderate",
             LUSH => b"Lush",
+            UPSCALER => b"Upscaling",
+            ULTRA_QUALITY => b"Ultra quality",
+            QUALITY => b"Quality",
+            BALANCED => b"Balanced",
+            PERFORMANCE => b"Performance",
             STRAFING => b"Strafing",
             QUICK_SELECT => b"Quick Select",
             MOUSE_X => b"Mouse left / right",
@@ -327,9 +337,12 @@ If you like, you may change your options on the Port Options screen, under Contr
 /// A port setting (the engine owns the value's meaning and its persistence).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Setting {
-    /// The graphics preset: value 0 Original, 1 Enhanced, 2 Custom (shown when the rows match no preset; ✕ skips it,
-    /// the engine restricts the row).
+    /// The graphics preset: value 0 Original, 1 Low, 2 Medium, 3 High, 4 Custom (shown when the rows match no preset; ✕
+    /// skips it, the engine restricts the row).
     Preset,
+    /// The 3D picture's resolution under the frame's, upscaled to it (the HUD and menus stay sharp): value 0 Off, 1 Ultra
+    /// quality (÷1.3 per axis), 2 Quality (÷1.5), 3 Balanced (÷1.7), 4 Performance (÷2).
+    Upscaler,
     /// Anti-aliasing: value 0 Original (the game's own softening passes), 1 off, 2 2x, 3 4x, 4 8x multisampling.
     AntiAliasing,
     /// The lighting (docs/plan/graphics_options.md, docs/plan/shadows.md): value 0 Original (the game's shadows, the
@@ -413,7 +426,7 @@ pub struct Entry {
 
 /// The rows, in order.
 pub const ENTRIES: &[Entry] = &[
-    Entry { setting: Setting::Preset, label: text::PRESET, values: &[text::ORIGINAL, text::ENHANCED, text::CUSTOM] },
+    Entry { setting: Setting::Preset, label: text::PRESET, values: &[text::ORIGINAL, text::LOW, text::MEDIUM, text::HIGH, text::CUSTOM] },
     Entry { setting: Setting::Fullscreen, label: text::FULLSCREEN, values: &[text::OFF, text::ON] },
     Entry { setting: Setting::Resolution, label: text::RESOLUTION, values: &[text::RES_WINDOW, text::RES_416, text::RES_720, text::RES_1080, text::RES_1440, text::RES_2160] },
     Entry { setting: Setting::Aspect, label: text::ASPECT, values: &[text::ASPECT_4_3, text::ASPECT_16_10, text::ASPECT_16_9, text::ASPECT_FILL] },
@@ -421,6 +434,7 @@ pub const ENTRIES: &[Entry] = &[
     Entry { setting: Setting::FrameLimit, label: text::FPS_LIMIT, values: &[text::FPS_30, text::FPS_60, text::FPS_120, text::UNLIMITED] },
     Entry { setting: Setting::FrameSmoothing, label: text::FRAME_SMOOTHING, values: &[text::OFF, text::ON] },
     Entry { setting: Setting::AntiAliasing, label: text::ANTI_ALIASING, values: &[text::ORIGINAL, text::OFF, text::X2, text::X4, text::X8] },
+    Entry { setting: Setting::Upscaler, label: text::UPSCALER, values: &[text::OFF, text::ULTRA_QUALITY, text::QUALITY, text::BALANCED, text::PERFORMANCE] },
     Entry { setting: Setting::Detail, label: text::DETAIL, values: &[text::ORIGINAL, text::FAR, text::FARTHER, text::MAXIMUM] },
     Entry { setting: Setting::DrawDistance, label: text::DRAW_DISTANCE, values: &[text::ORIGINAL, text::FAR, text::FARTHER, text::MAXIMUM] },
     Entry { setting: Setting::Textures, label: text::TEXTURES, values: &[text::ORIGINAL, text::SMOOTH, text::SHARP] },
@@ -448,7 +462,7 @@ pub const ENTRIES: &[Entry] = &[
 /// The Port Options page shows [`ENTRIES`]`[..PORT_ROWS]` (the last one the Controller row); the Controller page the
 /// rest, then the connected controllers. Every row's value lives in the Port Options list ([`PortList::values`], by
 /// [`ENTRIES`] index), whichever page shows it.
-pub const PORT_ROWS: usize = 23;
+pub const PORT_ROWS: usize = 24;
 
 /// The list's run-time state: cursor, each row's value index and each row's selectable values (bit k = value k;
 /// a missing entry = all).

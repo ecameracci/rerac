@@ -73,7 +73,7 @@ use crate::moby_render::{self, ExtraMobys, MobyMaterial};
 use crate::tfrag_render::game_to_bevy;
 use anyhow::{Context, Result};
 use bevy::camera::visibility::VisibilitySystems;
-use bevy::core_pipeline::fullscreen_material::{FullscreenMaterial, FullscreenMaterialPlugin};
+use bevy::core_pipeline::fullscreen_material::FullscreenMaterial;
 use bevy::ecs::schedule::ScheduleConfigs;
 use bevy::ecs::system::BoxedSystem;
 use bevy::prelude::*;
@@ -236,7 +236,7 @@ impl Plugin for SceneRenderPlugin {
         let mode = scene_env();
         // `RC_SUBTITLES=0|1` forces them; else the game's option 0x15ee40 (pause → Options → Subtitles) decides.
         let subtitles = std::env::var("RC_SUBTITLES").ok().map(|v| v.trim() != "0");
-        app.add_plugins(FullscreenMaterialPlugin::<SceneFade>::default())
+        app.add_plugins(crate::gs_post::GsPostPlugin::<SceneFade>::default())
             .init_resource::<ActiveScene>()
             // A runtime level change (crate::level_switch): the scene state of the old level dropped.
             .add_systems(crate::level_switch::LevelUnload, (crate::level_switch::reset::<ActiveScene>, crate::level_switch::reset::<FadeHold>, level_reset))

@@ -561,7 +561,7 @@ sub-pages (`crates/rc-game/src/menus/pause/port.rs`, `PageMenu::install_port_pag
   (`menu_render::PortSettings`).
 * **Strings**: the port's own text, negative ids (−0x100..) resolved by `MenuAssets::msg` before the level's table (the
   disc's ids are 0..21500); "off" is the game's 20315. Records use addresses 0x7f00_xxxx, which no EE pointer can hold.
-* **Rows** (`port::ENTRIES`, one entry per option): the graphics rows (Preset, Anti-aliasing: Original / off / 2x / 4x / 8x,
+* **Rows** (`port::ENTRIES`, one entry per option): the graphics rows (Preset: Original / Low / Medium / High / (Custom), Anti-aliasing: Original / off / 2x / 4x / 8x, Upscaling: Off / Ultra quality / Quality / Balanced / Performance,
   Detail distance, Texture filtering, HUD, Lighting: Original / Simple / Enhanced; docs/plan/graphics_options.md) →
   `graphics::GraphicsSettings` (engine `menu_render.rs` syncs the rows with the resource around each menu tick; a
   change is saved; the anti-aliasing samples reach the cameras through `render_settings::RenderSettings::msaa`). Gameplay aspect and Cutscene aspect: 4:3 / 16:10 / 16:9 / Fill each, Resolution: Window / 416p / 720p /
