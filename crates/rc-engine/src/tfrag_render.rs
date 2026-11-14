@@ -84,15 +84,17 @@ impl From<&TfragMaterial> for GsPass {
 
 /// The pipeline key: the GS state, and whether the batch's tfrag-liquid look is on (crate::liquid_render
 /// `TFRAG_LIQUIDS`, `lod.tex.z`): only that variant (`TFRAG_LIQUID`) carries the world position as a vertex output,
-/// so every other tfrag pipeline, and the liquid's in Original, stays the shader it was.
+/// so every other tfrag pipeline, and the liquid's in Original, stays the shader it was; and whether the batch draws as
+/// shiny metal (crate::metal, `lod.misc.w` > 0: `WORLD_METAL`, the same rule).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct TfragKey {
     pass: GsPass,
     liquid: bool,
+    metal: bool,
 }
 
 impl From<&TfragMaterial> for TfragKey {
-    fn from(m: &TfragMaterial) -> Self { TfragKey { pass: m.pass, liquid: m.lod.tex.z > 0.5 } }
+    fn from(m: &TfragMaterial) -> Self { TfragKey { pass: m.pass, liquid: m.lod.tex.z > 0.5, metal: m.lod.misc.w > 0.0 } }
 }
 
 impl Material for TfragMaterial {
@@ -142,6 +144,10 @@ impl Material for TfragMaterial {
                 descriptor.vertex.shader_defs.push("TFRAG_LIQUID".into());
                 if let Some(f) = descriptor.fragment.as_mut() { f.shader_defs.push("TFRAG_LIQUID".into()); }
                 attributes.push(ATTRIBUTE_ST_MAP.at_shader_location(2));
+            }
+            if key.bind_group_data.metal {
+                descriptor.vertex.shader_defs.push("WORLD_METAL".into());
+                if let Some(f) = descriptor.fragment.as_mut() { f.shader_defs.push("WORLD_METAL".into()); }
             }
         }
         descriptor.vertex.buffers = vec![layout.0.get_layout(&attributes)?];
@@ -462,6 +468,8 @@ pub fn spawn_tfrags_on(
         let (mean, look) = liquid.unwrap_or((0.0, 0.0));
         lod.tex = Vec4::new(mean, mxl as f32, 0.0, look);
         lod.misc.z /= lod_scale;
+        // crate::metal: the texture's shine, signed by the Lighting option (TfragKey).
+        lod.misc.w = crate::metal::signed_strength(u32::try_from(tex_index).ok().and_then(|t| crate::metal::shine(crate::level_load::level_index(), crate::metal::MetalTex::Tfrag(t))));
         let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD)
             .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, b.positions)
             .with_inserted_attribute(ATTRIBUTE_TFRAG_REF, VertexAttributeValues::Uint32x2(b.refs))

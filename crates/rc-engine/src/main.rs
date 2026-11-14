@@ -51,6 +51,8 @@ mod disc_source;
 mod first_run;
 mod fly_cam;
 mod foliage;
+mod metal;
+mod fur;
 mod fx_draw;
 mod fog_state;
 mod screen_tint;
@@ -272,6 +274,10 @@ fn main() -> anyhow::Result<()> {
     .add_plugins(shrub_render::ShrubRenderPlugin)
     // Port-only grass and plant copies (the Foliage option).
     .add_plugins(foliage::FoliagePlugin)
+    // Lighting Enhanced: the listed metal textures shine (crate::metal).
+    .add_plugins(metal::MetalPlugin)
+    // The Fur option: shell fur on Ratchet (crate::fur).
+    .add_plugins(fur::FurPlugin)
     // Point lights on tfrags, ties and shrubs (the game's Light* point passes; crate::world_lights).
     .add_plugins(world_lights::WorldLightsPlugin)
     .add_plugins(sky_render::SkyRenderPlugin)
