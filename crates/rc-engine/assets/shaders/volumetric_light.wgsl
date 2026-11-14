@@ -89,6 +89,22 @@ fn shadow_weight(len: f32) -> f32 {
     return smoothstep(0.25 * vol.shape.z, vol.shape.z, len);
 }
 
+// `p` and four points `spread` round it across the light `l` are all lit in `cascade` (outside the map: lit).
+fn in_open_sun(p: vec3<f32>, l: vec3<f32>, spread: f32, cascade: i32) -> bool {
+    let a = normalize(cross(l, select(vec3<f32>(0.0, 1.0, 0.0), vec3<f32>(1.0, 0.0, 0.0), abs(l.y) > 0.9)));
+    let b = cross(l, a);
+    let offs = array<vec3<f32>, 5>(vec3<f32>(0.0), a, -a, b, -b);
+    for (var i = 0; i < 5; i += 1) {
+        let c = sun.clip_from_world[cascade] * vec4<f32>(p + offs[i] * spread, 1.0);
+        let n = c.xyz / c.w;
+        let uv = n.xy * vec2<f32>(0.5, -0.5) + 0.5;
+        if (all(uv >= vec2<f32>(0.0)) && all(uv <= vec2<f32>(1.0)) && textureSampleCompareLevel(shadow_map, shadow_compare, uv, cascade, n.z) < 0.5) {
+            return false;
+        }
+    }
+    return true;
+}
+
 // 1 lit, 0 shadowed: one comparison tap (bilinear) in the cascade holding view depth `z`; lit outside the cascades,
 // and where the light reaches `world` through Ratchet's sphere and the map's occluder lies within it (his shadow, not
 // the shade he stands in: crate::volumetric_light::VolumetricLight::hero).
@@ -110,6 +126,11 @@ fn sun_visibility(world: vec3<f32>, z: f32, spread: vec2<f32>) -> f32 {
     let v = vol.hero.xyz - world;
     let along = dot(v, l);
     if (along <= 0.0 || length(v - l * along) > r) { return vis; }
+    // Only in open sun: past his sphere toward the sun, the sun ray through his centre and four rays 1.5 radii round
+    // it must all be lit, else he stands in shade (a stairwell's opening over him, walls round him) and the occluder
+    // near his depth is not what keeps the air dark (2026-11-14 play session 2026-11-14_11-45-45 marker 2: Novalis'
+    // indoor stairs lit a cone of air round him).
+    if (!in_open_sun(vol.hero.xyz + l * (r * 1.1), l, r * 1.5, cascade)) { return vis; }
     let h = sun.clip_from_world[cascade] * vec4<f32>(vol.hero.xyz, 1.0);
     let e = sun.clip_from_world[cascade] * vec4<f32>(vol.hero.xyz + l * r, 1.0);
     let hz = h.z / h.w;
