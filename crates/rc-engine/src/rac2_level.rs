@@ -88,6 +88,7 @@ pub fn load(root: &Path, index: u32) -> Result<LoadedLevel> {
         owners: Vec::new(),
         level: index,
         grid: rc_formats::level::HeightGrid::parse(&core.header, &core_data),
+        replacements: Vec::new(),
     };
     let death_z = rc_formats::rac2::gameplay::level_settings(&gameplay)?
         .and_then(|s| s.get(0x28..0x2c))

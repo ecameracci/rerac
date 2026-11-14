@@ -10,6 +10,10 @@
 //! * the world, moby and sky textures (crate::mod_textures): `textures/hash/<key>.dds` or `.png`, keyed by the decoded
 //!   picture's hash, applied at the next level load.
 //!
+//! PCSX2 texture packs (crate::texture_packs: folders in `texture_packs/` beside the executable) are listed after the
+//! mods, `<folder> (texture pack)`, id `pack:<folder>`, and toggled the same way; a toggle re-indexes the packs, the
+//! HUD's atlas follows at once and the world at the next level load.
+//!
 //! Which mods are on is the port settings file's `mods = <id>, <id>` (crate::render_settings); a mod found for the
 //! first time starts off. The main menu's Options → Mods page toggles them ([`Mods::set_enabled`]); the HUD
 //! rebuilds its atlas when [`Mods::generation`] changes. Mods are searched in folder-name order and the first that
@@ -28,6 +32,8 @@ pub struct ModInfo {
     pub description: String,
     pub dir: PathBuf,
     pub enabled: bool,
+    /// A PCSX2 texture pack (crate::texture_packs: a folder in `texture_packs/`, id `pack:<folder>`), not a mod.
+    pub pack: bool,
 }
 
 /// The mods found at start and which are on.
@@ -46,17 +52,26 @@ const KEY: &str = "mods";
 impl Mods {
     /// Scans the mods folder (creating it when missing, so players find where mods go) and reads the enabled set.
     pub fn startup() -> Mods {
-        let explicit = std::env::var_os("RC_MODS_DIR").is_some_and(|v| !v.is_empty());
+        let set = |k: &str| std::env::var_os(k).is_some_and(|v| !v.is_empty());
+        let explicit = set("RC_MODS_DIR") || set("RC_TEXTURE_PACKS_DIR");
         if crate::determinism::deterministic() && !explicit { return Mods::default(); }
         let Some(dir) = mods_dir() else { return Mods::default() };
-        if !dir.exists() {
-            match std::fs::create_dir_all(&dir) {
-                Ok(()) => println!("mods: created {}", dir.display()),
-                Err(e) => eprintln!("mods: cannot create {}: {e}", dir.display()),
+        let packs = crate::texture_packs::packs_dir();
+        for d in std::iter::once(&dir).chain(packs.as_ref()) {
+            if d.exists() { continue; }
+            match std::fs::create_dir_all(d) {
+                Ok(()) => println!("mods: created {}", d.display()),
+                Err(e) => eprintln!("mods: cannot create {}: {e}", d.display()),
             }
         }
         let on = crate::render_settings::load_key(KEY).unwrap_or_default();
-        let mut m = Mods { list: scan(&dir), dir: Some(dir), generation: 0 };
+        let mut list = scan(&dir);
+        // The texture packs after the mods (crate::texture_packs).
+        for p in packs.as_deref().map(crate::texture_packs::scan).unwrap_or_default() {
+            let folder = p.file_name().map_or(String::new(), |n| n.to_string_lossy().into_owned());
+            list.push(ModInfo { id: format!("pack:{folder}"), name: format!("{folder} (texture pack)"), version: String::new(), description: String::new(), dir: p, enabled: false, pack: true });
+        }
+        let mut m = Mods { list, dir: Some(dir), generation: 0 };
         let on: Vec<&str> = on.split(',').map(str::trim).filter(|s| !s.is_empty()).collect();
         for info in &mut m.list { info.enabled = on.contains(&info.id.as_str()); }
         m.publish();
@@ -85,13 +100,15 @@ impl Mods {
 
     /// The file of the first enabled mod that has `assets/<rel>` (`rel` with `/` separators).
     pub fn find(&self, rel: &str) -> Option<PathBuf> {
-        self.list.iter().filter(|i| i.enabled).map(|i| i.dir.join("assets").join(rel)).find(|p| p.is_file())
+        self.list.iter().filter(|i| i.enabled && !i.pack).map(|i| i.dir.join("assets").join(rel)).find(|p| p.is_file())
     }
 
-    /// The enabled mods' folders for the loaders that run without the resource ([`find_active`]).
+    /// The enabled mods' folders for the loaders that run without the resource ([`find_active`]), and the enabled
+    /// texture packs to crate::texture_packs.
     fn publish(&self) {
-        let dirs = self.list.iter().filter(|i| i.enabled).map(|i| i.dir.clone()).collect();
-        *ACTIVE.write().unwrap_or_else(|e| e.into_inner()) = dirs;
+        let on = |pack: bool| -> Vec<PathBuf> { self.list.iter().filter(|i| i.enabled && i.pack == pack).map(|i| i.dir.clone()).collect() };
+        *ACTIVE.write().unwrap_or_else(|e| e.into_inner()) = on(false);
+        crate::texture_packs::set_packs(&on(true));
     }
 }
 
@@ -140,14 +157,15 @@ fn parse_info(text: &str, folder: &str, dir: PathBuf) -> ModInfo {
     };
     let id = get("id").unwrap_or_else(|| folder.to_string());
     let name = get("name").unwrap_or_else(|| id.clone());
-    ModInfo { id, name, version: get("version").unwrap_or_default(), description: get("description").unwrap_or_default(), dir, enabled: false }
+    ModInfo { id, name, version: get("version").unwrap_or_default(), description: get("description").unwrap_or_default(), dir, enabled: false, pack: false }
 }
 
-pub struct ModsPlugin;
+/// Holds [`Mods::startup`]'s result, run before the boot's level load (crate::texture_packs).
+pub struct ModsPlugin(pub Mods);
 
 impl Plugin for ModsPlugin {
     fn build(&self, app: &mut App) {
-        app.insert_resource(Mods::startup())
+        app.insert_resource(self.0.clone())
             .add_systems(First, crate::mod_textures::track_frame)
             .add_systems(Last, || crate::mod_textures::report("world textures"));
     }
