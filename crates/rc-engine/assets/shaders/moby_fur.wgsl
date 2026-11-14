@@ -34,6 +34,9 @@ struct MobyLod {
 struct FurParams {
     // x = on, y = length (world units), z = strands per texture unit, w = shells.
     misc: vec4<f32>,
+    // A sphere (xyz world, w radius; w = 0: none) where the strands shrink to the skin: the Persuader's lens sits
+    // closer to his chest than the fur is long (crate::fur `bald`).
+    bald: vec4<f32>,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(0) var tex: texture_2d<f32>;
@@ -99,7 +102,11 @@ fn vertex(v: FurVertex) -> FurOut {
     let nw = normalize(((*inst).model * vec4<f32>(np, 0.0)).xyz + vec3<f32>(0.0, 1e-6, 0.0));
 
     // Out along the normal; the outer shells sway (two slow waves, offset per position) and droop.
-    let len = params.misc.y;
+    var cut = 1.0;
+    if (params.bald.w > 0.0) {
+        cut = smoothstep(params.bald.w * 0.7, params.bald.w, distance(skin_world, params.bald.xyz));
+    }
+    let len = params.misc.y * cut;
     let t = globals.time;
     let phase = dot(skin_world, vec3<f32>(3.1, 1.7, 2.3));
     let wind = vec3<f32>(sin(t * 1.9 + phase), 0.0, cos(t * 1.4 + phase * 0.7)) * 0.35 + vec3<f32>(0.0, -0.45, 0.0);
@@ -122,7 +129,7 @@ fn vertex(v: FurVertex) -> FurOut {
     } else {
         out.color = vec4<f32>(1.0, 1.0, 1.0, alpha / 128.0);
     }
-    out.color.a = alpha / 128.0;
+    out.color.a = alpha / 128.0 * cut;
     let depth = -position_world_to_view(world).z * 1024.0;
     let fg = max(min(depth * fog.params.x + fog.params.y, fog.params.w), fog.params.z);
     out.fog = trunc(fg) / 255.0;

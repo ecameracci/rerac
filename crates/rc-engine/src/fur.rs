@@ -125,6 +125,9 @@ pub fn shell_mesh(mesh: &Mesh, texture: &Texture, skin: &MeshVertexAttribute) ->
 #[derive(Clone, Copy, Debug, Default, ShaderType)]
 pub struct FurParams {
     pub misc: Vec4,
+    /// A sphere (centre in Bevy world, radius; `w` = 0: none) where the fur is cut short: the Persuader on his chest,
+    /// whose lens sits closer to the skin than [`LENGTH`] ([`bald`]).
+    pub bald: Vec4,
 }
 
 /// The shells' material: the part's texture and the record set's buffers (crate::moby_render `MobyMaterial`'s).
@@ -233,7 +236,7 @@ fn follow(mut commands: Commands, g: Res<GraphicsSettings>, mut sources: ResMut<
 }
 
 fn params(g: &GraphicsSettings) -> FurParams {
-    FurParams { misc: Vec4::new(if g.fur.on() { 1.0 } else { 0.0 }, LENGTH, STRANDS, LAYERS as f32) }
+    FurParams { misc: Vec4::new(if g.fur.on() { 1.0 } else { 0.0 }, LENGTH, STRANDS, LAYERS as f32), bald: Vec4::ZERO }
 }
 
 /// [`attach`]'s materials by (image, record set).
@@ -275,11 +278,22 @@ fn sync(g: Res<GraphicsSettings>, mut materials: ResMut<Assets<FurMaterial>>) {
     for id in stale { if let Some(mut m) = materials.get_mut(id) { m.params.misc = want; } }
 }
 
+/// The radius around the Persuader's lens where the fur is cut short (game units; its lens is about 0.13 across).
+pub const BALD_RADIUS: f32 = 0.11;
+
+/// The Persuader's sphere into every shell material ([`FurParams::bald`]). Its lens sits on the chest closer to the skin
+/// than [`LENGTH`], so the shells' strands came through it (2026-11-14 play session 2026-11-14_11-45-45 marker 1).
+fn bald(attach: Option<Res<crate::moby_attach::MobyAttach>>, mut materials: ResMut<Assets<FurMaterial>>) {
+    let want = attach.as_deref().and_then(crate::moby_attach::persuader_lens).map_or(Vec4::ZERO, |p| p.extend(BALD_RADIUS));
+    let stale: Vec<_> = materials.iter().filter(|(_, m)| m.params.bald != want).map(|(id, _)| id).collect();
+    for id in stale { if let Some(mut m) = materials.get_mut(id) { m.params.bald = want; } }
+}
+
 pub struct FurPlugin;
 
 impl Plugin for FurPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(MaterialPlugin::<FurMaterial>::default()).init_resource::<Sources>().add_systems(PostUpdate, (follow, attach, sync).chain());
+        app.add_plugins(MaterialPlugin::<FurMaterial>::default()).init_resource::<Sources>().add_systems(PostUpdate, (follow, attach, sync, bald).chain());
     }
 }
 

@@ -499,6 +499,17 @@ fn clank_antenna_chain() -> Vec<u8> {
     gadget::joint_list(&blob, &c.header, 6).map(|(a, _)| a).unwrap_or_default()
 }
 
+/// crate::fur: the centre of the Persuader's lens (Bevy world) while it shows on his chest ([`EXTRAS`] slot 5): its
+/// origin (moby +0x10) sits inside his chest, the lens [`PERSUADER_LENS`] ahead along its row 0 (his facing).
+pub fn persuader_lens(a: &MobyAttach) -> Option<Vec3> {
+    let i = a.items.iter().find(|i| i.extra_item == rc_game::inventory::item::PERSUADER && i.visible)?;
+    let m = model_of(i);
+    Some(m.w_axis.truncate() + m.x_axis.truncate().normalize_or_zero() * PERSUADER_LENS)
+}
+
+/// The Persuader's lens: its distance ahead of the item's origin (game units).
+pub const PERSUADER_LENS: f32 = 0.16;
+
 /// `HeroItemsAttach` 0x22fec0 for Clank's antenna glow 1204: while Clank shows, `MobyAttachToJoint(clank, 6, M)`
 /// (Clank's joint list 6 through his pose with his modifier list, his rows, position and scale: `attach_matrix`),
 /// position = M.r3, rows = M's rows as they are (`MatrixCopyRows`), and the pulsing glow word

@@ -203,6 +203,10 @@ with the height squared).
   atlas also holds his gloves, trousers, boots and belt. 2026-11-14 (play session 2026-11-14_10-03-08 marker 1): the
   ears' pale tips (hue 64°) and the stripes' dark cores failed the first test and left bald patches on his ears;
   2975 of the 5356 triangles are fur now (2866 before).
+* The Persuader (item 35, worn on his chest): its lens sits closer to the skin than the fur is long, so the strands
+  came through it (play session 2026-11-14_11-45-45 marker 1). The shells shrink to the skin and fade inside a
+  sphere of `fur::BALD_RADIUS` round the lens (`moby_attach::persuader_lens`: the item's origin is inside his chest,
+  the lens `PERSUADER_LENS` ahead along its facing), passed to `moby_fur.wgsl` as `FurParams::bald` every frame.
 * Skinning and animation: the shells use his own draw's record, joint palette, normal table and `MobyLod` (the same
   `MeshTag`), skinned and lit by the moby shader's code, so they follow every pose, his cutscene actors and the
   hides (children of his first high-LOD entity, registered by `moby_render::ExtraMobys::spawn_split`). They are built from the
